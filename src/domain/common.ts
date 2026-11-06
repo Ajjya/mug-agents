@@ -66,5 +66,5 @@ export function fromStorage<S extends z.ZodType>(
   schema: S,
   raw: unknown,
 ): ReturnType<typeof z.safeParse<S>> {
-  return z.safeDecode(schema, raw as z.input<S>) as ReturnType<typeof z.safeParse<S>>;
+  return z.safeDecode(schema, raw as z.input<S>);
 }
