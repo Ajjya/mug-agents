@@ -5,10 +5,24 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   plugins: [swc.vite({ module: { type: 'es6' } })],
   test: {
-    include: ['test/**/*.test.ts'],
     environment: 'node',
-    // The first integration run downloads/starts a mongod binary.
-    hookTimeout: 120_000,
-    testTimeout: 30_000,
+    // Only integration tests need a mongod; unit-only runs skip starting one.
+    projects: [
+      {
+        extends: true,
+        test: { name: 'unit', include: ['test/unit/**/*.test.ts'] },
+      },
+      {
+        extends: true,
+        test: {
+          name: 'integration',
+          include: ['test/integration/**/*.test.ts'],
+          globalSetup: ['test/support/global-setup.ts'],
+          // The first run downloads a mongod binary.
+          hookTimeout: 180_000,
+          testTimeout: 30_000,
+        },
+      },
+    ],
   },
 });

@@ -9,13 +9,13 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "start": "node dist/main.js",
-    "start:dev": "tsx watch src/main.ts",
+    "start": "node --env-file-if-exists=.env dist/main.js",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "format": "prettier --write .",
     "test:unit": "vitest run test/unit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "dev": "npm run build && npm start"
   },
   "dependencies": {
     "@nestjs/common": "^12.4.0",
@@ -39,7 +39,6 @@
     "mongodb-memory-server": "^11.3.0",
     "prettier": "^3.9.10",
     "supertest": "^7.3.1",
-    "tsx": "^4.23.15",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.72.1",
     "unplugin-swc": "^2.0.0",

@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 export const NODE_ENVS = ['development', 'test', 'production'] as const;
-export const LOG_LEVELS = ['fatal', 'error', 'warn', 'info', 'debug', 'trace'] as const;
+export const LOG_LEVELS = ['silent', 'fatal', 'error', 'warn', 'info', 'debug', 'trace'] as const;
 
 export const envSchema = z.object({
   NODE_ENV: z.enum(NODE_ENVS).default('development'),
