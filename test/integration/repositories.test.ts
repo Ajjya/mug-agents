@@ -2,7 +2,7 @@ import { ObjectId, type Db } from 'mongodb';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { InvalidIdError } from '../../src/domain/common.js';
 import { INDEXES, type CollectionName } from '../../src/mongo/indexes.js';
-import { SchemaDriftError } from '../../src/repositories/base.repository.js';
+import { DuplicateKeyError, SchemaDriftError } from '../../src/repositories/base.repository.js';
 import { MongoEventsRepository } from '../../src/repositories/events.repository.js';
 import { MongoOrganisationsRepository } from '../../src/repositories/organisations.repository.js';
 import { MongoSpeakersRepository } from '../../src/repositories/speakers.repository.js';
@@ -122,15 +122,14 @@ describe('Mongo-specific behaviour', () => {
   });
 
   describe('speakers.email unique index', () => {
-    it('rejects a duplicate email but allows several speakers without one', async () => {
+    it('surfaces MongoDB error 11000 as DuplicateKeyError on the email key', async () => {
       await fresh(mongo.db, 'speakers');
       const repo = new MongoSpeakersRepository(mongo.db);
       await repo.insert(speakerInput({ email: 'dup@example.com' }));
-      await expect(repo.insert(speakerInput({ email: 'dup@example.com' }))).rejects.toMatchObject({
-        code: 11000,
-      });
-      await repo.insert(speakerInput({ name: 'No email 1' }));
-      await repo.insert(speakerInput({ name: 'No email 2' }));
+      await expect(repo.insert(speakerInput({ email: 'dup@example.com' }))).rejects.toSatisfy(
+        (e: unknown) =>
+          e instanceof DuplicateKeyError && e.collection === 'speakers' && 'email' in e.keyPattern,
+      );
     });
   });
 });

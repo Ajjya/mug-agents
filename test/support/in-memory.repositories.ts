@@ -38,6 +38,7 @@ import {
   DEFAULT_PAGE_SIZE,
   InvalidPatchError,
   MAX_PAGE_SIZE,
+  DuplicateKeyError,
   VersionConflictError,
   updateWithRetry,
   type UpdateWithRetryOptions,
@@ -216,6 +217,13 @@ export class InMemorySpeakersRepository
   constructor() {
     super({ input: SpeakerInputSchema, doc: SpeakerSchema, patch: SpeakerPatchSchema });
   }
+  /** MongoDB enforces this with the unique sparse index on email. */
+  protected override beforeWrite(next: Speaker): void {
+    if (next.email === undefined) return;
+    const clash = this.all().some((s) => s._id !== next._id && s.email === next.email);
+    if (clash) throw new DuplicateKeyError('speakers', { email: 1 });
+  }
+
   async findByEmail(email: string): Promise<Speaker | null> {
     const normalised = normaliseEmail(email);
     if (normalised === null) return null;

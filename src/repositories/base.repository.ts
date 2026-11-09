@@ -1,5 +1,11 @@
 import { Logger } from '@nestjs/common';
-import type { Collection, Document, Filter, ObjectId } from 'mongodb';
+import {
+  MongoServerError,
+  type Collection,
+  type Document,
+  type Filter,
+  type ObjectId,
+} from 'mongodb';
 import type { z } from 'zod';
 import {
   type EntityId,
@@ -95,6 +101,18 @@ export class VersionConflictError extends Error {
   }
 }
 
+/** A write violated a unique index (MongoDB error 11000). `keyPattern` names the index keys. */
+export class DuplicateKeyError extends Error {
+  constructor(
+    public readonly collection: string,
+    public readonly keyPattern: Readonly<Record<string, unknown>>,
+  ) {
+    // The conflicting value is deliberately not included: it may be personal data (an email).
+    super(`Duplicate key in ${collection} on ${JSON.stringify(Object.keys(keyPattern))}`);
+    this.name = 'DuplicateKeyError';
+  }
+}
+
 export class InvalidPatchError extends Error {
   constructor(message: string) {
     super(message);
@@ -164,7 +182,7 @@ export abstract class BaseRepository<
     // any caller-supplied _id/createdAt/updatedAt in `input` before we get this far.
     const doc = { ...input, _id: newEntityId(), version: 1, createdAt: now, updatedAt: now };
     const stored = toStorage(this.schemas.doc, doc as DocOf<TDocSchema>);
-    await this.collection.insertOne(stored);
+    await this.mapDuplicateKey(() => this.collection.insertOne(stored));
     return this.read(stored);
   }
 
@@ -222,10 +240,12 @@ export abstract class BaseRepository<
       throw new InvalidPatchError('Patch must contain at least one field');
     }
     const _id = toObjectId(id);
-    const raw = await this.collection.findOneAndUpdate(
-      { _id, version: expectedVersion },
-      { $set: { ...set, updatedAt: new Date() }, $inc: { version: 1 } },
-      { returnDocument: 'after' },
+    const raw = await this.mapDuplicateKey(() =>
+      this.collection.findOneAndUpdate(
+        { _id, version: expectedVersion },
+        { $set: { ...set, updatedAt: new Date() }, $inc: { version: 1 } },
+        { returnDocument: 'after' },
+      ),
     );
     if (raw) return this.read(raw);
     // No match: either the id does not exist, or the version moved on.
@@ -249,6 +269,19 @@ export abstract class BaseRepository<
 
   protected countWhere(filter: Filter<Document>): Promise<number> {
     return this.collection.countDocuments(filter);
+  }
+
+  /** Translate MongoDB's duplicate-key error (11000) into the storage-agnostic DuplicateKeyError. */
+  private async mapDuplicateKey<T>(write: () => Promise<T>): Promise<T> {
+    try {
+      return await write();
+    } catch (err) {
+      if (err instanceof MongoServerError && err.code === 11000) {
+        const keyPattern = err['keyPattern'] as Record<string, unknown> | undefined;
+        throw new DuplicateKeyError(this.collection.collectionName, keyPattern ?? {});
+      }
+      throw err;
+    }
   }
 
   /** Validate-on-read: schema drift is logged (id + issues, never the body) and thrown. */

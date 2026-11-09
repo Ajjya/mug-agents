@@ -10,6 +10,7 @@ import type {
 import type { Speaker, SpeakerInput, SpeakerPatch } from '../../src/domain/speaker.schema.js';
 import type { Task, TaskInput, TaskPatch } from '../../src/domain/task.schema.js';
 import {
+  DuplicateKeyError,
   InvalidPatchError,
   VersionConflictError,
   type Repository,
@@ -325,6 +326,32 @@ export function speakersContract(create: Factory<SpeakersRepository>): void {
         expect((await repo.findByEmail('ADA@example.com'))?._id).toBe(doc._id);
         expect(await repo.findByEmail('nobody@example.com')).toBeNull();
         expect(await repo.findByEmail('not an email')).toBeNull();
+      });
+
+      it('a duplicate email (any case) on insert throws DuplicateKeyError naming the key', async () => {
+        await repo.insert(speakerInput({ email: 'dup@example.com' }));
+        const err = await repo
+          .insert(speakerInput({ email: 'DUP@example.com' }))
+          .catch((e: unknown) => e);
+        expect(err).toBeInstanceOf(DuplicateKeyError);
+        expect(err).toMatchObject({ collection: 'speakers', keyPattern: { email: 1 } });
+        expect((err as Error).message).not.toContain('dup@example.com'); // no personal data
+        expect(await repo.count()).toBe(1);
+      });
+
+      it('a duplicate email on update throws DuplicateKeyError and changes nothing', async () => {
+        await repo.insert(speakerInput({ name: 'A', email: 'a@example.com' }));
+        const b = await repo.insert(speakerInput({ name: 'B', email: 'b@example.com' }));
+        await expect(
+          repo.updateById(b._id, { email: 'a@example.com' }, b.version),
+        ).rejects.toBeInstanceOf(DuplicateKeyError);
+        expect(await repo.findById(b._id)).toEqual(b);
+      });
+
+      it('allows any number of speakers without an email', async () => {
+        await repo.insert(speakerInput({ name: 'No email 1' }));
+        await repo.insert(speakerInput({ name: 'No email 2' }));
+        expect(await repo.count()).toBe(2);
       });
 
       it('findByEventId: speakers with a perEvent entry for the event', async () => {
