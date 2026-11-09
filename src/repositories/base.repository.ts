@@ -30,22 +30,21 @@ export interface Page<TDoc> {
 
 /**
  * The contract agents' tools and tests depend on. Intentionally has no delete method:
- * agents never delete; state changes go through status fields.
- *
- * `filter` is a MongoDB filter over the *stored* representation (ObjectId / Date), see
- * `toObjectId` in domain/common.ts.
+ * agents never delete; state changes go through status fields. It is storage-agnostic: ids and
+ * dates are domain strings, and there are no MongoDB types. Queries beyond these basics are typed
+ * finders on each entity's repository interface.
  */
 export interface Repository<TInput, TDoc, TPatch> {
   insert(input: TInput): Promise<TDoc>;
   findById(id: EntityId): Promise<TDoc | null>;
-  findMany(filter?: Filter<Document>, options?: FindManyOptions): Promise<Page<TDoc>>;
+  findMany(options?: FindManyOptions): Promise<Page<TDoc>>;
   /**
    * Optimistic locking: `expectedVersion` is the `version` of the document the caller read.
    * Returns the updated document (version + 1), or null if no document has that id.
    * Throws VersionConflictError if the document changed since it was read; re-read and retry.
    */
   updateById(id: EntityId, patch: TPatch, expectedVersion: number): Promise<TDoc | null>;
-  count(filter?: Filter<Document>): Promise<number>;
+  count(): Promise<number>;
 }
 
 /** Thrown when a stored document no longer matches its schema. This is a bug, not user error. */
@@ -121,8 +120,17 @@ export abstract class BaseRepository<
     return raw ? this.read(raw) : null;
   }
 
-  async findMany(
-    filter: Filter<Document> = {},
+  findMany(options: FindManyOptions = {}): Promise<Page<z.output<TDocSchema>>> {
+    return this.findWhere({}, options);
+  }
+
+  /**
+   * Keyset-paginated query. `filter` is over the *stored* representation (ObjectId / Date), so it
+   * stays inside the repository: public access goes through typed finders that convert domain
+   * values first.
+   */
+  protected async findWhere(
+    filter: Filter<Document>,
     options: FindManyOptions = {},
   ): Promise<Page<z.output<TDocSchema>>> {
     const requested = options.limit ?? DEFAULT_PAGE_SIZE;
@@ -173,7 +181,11 @@ export abstract class BaseRepository<
     return null;
   }
 
-  count(filter: Filter<Document> = {}): Promise<number> {
+  count(): Promise<number> {
+    return this.countWhere({});
+  }
+
+  protected countWhere(filter: Filter<Document>): Promise<number> {
     return this.collection.countDocuments(filter);
   }
 
