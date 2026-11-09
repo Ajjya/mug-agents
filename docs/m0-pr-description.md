@@ -5,6 +5,7 @@
 - **Repo name** `mug-agents`, single package (no monorepo yet). **Dev DB:** local MongoDB.
 - **IDs:** `_id` is `ObjectId` in Mongo, 24-hex string at the boundary; references likewise.
 - **Optimistic locking:** persisted documents carry `version` (repo-managed); `updateById` requires `expectedVersion` and throws `VersionConflictError` on mismatch, so concurrent agents cannot silently overwrite each other's array fields.
+- **`updateWithRetry(id, mutate, { attempts = 3 })`** on every repository: re-reads, applies `mutate(doc) => patch`, calls `updateById` with the fresh version, retries on `VersionConflictError`, rethrows after the last attempt. **LangGraph nodes resumed after `interrupt()` (and any code that holds a document across a pause, e.g. an LLM call) must use this, not `updateById` directly** — the version they captured before the pause is probably stale. `mutate` runs once per attempt, so it must be side-effect free.
 - **Speaker emails are lower-cased** by the schema so the unique index is case-insensitive.
 - **Startup failures** are logged as structured JSON (fatal) and the half-started app is closed before exit; config errors stay plain readable text.
 - **Patch semantics:** shallow; provided arrays/objects replace stored ones. Clearing an optional field is not supported yet.

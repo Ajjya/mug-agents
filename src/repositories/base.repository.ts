@@ -13,6 +13,17 @@ import {
 export const DEFAULT_PAGE_SIZE = 50;
 export const MAX_PAGE_SIZE = 200;
 
+/** The fields every persisted document has that the contract itself relies on. */
+export interface VersionedDoc {
+  _id: EntityId;
+  version: number;
+}
+
+export interface UpdateWithRetryOptions {
+  /** Total tries (first attempt included). Default 3. */
+  attempts?: number;
+}
+
 export interface FindManyOptions {
   /** Page size, 1..MAX_PAGE_SIZE. Defaults to DEFAULT_PAGE_SIZE. */
   limit?: number;
@@ -34,7 +45,7 @@ export interface Page<TDoc> {
  * dates are domain strings, and there are no MongoDB types. Queries beyond these basics are typed
  * finders on each entity's repository interface.
  */
-export interface Repository<TInput, TDoc, TPatch> {
+export interface Repository<TInput, TDoc extends VersionedDoc, TPatch> {
   insert(input: TInput): Promise<TDoc>;
   findById(id: EntityId): Promise<TDoc | null>;
   findMany(options?: FindManyOptions): Promise<Page<TDoc>>;
@@ -45,6 +56,21 @@ export interface Repository<TInput, TDoc, TPatch> {
    */
   updateById(id: EntityId, patch: TPatch, expectedVersion: number): Promise<TDoc | null>;
   count(): Promise<number>;
+  /**
+   * Read-modify-write that survives concurrent writers: re-reads the document, applies
+   * `mutate(doc) => patch`, calls updateById with the fresh version, and retries on
+   * VersionConflictError up to `attempts` times (then rethrows it). Returns null if the id does
+   * not exist. `mutate` runs once per attempt, so it must be pure / free of side effects.
+   *
+   * Use this, not updateById, from anything that holds a document across a pause (LangGraph
+   * nodes resumed after interrupt(), tools that call an LLM between read and write): the version
+   * captured before the pause is probably stale by the time the node resumes.
+   */
+  updateWithRetry(
+    id: EntityId,
+    mutate: (doc: TDoc) => TPatch | Promise<TPatch>,
+    options?: UpdateWithRetryOptions,
+  ): Promise<TDoc | null>;
 }
 
 /** Thrown when a stored document no longer matches its schema. This is a bug, not user error. */
@@ -76,7 +102,35 @@ export class InvalidPatchError extends Error {
   }
 }
 
+/** Shared by the Mongo base class and the in-memory fake so both retry identically. */
+export async function updateWithRetry<TDoc extends VersionedDoc, TPatch>(
+  repo: Pick<Repository<unknown, TDoc, TPatch>, 'findById' | 'updateById'>,
+  id: EntityId,
+  mutate: (doc: TDoc) => TPatch | Promise<TPatch>,
+  { attempts = 3 }: UpdateWithRetryOptions = {},
+): Promise<TDoc | null> {
+  if (!Number.isInteger(attempts) || attempts < 1) {
+    throw new RangeError(`attempts must be an integer >= 1, got ${String(attempts)}`);
+  }
+  let lastConflict: VersionConflictError | undefined;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    const doc = await repo.findById(id);
+    if (!doc) return null;
+    const patch = await mutate(doc);
+    try {
+      return await repo.updateById(id, patch, doc.version);
+    } catch (err) {
+      if (!(err instanceof VersionConflictError)) throw err;
+      lastConflict = err;
+    }
+  }
+  throw lastConflict ?? new RangeError('unreachable');
+}
+
 type AnyObjectSchema = z.ZodObject;
+
+/** Domain document type for a document schema (the persisted shape always has _id + version). */
+export type DocOf<S extends AnyObjectSchema> = z.output<S> & VersionedDoc;
 
 export interface RepositorySchemas<
   TInputSchema extends AnyObjectSchema,
@@ -92,7 +146,7 @@ export abstract class BaseRepository<
   TInputSchema extends AnyObjectSchema,
   TDocSchema extends AnyObjectSchema,
   TPatchSchema extends AnyObjectSchema,
-> implements Repository<z.output<TInputSchema>, z.output<TDocSchema>, z.output<TPatchSchema>> {
+> implements Repository<z.output<TInputSchema>, DocOf<TDocSchema>, z.output<TPatchSchema>> {
   protected readonly logger: Logger;
 
   protected constructor(
@@ -102,25 +156,25 @@ export abstract class BaseRepository<
     this.logger = new Logger(`${collection.collectionName}Repository`);
   }
 
-  async insert(input: z.output<TInputSchema>): Promise<z.output<TDocSchema>> {
+  async insert(input: z.output<TInputSchema>): Promise<DocOf<TDocSchema>> {
     // Validate the caller's input first so unknown fields (incl. _id/timestamps) are rejected.
     toStorage(this.schemas.input, input);
     const now = new Date().toISOString();
     // Timestamps and _id are set here, never by the caller. The strict schema rejects
     // any caller-supplied _id/createdAt/updatedAt in `input` before we get this far.
     const doc = { ...input, _id: newEntityId(), version: 1, createdAt: now, updatedAt: now };
-    const stored = toStorage(this.schemas.doc, doc as z.output<TDocSchema>);
+    const stored = toStorage(this.schemas.doc, doc as DocOf<TDocSchema>);
     await this.collection.insertOne(stored);
     return this.read(stored);
   }
 
-  async findById(id: EntityId): Promise<z.output<TDocSchema> | null> {
+  async findById(id: EntityId): Promise<DocOf<TDocSchema> | null> {
     if (!isEntityId(id)) return null; // a malformed id cannot exist
     const raw = await this.collection.findOne({ _id: toObjectId(id) });
     return raw ? this.read(raw) : null;
   }
 
-  findMany(options: FindManyOptions = {}): Promise<Page<z.output<TDocSchema>>> {
+  findMany(options: FindManyOptions = {}): Promise<Page<DocOf<TDocSchema>>> {
     return this.findWhere({}, options);
   }
 
@@ -132,7 +186,7 @@ export abstract class BaseRepository<
   protected async findWhere(
     filter: Filter<Document>,
     options: FindManyOptions = {},
-  ): Promise<Page<z.output<TDocSchema>>> {
+  ): Promise<Page<DocOf<TDocSchema>>> {
     const requested = options.limit ?? DEFAULT_PAGE_SIZE;
     const limit = Number.isFinite(requested)
       ? Math.min(Math.max(Math.trunc(requested), 1), MAX_PAGE_SIZE)
@@ -159,7 +213,7 @@ export abstract class BaseRepository<
     id: EntityId,
     patch: z.output<TPatchSchema>,
     expectedVersion: number,
-  ): Promise<z.output<TDocSchema> | null> {
+  ): Promise<DocOf<TDocSchema> | null> {
     if (!isEntityId(id)) return null;
     const stored = toStorage(this.schemas.patch, patch) as Record<string, unknown>;
     // `undefined` would be serialised as null by the driver; treat it as "not provided".
@@ -185,14 +239,23 @@ export abstract class BaseRepository<
     return this.countWhere({});
   }
 
+  updateWithRetry(
+    id: EntityId,
+    mutate: (doc: DocOf<TDocSchema>) => z.output<TPatchSchema> | Promise<z.output<TPatchSchema>>,
+    options?: UpdateWithRetryOptions,
+  ): Promise<DocOf<TDocSchema> | null> {
+    return updateWithRetry<DocOf<TDocSchema>, z.output<TPatchSchema>>(this, id, mutate, options);
+  }
+
   protected countWhere(filter: Filter<Document>): Promise<number> {
     return this.collection.countDocuments(filter);
   }
 
   /** Validate-on-read: schema drift is logged (id + issues, never the body) and thrown. */
-  protected read(raw: Document): z.output<TDocSchema> {
+  protected read(raw: Document): DocOf<TDocSchema> {
     const result = fromStorage(this.schemas.doc, raw);
-    if (result.success) return result.data;
+    // Every document schema is built with documentShape, so _id and version are guaranteed.
+    if (result.success) return result.data as DocOf<TDocSchema>;
     const id = (raw['_id'] as ObjectId | undefined)?.toString() ?? 'unknown';
     const issues = result.error.issues.map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`);
     this.logger.error(`schema drift in ${this.collection.collectionName} document ${id}`, {

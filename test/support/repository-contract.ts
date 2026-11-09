@@ -144,6 +144,86 @@ function baseContract<I, D extends Base, P, R extends Repository<I, D, P>>(
     expect((await repo.findById(doc._id))?.version).toBe(2);
   });
 
+  describe('updateWithRetry', () => {
+    it('applies mutate to the current document and returns the updated one', async () => {
+      const doc = await repo.insert(c.input(1));
+      const seen: number[] = [];
+      const updated = await repo.updateWithRetry(doc._id, (d) => {
+        seen.push(d.version);
+        return c.patch;
+      });
+      expect(seen).toEqual([1]);
+      expect(updated?.version).toBe(2);
+      expect(updated?.[c.patched[0]]).toEqual(c.patched[1]);
+    });
+
+    it('re-reads and retries when another writer got in between', async () => {
+      const doc = await repo.insert(c.input(1));
+      const seen: number[] = [];
+      const updated = await repo.updateWithRetry(doc._id, async (d) => {
+        seen.push(d.version);
+        // A competing writer wins the first attempt.
+        if (seen.length === 1) await repo.updateById(doc._id, c.patch, d.version);
+        return c.patch;
+      });
+      expect(seen).toEqual([1, 2]); // second attempt saw the fresh version
+      expect(updated?.version).toBe(3);
+    });
+
+    it('rethrows VersionConflictError once the attempts are exhausted', async () => {
+      const doc = await repo.insert(c.input(1));
+      let calls = 0;
+      await expect(
+        repo.updateWithRetry(
+          doc._id,
+          async (d) => {
+            calls++;
+            await repo.updateById(doc._id, c.patch, d.version); // always lose the race
+            return c.patch;
+          },
+          { attempts: 2 },
+        ),
+      ).rejects.toBeInstanceOf(VersionConflictError);
+      expect(calls).toBe(2);
+    });
+
+    it('two concurrent read-modify-writes both land (version 3), none is lost', async () => {
+      const doc = await repo.insert(c.input(1));
+      const results = await Promise.all([
+        repo.updateWithRetry(doc._id, () => c.patch),
+        repo.updateWithRetry(doc._id, () => c.patch),
+      ]);
+      expect(results.every((r) => r !== null)).toBe(true);
+      expect((await repo.findById(doc._id))?.version).toBe(3);
+    });
+
+    it('returns null without calling mutate for a missing or malformed id', async () => {
+      let calls = 0;
+      const mutate = () => {
+        calls++;
+        return c.patch;
+      };
+      expect(await repo.updateWithRetry('f'.repeat(24), mutate)).toBeNull();
+      expect(await repo.updateWithRetry('abc', mutate)).toBeNull();
+      expect(calls).toBe(0);
+    });
+
+    it('does not retry other errors (invalid patch) and rejects bad attempts', async () => {
+      const doc = await repo.insert(c.input(1));
+      let calls = 0;
+      await expect(
+        repo.updateWithRetry(doc._id, () => {
+          calls++;
+          return c.invalidPatch as P;
+        }),
+      ).rejects.toBeInstanceOf(z.ZodError);
+      expect(calls).toBe(1);
+      await expect(
+        repo.updateWithRetry(doc._id, () => c.patch, { attempts: 0 }),
+      ).rejects.toBeInstanceOf(RangeError);
+    });
+  });
+
   it('updateById: null for a missing or malformed id; rejects invalid and empty patches', async () => {
     expect(await repo.updateById('f'.repeat(24), c.patch, 1)).toBeNull();
     expect(await repo.updateById('abc', c.patch, 1)).toBeNull();

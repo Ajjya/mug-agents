@@ -39,6 +39,9 @@ import {
   InvalidPatchError,
   MAX_PAGE_SIZE,
   VersionConflictError,
+  updateWithRetry,
+  type UpdateWithRetryOptions,
+  type DocOf,
   type FindManyOptions,
   type Page,
   type Repository,
@@ -72,14 +75,14 @@ export class InMemoryRepository<
   TInputSchema extends AnyObjectSchema,
   TDocSchema extends AnyObjectSchema,
   TPatchSchema extends AnyObjectSchema,
-> implements Repository<z.output<TInputSchema>, z.output<TDocSchema>, z.output<TPatchSchema>> {
-  private readonly docs = new Map<string, z.output<TDocSchema> & Doc>();
+> implements Repository<z.output<TInputSchema>, DocOf<TDocSchema>, z.output<TPatchSchema>> {
+  private readonly docs = new Map<string, DocOf<TDocSchema> & Doc>();
 
   constructor(
     private readonly schemas: RepositorySchemas<TInputSchema, TDocSchema, TPatchSchema>,
   ) {}
 
-  async insert(input: z.output<TInputSchema>): Promise<z.output<TDocSchema>> {
+  async insert(input: z.output<TInputSchema>): Promise<DocOf<TDocSchema>> {
     toStorage(this.schemas.input, input);
     const now = new Date().toISOString();
     const doc = roundTrip(this.schemas.doc, {
@@ -88,18 +91,18 @@ export class InMemoryRepository<
       version: 1,
       createdAt: now,
       updatedAt: now,
-    } as z.output<TDocSchema>) as z.output<TDocSchema> & Doc;
+    } as DocOf<TDocSchema>) as DocOf<TDocSchema> & Doc;
     this.beforeWrite(doc, undefined);
     this.docs.set(doc._id, doc);
     return structuredClone(doc);
   }
 
-  async findById(id: EntityId): Promise<z.output<TDocSchema> | null> {
+  async findById(id: EntityId): Promise<DocOf<TDocSchema> | null> {
     const doc = isEntityId(id) ? this.docs.get(id.toLowerCase()) : undefined;
     return doc ? structuredClone(doc) : null;
   }
 
-  async findMany(options: FindManyOptions = {}): Promise<Page<z.output<TDocSchema>>> {
+  async findMany(options: FindManyOptions = {}): Promise<Page<DocOf<TDocSchema>>> {
     return this.where(() => true, options);
   }
 
@@ -107,7 +110,7 @@ export class InMemoryRepository<
     id: EntityId,
     patch: z.output<TPatchSchema>,
     expectedVersion: number,
-  ): Promise<z.output<TDocSchema> | null> {
+  ): Promise<DocOf<TDocSchema> | null> {
     if (!isEntityId(id)) return null;
     const normalised = roundTrip(this.schemas.patch, patch) as Record<string, unknown>;
     const set = Object.fromEntries(Object.entries(normalised).filter(([, v]) => v !== undefined));
@@ -124,10 +127,18 @@ export class InMemoryRepository<
       ...set,
       version: current.version + 1,
       updatedAt: new Date().toISOString(),
-    }) as z.output<TDocSchema> & Doc;
+    }) as DocOf<TDocSchema> & Doc;
     this.beforeWrite(next, current);
     this.docs.set(next._id, next);
     return structuredClone(next);
+  }
+
+  updateWithRetry(
+    id: EntityId,
+    mutate: (doc: DocOf<TDocSchema>) => z.output<TPatchSchema> | Promise<z.output<TPatchSchema>>,
+    options?: UpdateWithRetryOptions,
+  ): Promise<DocOf<TDocSchema> | null> {
+    return updateWithRetry<DocOf<TDocSchema>, z.output<TPatchSchema>>(this, id, mutate, options);
   }
 
   async count(): Promise<number> {
@@ -136,18 +147,18 @@ export class InMemoryRepository<
 
   /** Hook for uniqueness rules that MongoDB enforces with indexes. */
   protected beforeWrite(
-    _next: z.output<TDocSchema> & Doc,
-    _previous: (z.output<TDocSchema> & Doc) | undefined,
+    _next: DocOf<TDocSchema> & Doc,
+    _previous: (DocOf<TDocSchema> & Doc) | undefined,
   ): void {}
 
-  protected all(): (z.output<TDocSchema> & Doc)[] {
+  protected all(): (DocOf<TDocSchema> & Doc)[] {
     return [...this.docs.values()];
   }
 
   protected where(
-    predicate: (doc: z.output<TDocSchema> & Doc) => boolean,
+    predicate: (doc: DocOf<TDocSchema> & Doc) => boolean,
     options: FindManyOptions = {},
-  ): Page<z.output<TDocSchema>> {
+  ): Page<DocOf<TDocSchema>> {
     const requested = options.limit ?? DEFAULT_PAGE_SIZE;
     const limit = Number.isFinite(requested)
       ? Math.min(Math.max(Math.trunc(requested), 1), MAX_PAGE_SIZE)
