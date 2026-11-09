@@ -1,3 +1,4 @@
+import { inspect } from 'node:util';
 import { Global, Inject, Injectable, Module, type LoggerService } from '@nestjs/common';
 import { pino, type Logger } from 'pino';
 import { APP_CONFIG } from '../config/config.module.js';
@@ -21,11 +22,25 @@ export class AppLogger implements LoggerService {
     message: unknown,
     params: unknown[],
   ): void {
+    // Nest passes the context name as the last string argument.
     const last = params.at(-1);
     const context = typeof last === 'string' ? last : undefined;
-    const extra = params.filter((p) => typeof p !== 'string' || p !== context);
-    const msg = typeof message === 'string' ? message : JSON.stringify(message);
-    this.base[level]({ context, ...(extra.length ? { details: extra } : {}) }, msg);
+    const rest = context === undefined ? params : params.slice(0, -1);
+    const details = rest.map((p) => (p instanceof Error ? pino.stdSerializers.err(p) : p));
+
+    let msg: string;
+    const fields: Record<string, unknown> = { context };
+    if (typeof message === 'string') {
+      msg = message;
+    } else if (message instanceof Error) {
+      msg = message.message;
+      fields['err'] = pino.stdSerializers.err(message);
+    } else {
+      // inspect never throws on circular structures, unlike JSON.stringify.
+      msg = inspect(message, { depth: 4, breakLength: Infinity });
+    }
+    if (details.length > 0) fields['details'] = details;
+    this.base[level](fields, msg);
   }
 
   log(message: unknown, ...params: unknown[]): void {

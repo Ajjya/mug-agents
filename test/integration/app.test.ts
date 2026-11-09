@@ -136,6 +136,6 @@ describe('built application process', () => {
   it('exits non-zero with a clear message when MongoDB is unreachable', () => {
     const r = run({ MONGODB_URI: 'mongodb://127.0.0.1:1', MONGODB_DB: 'x', LOG_LEVEL: 'error' });
     expect(r.status).toBe(1);
-    expect(r.stderr).toContain('Startup failed');
+    expect(r.stdout + r.stderr).toContain('Startup failed');
   }, 30_000);
 });

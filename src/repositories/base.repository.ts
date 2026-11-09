@@ -4,6 +4,7 @@ import type { z } from 'zod';
 import {
   type EntityId,
   fromStorage,
+  isEntityId,
   newEntityId,
   toObjectId,
   toStorage,
@@ -38,8 +39,12 @@ export interface Repository<TInput, TDoc, TPatch> {
   insert(input: TInput): Promise<TDoc>;
   findById(id: EntityId): Promise<TDoc | null>;
   findMany(filter?: Filter<Document>, options?: FindManyOptions): Promise<Page<TDoc>>;
-  /** Returns the updated document, or null if no document has that id. */
-  updateById(id: EntityId, patch: TPatch): Promise<TDoc | null>;
+  /**
+   * Optimistic locking: `expectedVersion` is the `version` of the document the caller read.
+   * Returns the updated document (version + 1), or null if no document has that id.
+   * Throws VersionConflictError if the document changed since it was read; re-read and retry.
+   */
+  updateById(id: EntityId, patch: TPatch, expectedVersion: number): Promise<TDoc | null>;
   count(filter?: Filter<Document>): Promise<number>;
 }
 
@@ -52,6 +57,16 @@ export class SchemaDriftError extends Error {
   ) {
     super(`Stored ${collection} document ${documentId} does not match its schema`);
     this.name = 'SchemaDriftError';
+  }
+}
+
+export class VersionConflictError extends Error {
+  constructor(
+    public readonly documentId: string,
+    public readonly expectedVersion: number,
+  ) {
+    super(`Document ${documentId} is no longer at version ${String(expectedVersion)}`);
+    this.name = 'VersionConflictError';
   }
 }
 
@@ -94,13 +109,14 @@ export abstract class BaseRepository<
     const now = new Date().toISOString();
     // Timestamps and _id are set here, never by the caller. The strict schema rejects
     // any caller-supplied _id/createdAt/updatedAt in `input` before we get this far.
-    const doc = { ...input, _id: newEntityId(), createdAt: now, updatedAt: now };
+    const doc = { ...input, _id: newEntityId(), version: 1, createdAt: now, updatedAt: now };
     const stored = toStorage(this.schemas.doc, doc as z.output<TDocSchema>);
     await this.collection.insertOne(stored);
     return this.read(stored);
   }
 
   async findById(id: EntityId): Promise<z.output<TDocSchema> | null> {
+    if (!isEntityId(id)) return null; // a malformed id cannot exist
     const raw = await this.collection.findOne({ _id: toObjectId(id) });
     return raw ? this.read(raw) : null;
   }
@@ -134,19 +150,27 @@ export abstract class BaseRepository<
   async updateById(
     id: EntityId,
     patch: z.output<TPatchSchema>,
+    expectedVersion: number,
   ): Promise<z.output<TDocSchema> | null> {
+    if (!isEntityId(id)) return null;
     const stored = toStorage(this.schemas.patch, patch) as Record<string, unknown>;
     // `undefined` would be serialised as null by the driver; treat it as "not provided".
     const set = Object.fromEntries(Object.entries(stored).filter(([, v]) => v !== undefined));
     if (Object.keys(set).length === 0) {
       throw new InvalidPatchError('Patch must contain at least one field');
     }
+    const _id = toObjectId(id);
     const raw = await this.collection.findOneAndUpdate(
-      { _id: toObjectId(id) },
-      { $set: { ...set, updatedAt: new Date() } },
+      { _id, version: expectedVersion },
+      { $set: { ...set, updatedAt: new Date() }, $inc: { version: 1 } },
       { returnDocument: 'after' },
     );
-    return raw ? this.read(raw) : null;
+    if (raw) return this.read(raw);
+    // No match: either the id does not exist, or the version moved on.
+    if ((await this.collection.countDocuments({ _id }, { limit: 1 })) > 0) {
+      throw new VersionConflictError(id, expectedVersion);
+    }
+    return null;
   }
 
   count(filter: Filter<Document> = {}): Promise<number> {

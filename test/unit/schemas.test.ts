@@ -36,7 +36,12 @@ import {
   taskInput,
 } from '../support/fixtures.js';
 
-const rawDoc = () => ({ _id: new ObjectId(), createdAt: new Date(ISO), updatedAt: new Date(ISO) });
+const rawDoc = () => ({
+  _id: new ObjectId(),
+  version: 1,
+  createdAt: new Date(ISO),
+  updatedAt: new Date(ISO),
+});
 
 describe('enum constants', () => {
   it('are exported and non-empty', () => {

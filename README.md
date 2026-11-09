@@ -6,7 +6,7 @@ external integrations yet (see `specs/M0-skeleton.md`).
 
 ## Requirements
 
-- Node.js >= 22 (developed on 26; the project is ESM-only because NestJS 12 is ESM-only)
+- Node.js >= 22.9 (developed on 26; the project is ESM-only because NestJS 12 is ESM-only)
 - A MongoDB to run against (local `mongod` is fine). Tests do **not** need one: they start an
   in-memory `mongod` via `mongodb-memory-server` (binary downloaded on first run).
 
@@ -15,7 +15,7 @@ external integrations yet (see `specs/M0-skeleton.md`).
 ```bash
 npm ci
 cp .env.example .env     # then edit if needed
-npm run dev              # build + start (reads .env via node --env-file-if-exists)
+npm run start:build       # build + start (reads .env via node --env-file-if-exists)
 ```
 
 Or `npm run build && npm start`.
@@ -60,6 +60,13 @@ npm run build
   keyset pagination on `_id` (`findMany(filter, { limit, sort, after })` → `{ items, nextCursor }`),
   and have **no delete methods** — state changes go through status fields. Filters passed to
   `findMany`/`count` use stored types (`toObjectId`, `Date`).
+- **Optimistic locking.** Every document has a `version` (starts at 1, set by the repository).
+  `updateById(id, patch, expectedVersion)` only applies if the stored version matches, increments
+  it, and otherwise throws `VersionConflictError` (re-read and retry). It returns `null` when the
+  id does not exist. Malformed ids return `null` from `findById`/`updateById`; a malformed
+  `after` cursor throws `InvalidIdError`.
+- **Schema drift** throws `SchemaDriftError` carrying `documentId`; a paging caller can resume past
+  it with `after: err.documentId`.
 - **Patches** are shallow: a provided array/object replaces the stored one. Clearing an optional
   field is not supported in M0.
 - **Indexes** are ensured at startup (`src/mongo/indexes.ts`); startup fails fast if MongoDB is

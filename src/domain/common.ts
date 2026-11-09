@@ -12,9 +12,11 @@ import { z } from 'zod';
  * Use `toStorage` (domain -> Mongo, validating) and `fromStorage` (Mongo -> domain, validating).
  */
 
+export const ENTITY_ID_RE = /^[0-9a-f]{24}$/i;
+
 export const entityId = z.codec(
   z.instanceof(ObjectId),
-  z.string().regex(/^[0-9a-f]{24}$/i, 'must be a 24-character hex id'),
+  z.string().regex(ENTITY_ID_RE, 'must be a 24-character hex id'),
   {
     decode: (oid) => oid.toHexString(),
     encode: (hex) => new ObjectId(hex),
@@ -34,11 +36,21 @@ export const timestampsShape = {
 
 export const documentShape = {
   _id: entityId,
+  /** Optimistic-lock counter: starts at 1, incremented by the repository on every update. */
+  version: z.number().int().positive(),
   ...timestampsShape,
 } as const;
 
 export type EntityId = z.infer<typeof entityId>;
 export type Timestamps = { createdAt: string; updatedAt: string };
+
+/** A string that is not a valid 24-char hex id (distinct from a driver BSONError). */
+export class InvalidIdError extends Error {
+  constructor(public readonly value: string) {
+    super(`Invalid entity id: ${JSON.stringify(value)}`);
+    this.name = 'InvalidIdError';
+  }
+}
 
 /** Non-empty trimmed text, used for names/titles. */
 export const nonEmpty = z.string().trim().min(1);
@@ -49,11 +61,12 @@ export function newEntityId(): EntityId {
 
 /** Converts a domain id string to an ObjectId for use in Mongo filters. */
 export function toObjectId(id: EntityId): ObjectId {
+  if (!isEntityId(id)) throw new InvalidIdError(id);
   return new ObjectId(id);
 }
 
 export function isEntityId(value: string): boolean {
-  return /^[0-9a-f]{24}$/i.test(value);
+  return ENTITY_ID_RE.test(value);
 }
 
 /** Validate a domain value and convert it to its Mongo representation. Throws ZodError. */
@@ -65,6 +78,6 @@ export function toStorage<S extends z.ZodType>(schema: S, value: z.output<S>): z
 export function fromStorage<S extends z.ZodType>(
   schema: S,
   raw: unknown,
-): ReturnType<typeof z.safeParse<S>> {
+): z.ZodSafeParseResult<z.output<S>> {
   return z.safeDecode(schema, raw as z.input<S>);
 }

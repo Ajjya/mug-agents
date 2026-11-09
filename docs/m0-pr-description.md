@@ -4,6 +4,9 @@
 
 - **Repo name** `mug-agents`, single package (no monorepo yet). **Dev DB:** local MongoDB.
 - **IDs:** `_id` is `ObjectId` in Mongo, 24-hex string at the boundary; references likewise.
+- **Optimistic locking:** persisted documents carry `version` (repo-managed); `updateById` requires `expectedVersion` and throws `VersionConflictError` on mismatch, so concurrent agents cannot silently overwrite each other's array fields.
+- **Speaker emails are lower-cased** by the schema so the unique index is case-insensitive.
+- **Startup failures** are logged as structured JSON (fatal) and the half-started app is closed before exit; config errors stay plain readable text.
 - **Patch semantics:** shallow; provided arrays/objects replace stored ones. Clearing an optional field is not supported yet.
 - **Zod codecs for the storage boundary.** `entityId` and `isoDate` in `domain/common.ts` are `z.codec`s (Mongo type in, domain type out), so `z.infer` is the string-based domain type and `toStorage` / `fromStorage` (`z.encode` / `z.safeDecode`) are the only conversion points.
 - **Schemas have required arrays** (`coHostOrganisationIds`, `agenda`, `topics`, `links`, `perEvent`, `contacts`, `history`) – no defaults, so Input and output types stay identical.
@@ -29,4 +32,4 @@
 - **Zod 4.6:** `z.codec`, `z.encode`, `z.safeDecode`, `z.iso.datetime`, `z.email()`, `z.url()` – verified by running them; `.extend` / `.partial` keep `.strict()`.
 - **mongodb 7.8:** `findOneAndUpdate` returns the document (or null) directly.
 - **TypeScript 6.0.3, ESLint 10 (flat config), Vitest 5.1** (`projects` for unit/integration split).
-- Node here is v26 (not LTS); `engines` says `>=22`.
+- Node here is v26 (not LTS); `engines` says `>=22.9` (needed for `--env-file-if-exists`).

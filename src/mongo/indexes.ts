@@ -26,19 +26,19 @@ export const INDEXES: Record<CollectionName, IndexDescription[]> = {
  * index that already exists with the same definition. Returns the names it ensured.
  */
 export async function ensureIndexes(db: Db, logger: Logger): Promise<string[]> {
-  const ensured: string[] = [];
-  for (const [collection, indexes] of Object.entries(INDEXES)) {
-    const existing = new Set(
-      (await db.listCollections({ name: collection }).toArray()).length > 0
-        ? (await db.collection(collection).indexes()).map((i) => i.name)
-        : [],
-    );
-    const created = await db.collection(collection).createIndexes(indexes);
-    for (const name of created) {
-      ensured.push(`${collection}.${name}`);
-      if (!existing.has(name)) logger.log(`created index ${collection}.${name}`);
-    }
-  }
+  const perCollection = await Promise.all(
+    Object.entries(INDEXES).map(async ([collection, indexes]) => {
+      const col = db.collection(collection);
+      // listIndexes fails with NamespaceNotFound when the collection does not exist yet.
+      const existing = new Set((await col.indexes().catch(() => [])).map((i) => i.name));
+      const names = await col.createIndexes(indexes);
+      for (const name of names) {
+        if (!existing.has(name)) logger.log(`created index ${collection}.${name}`);
+      }
+      return names.map((name) => `${collection}.${name}`);
+    }),
+  );
+  const ensured = perCollection.flat();
   logger.log(`indexes ensured (${String(ensured.length)})`);
   return ensured;
 }

@@ -30,7 +30,8 @@ export const SpeakerEventStatusSchema = z
 export const SpeakerInputSchema = z
   .object({
     name: nonEmpty,
-    email: z.email().optional(),
+    // Lower-cased so the unique index on email is effectively case-insensitive.
+    email: z.email().toLowerCase().optional(),
     topics: z.array(nonEmpty),
     bio: z.string().optional(),
     photoUrl: z.url().optional(),

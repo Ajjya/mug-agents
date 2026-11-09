@@ -13,8 +13,9 @@ export class MongoHealthIndicator {
   isHealthy(key = 'mongodb') {
     return this.indicators
       .check(key)
-      .attempt(async () => {
-        await this.db.command({ ping: 1 });
+      .attempt(async ({ signal }) => {
+        // Abort on timeout so timed-out probes do not pile up behind server selection.
+        await this.db.command({ ping: 1 }, { signal });
       })
       .withTimeout(2_000);
   }
