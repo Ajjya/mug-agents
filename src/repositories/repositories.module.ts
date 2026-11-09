@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { MongoModule } from '../mongo/mongo.module.js';
 import { EVENTS_REPOSITORY, MongoEventsRepository } from './events.repository.js';
 import {
   MongoOrganisationsRepository,
@@ -8,6 +9,7 @@ import { MongoSpeakersRepository, SPEAKERS_REPOSITORY } from './speakers.reposit
 import { MongoTasksRepository, TASKS_REPOSITORY } from './tasks.repository.js';
 
 @Module({
+  imports: [MongoModule],
   providers: [
     { provide: EVENTS_REPOSITORY, useClass: MongoEventsRepository },
     { provide: SPEAKERS_REPOSITORY, useClass: MongoSpeakersRepository },
