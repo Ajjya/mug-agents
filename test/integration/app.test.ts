@@ -6,13 +6,15 @@ import { Test } from '@nestjs/testing';
 import { MongoMemoryServer } from 'mongodb-memory-server';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { ConfigModule } from '../../src/config/config.module.js';
+import { AppModule } from '../../src/app.module.js';
+import { APP_CONFIG, ConfigModule } from '../../src/config/config.module.js';
 import type { AppConfig } from '../../src/config/env.schema.js';
 import { HealthModule } from '../../src/health/health.module.js';
-import { LoggerModule } from '../../src/logging/logger.module.js';
+import { AppLogger, LoggerModule } from '../../src/logging/logger.module.js';
 import { INDEXES } from '../../src/mongo/indexes.js';
 import { MongoModule } from '../../src/mongo/mongo.module.js';
 import { RepositoriesModule } from '../../src/repositories/repositories.module.js';
+import { MONGOD_VERSION } from '../support/mongod-version.js';
 import { openTestMongo, type TestMongo } from '../support/mongo-test.js';
 
 const httpOf = (app: INestApplication) => app.getHttpServer() as Server;
@@ -29,7 +31,7 @@ async function createApp(cfg: AppConfig): Promise<INestApplication> {
   const moduleRef = await Test.createTestingModule({
     imports: [
       ConfigModule.forValue(cfg),
-      LoggerModule,
+      LoggerModule.forValue(new AppLogger(cfg)),
       MongoModule,
       RepositoriesModule,
       HealthModule,
@@ -97,6 +99,38 @@ describe('MongoDB goes down', () => {
       await request(httpOf(app)).get('/health/ready').expect(503);
     } finally {
       await app.close();
+    }
+  });
+});
+
+describe('test infrastructure', () => {
+  it('runs against the pinned mongod version', async () => {
+    const mongo = await openTestMongo();
+    try {
+      const info = await mongo.db.admin().serverInfo();
+      expect(info['version']).toBe(MONGOD_VERSION);
+    } finally {
+      await mongo.close();
+    }
+  });
+});
+
+describe('single config and logger instances', () => {
+  it('AppModule.register shares the exact objects main.ts built', async () => {
+    const mongo = await openTestMongo();
+    const cfg = config(mongo.uri, mongo.dbName);
+    const logger = new AppLogger(cfg);
+    const moduleRef = await Test.createTestingModule({
+      imports: [AppModule.register(cfg, logger)],
+    }).compile();
+    const app = moduleRef.createNestApplication();
+    try {
+      await app.init();
+      expect(app.get(APP_CONFIG)).toBe(cfg);
+      expect(app.get(AppLogger)).toBe(logger);
+    } finally {
+      await app.close();
+      await mongo.close();
     }
   });
 });

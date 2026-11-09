@@ -1,7 +1,6 @@
 import { inspect } from 'node:util';
-import { Global, Inject, Injectable, Module, type LoggerService } from '@nestjs/common';
+import { type DynamicModule, Global, Module, type LoggerService } from '@nestjs/common';
 import { pino, type Logger } from 'pino';
-import { APP_CONFIG } from '../config/config.module.js';
 import type { AppConfig } from '../config/env.schema.js';
 
 /**
@@ -9,11 +8,10 @@ import type { AppConfig } from '../config/env.schema.js';
  * only place that knows about pino, so tracing / cost metrics (M7) can be added here.
  * Policy: never log full document bodies at info level — log ids and counts.
  */
-@Injectable()
 export class AppLogger implements LoggerService {
   private readonly base: Logger;
 
-  constructor(@Inject(APP_CONFIG) config: AppConfig) {
+  constructor(config: AppConfig) {
     this.base = pino({ level: config.LOG_LEVEL, base: { service: 'mug-agents' } });
   }
 
@@ -63,6 +61,15 @@ export class AppLogger implements LoggerService {
   }
 }
 
+/** The logger is built once by the caller and provided as a value: exactly one instance exists. */
 @Global()
-@Module({ providers: [AppLogger], exports: [AppLogger] })
-export class LoggerModule {}
+@Module({})
+export class LoggerModule {
+  static forValue(logger: AppLogger): DynamicModule {
+    return {
+      module: LoggerModule,
+      providers: [{ provide: AppLogger, useValue: logger }],
+      exports: [AppLogger],
+    };
+  }
+}

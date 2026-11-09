@@ -1,5 +1,4 @@
 import {
-  Global,
   Inject,
   Injectable,
   Logger,
@@ -38,7 +37,6 @@ export class MongoLifecycle implements OnModuleInit, OnApplicationShutdown {
   }
 }
 
-@Global()
 @Module({
   imports: [TerminusModule],
   providers: [

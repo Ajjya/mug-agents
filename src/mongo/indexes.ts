@@ -1,5 +1,5 @@
 import { Logger } from '@nestjs/common';
-import type { Db, IndexDescription } from 'mongodb';
+import { type Collection, type Db, type IndexDescription, MongoServerError } from 'mongodb';
 
 export const COLLECTIONS = {
   events: 'events',
@@ -21,6 +21,21 @@ export const INDEXES: Record<CollectionName, IndexDescription[]> = {
   tasks: [{ key: { status: 1, dueAt: 1 }, name: 'tasks_status_dueAt' }],
 };
 
+const NAMESPACE_NOT_FOUND = 26;
+
+/**
+ * listIndexes fails with NamespaceNotFound when the collection does not exist yet (first start):
+ * that, and only that, means "no indexes". Anything else (auth, network, ...) fails startup.
+ */
+async function existingIndexes(col: Collection): Promise<{ name?: string }[]> {
+  try {
+    return await col.indexes();
+  } catch (err) {
+    if (err instanceof MongoServerError && err.code === NAMESPACE_NOT_FOUND) return [];
+    throw err;
+  }
+}
+
 /**
  * Creates any missing indexes. Safe to run on every start: createIndexes is a no-op for an
  * index that already exists with the same definition. Returns the names it ensured.
@@ -29,8 +44,7 @@ export async function ensureIndexes(db: Db, logger: Logger): Promise<string[]> {
   const perCollection = await Promise.all(
     Object.entries(INDEXES).map(async ([collection, indexes]) => {
       const col = db.collection(collection);
-      // listIndexes fails with NamespaceNotFound when the collection does not exist yet.
-      const existing = new Set((await col.indexes().catch(() => [])).map((i) => i.name));
+      const existing = new Set((await existingIndexes(col)).map((i) => i.name));
       const names = await col.createIndexes(indexes);
       for (const name of names) {
         if (!existing.has(name)) logger.log(`created index ${collection}.${name}`);

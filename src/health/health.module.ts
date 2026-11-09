@@ -1,5 +1,6 @@
 import { Controller, Get, Module } from '@nestjs/common';
 import { HealthCheck, HealthCheckService, TerminusModule } from '@nestjs/terminus';
+import { MongoModule } from '../mongo/mongo.module.js';
 import { MongoHealthIndicator } from '../mongo/mongo.health.js';
 
 @Controller('health')
@@ -24,5 +25,5 @@ export class HealthController {
   }
 }
 
-@Module({ imports: [TerminusModule], controllers: [HealthController] })
+@Module({ imports: [TerminusModule, MongoModule], controllers: [HealthController] })
 export class HealthModule {}
