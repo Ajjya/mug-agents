@@ -50,6 +50,25 @@ npm run typecheck
 npm run build
 ```
 
+### Test MongoDB binary (CI)
+
+Integration tests run a real `mongod` through `mongodb-memory-server`, **pinned to 8.0.4**
+(`test/support/mongod-version.ts`, mirrored in `package.json` → `config.mongodbMemoryServer.version`;
+a unit test keeps them equal). Keep the major in line with the Atlas tier you deploy on, and bump
+both places together.
+
+- `npm ci` runs the library's postinstall hook, which downloads the pinned binary (~80 MB) into
+  `node_modules/.cache/mongodb-memory-server/`. Set `MONGOMS_DOWNLOAD_DIR=/some/dir` to put it
+  elsewhere.
+- **Cache it in CI** so builds do not re-download: cache that directory with the pinned version
+  in the key, e.g. GitHub Actions
+  `path: node_modules/.cache/mongodb-memory-server`, `key: mongod-8.0.4-${{ runner.os }}-${{ runner.arch }}`.
+- To pre-download without installing dependencies again, run
+  `node node_modules/mongodb-memory-server/postinstall.js` (or any test run; the first one
+  downloads on demand, the test hook timeout allows for it).
+- Offline/air-gapped runners: set `MONGOMS_DISABLE_POSTINSTALL=1` and point
+  `MONGOMS_SYSTEM_BINARY=/path/to/mongod` at a preinstalled binary of the same major.
+
 ## Design notes
 
 - **Zod first.** Each entity has `XxxInputSchema`, `XxxSchema` (persisted) and `XxxPatchSchema`;

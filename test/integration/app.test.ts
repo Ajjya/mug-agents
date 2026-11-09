@@ -14,6 +14,7 @@ import { AppLogger, LoggerModule } from '../../src/logging/logger.module.js';
 import { INDEXES } from '../../src/mongo/indexes.js';
 import { MongoModule } from '../../src/mongo/mongo.module.js';
 import { RepositoriesModule } from '../../src/repositories/repositories.module.js';
+import { MONGOD_VERSION } from '../support/mongod-version.js';
 import { openTestMongo, type TestMongo } from '../support/mongo-test.js';
 
 const httpOf = (app: INestApplication) => app.getHttpServer() as Server;
@@ -98,6 +99,18 @@ describe('MongoDB goes down', () => {
       await request(httpOf(app)).get('/health/ready').expect(503);
     } finally {
       await app.close();
+    }
+  });
+});
+
+describe('test infrastructure', () => {
+  it('runs against the pinned mongod version', async () => {
+    const mongo = await openTestMongo();
+    try {
+      const info = await mongo.db.admin().serverInfo();
+      expect(info['version']).toBe(MONGOD_VERSION);
+    } finally {
+      await mongo.close();
     }
   });
 });
