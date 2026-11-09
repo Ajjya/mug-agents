@@ -24,7 +24,10 @@ async function bootstrap(): Promise<void> {
   let app: INestApplication | undefined;
   try {
     // abortOnError: false so startup failures (e.g. MongoDB unreachable) reach the catch below.
-    app = await NestFactory.create(AppModule, { abortOnError: false, logger });
+    app = await NestFactory.create(AppModule.register(config, logger), {
+      abortOnError: false,
+      logger,
+    });
     app.enableShutdownHooks();
     await app.listen(config.PORT);
   } catch (err) {
