@@ -1,10 +1,13 @@
 // Throwaway probe (spec 3a): does Ollama Cloud honour schema-constrained decoding?
+// Columns: native `format`, OpenAI `response_format`, a no-constraint control, and (M1 review)
+// OpenAI-style tool calling with a forced tool_choice, repeated PROBE_RUNS times (default 3).
 // Reads OLLAMA_API_KEY from env (node --env-file). Never prints the key.
 const key = process.env.OLLAMA_API_KEY;
 if (!key) {
   console.error('OLLAMA_API_KEY is not set');
   process.exit(2);
 }
+const RUNS = Number(process.env.PROBE_RUNS ?? 3);
 const MODELS = (process.env.PROBE_MODELS ?? 'gpt-oss:20b,gemma4:31b').split(',');
 const schema = {
   type: 'object',
@@ -98,4 +101,47 @@ for (const model of MODELS) {
   console.log(
     `control (no constraint)          : HTTP ${c.status} ${c.ms}ms -> ${c.status === 200 ? check(cContent) : c.text.slice(0, 200)}`,
   );
+
+  // Tool calling: the same schema as a function definition; the answer is read from the tool call.
+  const verdicts = [];
+  for (let i = 0; i < RUNS; i++) {
+    const t = await post('https://ollama.com/v1/chat/completions', {
+      model,
+      temperature: 0,
+      messages: [{ role: 'user', content: prompt }],
+      tools: [
+        {
+          type: 'function',
+          function: { name: 'submit_task', description: 'Submit the task.', parameters: schema },
+        },
+      ],
+      tool_choice: { type: 'function', function: { name: 'submit_task' } },
+    });
+    if (t.status !== 200) {
+      verdicts.push(`HTTP ${t.status}: ${t.text.slice(0, 120)}`);
+      continue;
+    }
+    let message = {};
+    try {
+      message = JSON.parse(t.text).choices?.[0]?.message ?? {};
+    } catch {
+      /* keep empty */
+    }
+    const call = message.tool_calls?.[0];
+    if (!call) {
+      verdicts.push(
+        `NO TOOL CALL (content: ${String(message.content ?? '')
+          .slice(0, 60)
+          .replace(/\n/g, ' ')})`,
+      );
+      continue;
+    }
+    const args =
+      typeof call.function?.arguments === 'string'
+        ? call.function.arguments
+        : JSON.stringify(call.function?.arguments);
+    verdicts.push(`${check(args)} in ${t.ms}ms`);
+  }
+  console.log(`tool calling (forced), ${RUNS} runs  :`);
+  for (const v of verdicts) console.log(`   - ${v}`);
 }
