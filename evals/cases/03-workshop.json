@@ -1,0 +1,12 @@
+{
+  "id": "03-workshop",
+  "description": "A hands-on workshop with a small capacity",
+  "expect": "plan",
+  "daysFromNow": 45,
+  "brief": {
+    "theme": "Hands-on aggregation pipelines",
+    "format": "workshop",
+    "capacity": 25,
+    "notes": "Attendees bring laptops. Need power strips and fast wifi."
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "id": "10-unrelated-theme",
+  "description": "A theme unrelated to MongoDB",
+  "expect": "plan",
+  "daysFromNow": 42,
+  "brief": {
+    "theme": "Sourdough baking for engineers",
+    "format": "talks",
+    "capacity": 30
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "id": "09-lightning-talks",
+  "description": "A lightning-talks night",
+  "expect": "plan",
+  "daysFromNow": 30,
+  "brief": {
+    "theme": "Lightning talks: favourite MongoDB tips",
+    "format": "lightning",
+    "capacity": 60
+  }
+}

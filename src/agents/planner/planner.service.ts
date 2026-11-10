@@ -47,6 +47,20 @@ export interface PlanResult {
   calls: LlmCallRecord[];
 }
 
+export type PlanOutcome =
+  | ({ status: 'planned' } & PlanResult)
+  | {
+      /** The event already has an agent-generated plan; no model was called, nothing was written. */
+      status: 'already_planned';
+      event: Event;
+      existingTasks: number;
+    };
+
+export interface EnsurePlannedOptions extends PlanRunOptions {
+  /** Generate again even if the event already has agent-created tasks (only new titles are added). */
+  replan?: boolean;
+}
+
 async function allPages<T>(fetchPage: (after?: string) => Promise<Page<T>>): Promise<T[]> {
   const items: T[] = [];
   let after: string | undefined;
@@ -87,6 +101,31 @@ export class PlannerService {
     computeMilestones(brief.date, options.now ?? new Date()); // reject a past date up front
     const draft = await this.graph.run(brief, options);
     return await this.persist(draft);
+  }
+
+  /**
+   * The entry point for "plan this brief" (CLI). Idempotent at the plan level: a model does not
+   * reproduce its titles exactly on every run, so the natural-key check alone would let a second
+   * run add a differently-worded copy of the whole checklist. If the matched event already has
+   * agent-created tasks, nothing is generated or written unless `replan` is set.
+   */
+  async ensurePlanned(input: unknown, options: EnsurePlannedOptions = {}): Promise<PlanOutcome> {
+    const brief = this.parseBrief(input);
+    computeMilestones(brief.date, options.now ?? new Date()); // reject a past date before anything else
+    const existing = options.replan ? null : await this.findEvent(brief);
+    if (existing) {
+      const tasks = await allPages((after) =>
+        this.tasks.findByEventId(existing._id, { limit: 200, ...(after ? { after } : {}) }),
+      );
+      const agentTasks = tasks.filter((t) => t.source === 'agent').length;
+      if (agentTasks > 0) {
+        this.logger.log(
+          `event ${existing._id} already planned (${String(agentTasks)} agent tasks); skipping`,
+        );
+        return { status: 'already_planned', event: existing, existingTasks: agentTasks };
+      }
+    }
+    return { status: 'planned', ...(await this.plan(brief, options)) };
   }
 
   /**

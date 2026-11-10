@@ -1,0 +1,11 @@
+{
+  "id": "02-rushed-3-weeks",
+  "description": "Only 3 weeks away: early milestones are compressed into today",
+  "expect": "plan",
+  "daysFromNow": 21,
+  "brief": {
+    "theme": "What's new in MongoDB 8.0",
+    "format": "talks",
+    "capacity": 60
+  }
+}

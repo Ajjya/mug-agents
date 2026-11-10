@@ -1,0 +1,12 @@
+{
+  "id": "04-co-hosted",
+  "description": "Co-hosted with another community",
+  "expect": "plan",
+  "daysFromNow": 50,
+  "brief": {
+    "theme": "Building RAG apps with MongoDB and Python",
+    "format": "talks",
+    "capacity": 100,
+    "coHost": "Lisbon Python Users Group"
+  }
+}

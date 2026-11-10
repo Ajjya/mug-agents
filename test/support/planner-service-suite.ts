@@ -179,6 +179,65 @@ export function plannerServiceSuite(create: () => Promise<Repos>): void {
       ).rejects.toBeInstanceOf(EventNotFoundError);
     });
 
+    describe('ensurePlanned (plan-level idempotency)', () => {
+      it('plans a new brief, then a second call does not call the model or write anything', async () => {
+        const first = await service.ensurePlanned(brief(), { now: NOW });
+        expect(first.status).toBe('planned');
+        expect(graph.runs).toBe(1);
+
+        // A real model would word the second checklist differently: it must not even be asked.
+        const d = draft();
+        graph.next = () => ({
+          ...d,
+          checklist: {
+            tasks: [{ milestone: 'T-8w', title: 'Entirely different wording', owner: 'organiser' }],
+          },
+        });
+        const second = await service.ensurePlanned(brief(), { now: NOW });
+        expect(second).toMatchObject({ status: 'already_planned', existingTasks: 5 });
+        expect(graph.runs).toBe(1);
+        expect(await repos.tasks.count()).toBe(5);
+        expect(await repos.events.count()).toBe(1);
+      });
+
+      it('replan generates again and only adds titles that are new', async () => {
+        await service.ensurePlanned(brief(), { now: NOW });
+        const again = await service.ensurePlanned(brief(), { now: NOW, replan: true });
+        expect(again.status).toBe('planned');
+        expect(graph.runs).toBe(2);
+        expect(await repos.tasks.count()).toBe(5); // same output -> same natural keys -> nothing added
+      });
+
+      it('an event that has only manual tasks still gets planned', async () => {
+        const event = await repos.events.insert({
+          title: 'x',
+          theme: 'Vector search in MongoDB',
+          date: '2027-01-12T00:00:00.000Z',
+          phase: 'idea',
+          coHostOrganisationIds: [],
+          agenda: [],
+        });
+        await repos.tasks.insert({
+          title: 'mine',
+          owner: 'me',
+          status: 'open',
+          source: 'manual',
+          relatedEventId: event._id,
+        });
+        const r = await service.ensurePlanned(brief(), { now: NOW });
+        expect(r.status).toBe('planned');
+        expect(graph.runs).toBe(1);
+      });
+
+      it('rejects a past date and an invalid brief before looking anything up', async () => {
+        await expect(
+          service.ensurePlanned(brief({ date: '2026-01-01T00:00:00.000Z' }), { now: NOW }),
+        ).rejects.toBeInstanceOf(PastEventDateError);
+        await expect(service.ensurePlanned({ nope: 1 })).rejects.toBeInstanceOf(InvalidBriefError);
+        expect(graph.runs).toBe(0);
+      });
+    });
+
     it('rejects a past date before the model runs and writes nothing', async () => {
       await expect(
         service.plan(brief({ date: '2026-11-09T00:00:00.000Z' }), { now: NOW }),

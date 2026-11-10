@@ -1,0 +1,12 @@
+{
+  "id": "07-large-capacity",
+  "description": "An unusually large capacity",
+  "expect": "plan",
+  "daysFromNow": 90,
+  "brief": {
+    "theme": "MongoDB community day Lisbon",
+    "format": "talks",
+    "capacity": 1500,
+    "notes": "Multi-track, needs a conference venue."
+  }
+}

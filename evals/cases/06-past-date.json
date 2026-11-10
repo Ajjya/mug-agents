@@ -1,0 +1,11 @@
+{
+  "id": "06-past-date",
+  "description": "A date in the past must be rejected before any model call",
+  "expect": "reject",
+  "daysFromNow": -7,
+  "brief": {
+    "theme": "Indexing strategies",
+    "format": "talks",
+    "capacity": 40
+  }
+}

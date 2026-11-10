@@ -1,0 +1,11 @@
+{
+  "id": "01-normal-8-weeks",
+  "description": "A normal event with the full 8 weeks of lead time",
+  "expect": "plan",
+  "daysFromNow": 60,
+  "brief": {
+    "theme": "Introduction to Atlas Vector Search",
+    "format": "talks",
+    "capacity": 80
+  }
+}

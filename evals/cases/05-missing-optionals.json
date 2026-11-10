@@ -1,0 +1,11 @@
+{
+  "id": "05-missing-optionals",
+  "description": "Only required fields: no coHost, no notes",
+  "expect": "plan",
+  "daysFromNow": 40,
+  "brief": {
+    "theme": "Schema design patterns",
+    "format": "talks",
+    "capacity": 50
+  }
+}
