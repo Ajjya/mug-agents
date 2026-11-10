@@ -14,7 +14,7 @@ const EVAL_EVENT_ID = 'e'.repeat(24);
 
 /**
  * The deterministic checks every plan must pass (spec section 10). Pure: no model, no I/O.
- * The "re-run creates no extra tasks" check needs persistence and lives in the runner.
+ * The idempotency checks need persistence and live in `idempotency.ts`.
  */
 export function assertDraft(draft: PlanDraft): AssertionResult[] {
   const results: AssertionResult[] = [];

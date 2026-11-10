@@ -29,7 +29,11 @@ Needs `OLLAMA_API_KEY` in `.env` and spends credits. Set `LLM_PRICES` to get a c
 3. Every checklist item maps to a known milestone and has an owner.
 4. Every `dueAt` is on or before the event date (except the `T+3d` follow-up).
 5. No duplicate titles within a milestone.
-6. Persisting the same plan twice creates no additional tasks.
+6. `persist-is-idempotent-for-the-same-draft`: persisting the same plan twice creates no additional
+   tasks.
+7. `ensure-planned-is-idempotent-for-the-same-brief`: calling `ensurePlanned` twice on the same brief,
+   the second call returns `already_planned` and does not reach the model (the model is replaced by a
+   replay of the draft, so no extra credits are spent).
 
 The past-date case passes only if the brief is rejected **before any model call**.
 

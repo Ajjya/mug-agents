@@ -29,6 +29,7 @@ import {
   InMemoryTasksRepository,
 } from '../test/support/in-memory.repositories.js';
 import { assertDraft, firstFailure } from './assertions.js';
+import { idempotencyAssertions } from './idempotency.js';
 import { type CaseOutcome, renderReport } from './report.js';
 
 interface EvalCase {
@@ -112,16 +113,8 @@ async function runCase(
     const draft = await graph.run(brief, { now });
     const results = assertDraft(draft);
 
-    // Re-running on the same plan must add nothing (spec: idempotency).
-    const first = await service.persist(draft);
-    const before = await tasks.count();
-    const second = await service.persist(draft);
-    const after = await tasks.count();
-    results.push({
-      name: 'rerun-creates-no-additional-tasks',
-      pass: second.created.length === 0 && after === before && first.created.length === before,
-      detail: `first run created ${String(first.created.length)}, second ${String(second.created.length)}, total ${String(before)} -> ${String(after)}`,
-    });
+    // Idempotency: persisting the same draft, and planning the same brief, twice.
+    results.push(...(await idempotencyAssertions(draft, raw, now)));
 
     const failed = firstFailure(results);
     return failed

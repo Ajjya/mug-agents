@@ -1,8 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { assertDraft, firstFailure } from '../../evals/assertions.js';
+import {
+  ENSURE_PLANNED_IDEMPOTENT,
+  PERSIST_IDEMPOTENT,
+  evaluateEnsurePlanned,
+  evaluatePersist,
+  idempotencyAssertions,
+} from '../../evals/idempotency.js';
 import { renderReport, summariseModel, type CaseOutcome } from '../../evals/report.js';
 import type { LlmCallRecord } from '../../src/llm/model.types.js';
-import { brief, draft } from '../support/planner-fixtures.js';
+import { NOW, brief, draft } from '../support/planner-fixtures.js';
 
 const names = (d = draft()) =>
   assertDraft(d)
@@ -116,5 +123,52 @@ describe('eval report', () => {
     expect(md).toContain('a \\| b');
     expect(md).toContain('n/a (no price in LLM_PRICES)');
     expect(md).toContain('| c1 | `ollama:a` | FAIL |');
+  });
+});
+
+describe('idempotency assertions', () => {
+  const raw = { theme: brief().theme, date: '2027-01-12', format: 'talks', capacity: 80 };
+
+  it('are named for what they actually check', () => {
+    expect(PERSIST_IDEMPOTENT).toBe('persist-is-idempotent-for-the-same-draft');
+    expect(ENSURE_PLANNED_IDEMPOTENT).toBe('ensure-planned-is-idempotent-for-the-same-brief');
+  });
+
+  it('both pass for a good draft, and the old name is gone', async () => {
+    const results = await idempotencyAssertions(draft(), raw, NOW);
+    expect(results.map((r) => r.name)).toEqual([PERSIST_IDEMPOTENT, ENSURE_PLANNED_IDEMPOTENT]);
+    expect(results.every((r) => r.pass)).toBe(true);
+    expect(results.map((r) => r.name)).not.toContain('rerun-creates-no-additional-tasks');
+  });
+
+  it('evaluatePersist fails when the second persist adds tasks', () => {
+    const bad = evaluatePersist({
+      firstCreated: 5,
+      secondCreated: 5,
+      totalAfterFirst: 5,
+      totalAfterSecond: 10,
+    });
+    expect(bad.pass).toBe(false);
+    expect(bad.detail).toContain('5 -> 10');
+  });
+
+  it('evaluateEnsurePlanned fails if the second call plans again or reaches the model', () => {
+    const ok = {
+      firstStatus: 'planned',
+      secondStatus: 'already_planned',
+      modelRuns: 1,
+      totalAfterFirst: 5,
+      totalAfterSecond: 5,
+    } as const;
+    expect(evaluateEnsurePlanned(ok).pass).toBe(true);
+    const again = evaluateEnsurePlanned({
+      ...ok,
+      secondStatus: 'planned',
+      modelRuns: 2,
+      totalAfterSecond: 9,
+    });
+    expect(again.pass).toBe(false);
+    expect(again.detail).toContain("second call returned 'planned'");
+    expect(again.detail).toContain('model ran 2 times');
   });
 });

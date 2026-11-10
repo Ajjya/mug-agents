@@ -90,8 +90,10 @@ Consequences of prompt-only, as the spec prescribes:
   `AppLogger`, never the prompt or output (tested).
 - **Data minimisation:** `docs/data-handling.md`.
 - **Evals** use in-memory repositories (same contract as Mongo) so they never touch a database. The
-  "re-run creates no extra tasks" assertion re-persists the same draft, because a real model's
-  second answer legitimately differs.
+  idempotency is checked twice: `persist-is-idempotent-for-the-same-draft` re-persists the same draft
+  (a real model's second answer legitimately differs), and
+  `ensure-planned-is-idempotent-for-the-same-brief` calls `ensurePlanned` twice and requires
+  `already_planned` with no model call on the second.
 - **Default ladder** changed from the spec's example order to `gemma4:31b, gpt-oss:20b,
 mistral-large-4` on the strength of the eval below.
 
