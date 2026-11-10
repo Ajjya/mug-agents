@@ -1,6 +1,7 @@
 import type { z } from 'zod';
 import {
   type EntityId,
+  entityId,
   fromStorage,
   isEntityId,
   isoDate,
@@ -274,5 +275,9 @@ export class InMemoryTasksRepository
   async findDueBefore(iso: string, options?: FindManyOptions): Promise<Page<Task>> {
     const limit = toStorage(isoDate, iso).getTime();
     return this.where((d) => d.dueAt !== undefined && new Date(d.dueAt).getTime() < limit, options);
+  }
+  async findByEventId(eventId: EntityId, options?: FindManyOptions): Promise<Page<Task>> {
+    toStorage(entityId, eventId); // same validation as the Mongo repository (throws ZodError)
+    return this.where((d) => d.relatedEventId === eventId.toLowerCase(), options);
   }
 }

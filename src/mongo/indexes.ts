@@ -18,7 +18,10 @@ export const INDEXES: Record<CollectionName, IndexDescription[]> = {
   ],
   speakers: [{ key: { email: 1 }, name: 'speakers_email_unique', unique: true, sparse: true }],
   organisations: [{ key: { kind: 1 }, name: 'organisations_kind' }],
-  tasks: [{ key: { status: 1, dueAt: 1 }, name: 'tasks_status_dueAt' }],
+  tasks: [
+    { key: { status: 1, dueAt: 1 }, name: 'tasks_status_dueAt' },
+    { key: { relatedEventId: 1 }, name: 'tasks_relatedEventId' },
+  ],
 };
 
 const NAMESPACE_NOT_FOUND = 26;

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { InvalidIdError, type EntityId } from '../../src/domain/common.js';
+import { InvalidIdError, newEntityId, type EntityId } from '../../src/domain/common.js';
 import type { Event, EventInput, EventPatch } from '../../src/domain/event.schema.js';
 import type {
   Organisation,
@@ -437,6 +437,20 @@ export function tasksContract(create: Factory<TasksRepository>): void {
         const r = await repo.findDueBefore('2026-02-01T00:00:00Z');
         expect(r.items.map((t) => t.title)).toEqual(['early', 'done-early']);
         await expect(repo.findDueBefore('soon')).rejects.toBeInstanceOf(z.ZodError);
+      });
+
+      it('findByEventId: only tasks linked to that event, with milestoneKey round-tripped', async () => {
+        const a = newEntityId();
+        const b = newEntityId();
+        await repo.insert(taskInput({ title: 'a1', relatedEventId: a, milestoneKey: 'T-4w' }));
+        await repo.insert(taskInput({ title: 'b1', relatedEventId: b }));
+        await repo.insert(taskInput({ title: 'a2', relatedEventId: a, status: 'done' }));
+        await repo.insert(taskInput({ title: 'none' }));
+        const r = await repo.findByEventId(a);
+        expect(r.items.map((t) => t.title)).toEqual(['a1', 'a2']);
+        expect(r.items[0]?.milestoneKey).toBe('T-4w');
+        expect((await repo.findByEventId(newEntityId())).items).toEqual([]);
+        await expect(repo.findByEventId('not-an-id')).rejects.toBeInstanceOf(z.ZodError);
       });
     });
   });

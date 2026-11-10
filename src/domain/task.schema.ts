@@ -13,6 +13,8 @@ export const TaskInputSchema = z
     source: z.enum(TASK_SOURCES),
     relatedEventId: entityId.optional(),
     relatedSpeakerId: entityId.optional(),
+    /** Which planner milestone (e.g. 'T-4w') the task belongs to. Part of the idempotency key. */
+    milestoneKey: nonEmpty.optional(),
   })
   .strict();
 

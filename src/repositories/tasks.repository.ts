@@ -1,6 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import type { Db } from 'mongodb';
-import { isoDate, toStorage } from '../domain/common.js';
+import { type EntityId, entityId, isoDate, toStorage } from '../domain/common.js';
 import {
   TaskInputSchema,
   TaskPatchSchema,
@@ -26,6 +26,8 @@ export interface TasksRepository extends Repository<TaskInput, Task, TaskPatch> 
   findByStatus(status: TaskStatus, options?: FindManyOptions): Promise<Page<Task>>;
   /** Tasks of any status with `dueAt < iso`. Tasks without a `dueAt` never match. */
   findDueBefore(iso: string, options?: FindManyOptions): Promise<Page<Task>>;
+  /** Tasks linked to an event (`relatedEventId`), any status. */
+  findByEventId(eventId: EntityId, options?: FindManyOptions): Promise<Page<Task>>;
 }
 
 @Injectable()
@@ -47,5 +49,9 @@ export class MongoTasksRepository
 
   async findDueBefore(iso: string, options?: FindManyOptions): Promise<Page<Task>> {
     return await this.findWhere({ dueAt: { $lt: toStorage(isoDate, iso) } }, options);
+  }
+
+  async findByEventId(eventId: EntityId, options?: FindManyOptions): Promise<Page<Task>> {
+    return await this.findWhere({ relatedEventId: toStorage(entityId, eventId) }, options);
   }
 }
