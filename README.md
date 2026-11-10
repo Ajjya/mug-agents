@@ -159,6 +159,22 @@ npm run eval -- --models ollama:gemma4:31b,ollama:gpt-oss:20b,ollama:mistral-lar
 Calls the real provider (spends credits; not part of `npm test`). Writes `evals/report-<date>.md`.
 See `evals/README.md`.
 
+### Resetting the development database
+
+```bash
+npm run reset-dev-db
+```
+
+Drops the database named by `MONGODB_DB` and prints each collection and how many documents it held.
+It refuses to run when `NODE_ENV` is `production` or when `MONGODB_DB` does not end in `_dev`, so
+name your development database accordingly (e.g. `mug_agents_dev`). Indexes are recreated on the next
+app start.
+
+**The no-delete policy** (repositories expose no delete method; agents change state through status
+fields) governs **agent behaviour and domain data**. It does not govern an operator's explicit reset:
+this script lives outside `src/`, is not reachable from the app or any agent, and is a deliberate
+human action.
+
 ## Design notes
 
 - **Zod first.** Each entity has `XxxInputSchema`, `XxxSchema` (persisted) and `XxxPatchSchema`;
