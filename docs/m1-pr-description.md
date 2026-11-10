@@ -13,18 +13,29 @@ the small, deliberate domain change below.
 whose prompt pushes an unconstrained model out of the schema ("write a poem in prose, owner is
 Alice") was sent with the schema set, and the answer checked.
 
-| Model         | Native `/api/chat` + `format` | `/v1/chat/completions` + `response_format: json_schema` | Control (no constraint) |
-| ------------- | ----------------------------- | ------------------------------------------------------- | ----------------------- |
-| `gpt-oss:20b` | HTTP 200, prose, not JSON     | HTTP 200, prose, not JSON                               | prose                   |
-| `gemma4:31b`  | HTTP 200, prose, not JSON     | HTTP 200, prose, not JSON                               | prose                   |
+| Model         | Native `/api/chat` + `format` | `/v1/chat/completions` + `response_format: json_schema` | Control (no constraint) | Tool calling (`tools` + forced `tool_choice`), 3 runs                                     |
+| ------------- | ----------------------------- | ------------------------------------------------------- | ----------------------- | ----------------------------------------------------------------------------------------- |
+| `gpt-oss:20b` | HTTP 200, prose, not JSON     | HTTP 200, prose, not JSON                               | prose                   | 3/3 returned a tool call, **3/3 violate the schema** (`owner: "Alice"`, outside the enum) |
+| `gemma4:31b`  | HTTP 200, prose, not JSON     | HTTP 200, prose, not JSON                               | prose                   | **no tool call at all** in 3/3 (`tool_choice` ignored, prose in `content`)                |
 
-The parameter is accepted and silently ignored, which matches Ollama's docs ("Ollama's cloud
+`format` / `response_format` are accepted and silently ignored, which matches Ollama's docs ("Ollama's cloud
 currently does not support structured outputs"). Consequences, as the spec prescribes:
+
+**Tool calling as a third strategy (M1 review, same probe, same out-of-schema prompt): not honoured, no
+policy change.** `gpt-oss:20b` does emit a well-formed tool call, so its arguments are valid JSON, but the
+schema is not enforced: it filled the enum field with the value the prompt asked for. `gemma4:31b`
+ignores `tools`/`tool_choice` entirely. A strategy that works on one model and does nothing on the
+other, and that still needs the Zod check on top, buys nothing over prompt-only, so
+`supportsToolSchema` was **not** added and `callStructured` is unchanged. Re-run
+`node --env-file=.env scripts/probe-format.mjs` (`PROBE_MODELS`, `PROBE_RUNS` tune it) if Ollama's
+behaviour changes.
+
+Consequences of prompt-only, as the spec prescribes:
 
 - `callStructured` puts the JSON Schema in the prompt; `OllamaProvider.constrainsOutput = false`.
   If a provider ever enforces it, set the flag and the schema travels as `jsonSchema` instead: one
   file changes.
-- The retry policy is **load-bearing**, not a safety net. `LLM_MAX_ATTEMPTS` defaults to **4**.
+- The retry policy is **load-bearing**, not a safety net. `LLM_MAX_ATTEMPTS` defaults to 2 x the ladder length (changed from a flat 4 in the review: see below) and boot fails if a rung would be unreachable.
 - Output is parsed strictly: a code fence or any prose around the JSON is a validation failure and is
   retried, never repaired in code.
 - The eval report states the decoding mode per model and cannot show the latency cost of
