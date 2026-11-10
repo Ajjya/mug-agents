@@ -29,7 +29,7 @@ describe('OllamaProvider', () => {
     const [url, init] = f.mock.calls[0] ?? [];
     expect(url).toBe('https://ollama.test/v1/chat/completions');
     expect((init?.headers as Record<string, string>)['Authorization']).toBe(`Bearer ${SECRET}`);
-    const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    const body = JSON.parse(init?.body as string) as Record<string, unknown>;
     expect(body).toMatchObject({ model: 'gpt-oss:20b', temperature: 0 });
     expect(body).not.toHaveProperty('response_format');
     expect(body).not.toHaveProperty('format');

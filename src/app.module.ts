@@ -1,9 +1,11 @@
 import { type DynamicModule, Module } from '@nestjs/common';
+import { PlannerModule } from './agents/planner/planner.module.js';
 import { ConfigModule } from './config/config.module.js';
 import type { AppConfig } from './config/env.schema.js';
 import { HealthModule } from './health/health.module.js';
 import type { AppLogger } from './logging/logger.module.js';
 import { LoggerModule } from './logging/logger.module.js';
+import { LlmModule } from './llm/llm.module.js';
 import { MongoModule } from './mongo/mongo.module.js';
 import { RepositoriesModule } from './repositories/repositories.module.js';
 
@@ -16,8 +18,10 @@ export class AppModule {
       imports: [
         ConfigModule.forValue(config),
         LoggerModule.forValue(logger),
+        LlmModule.register(),
         MongoModule,
         RepositoriesModule,
+        PlannerModule,
         HealthModule,
       ],
     };
