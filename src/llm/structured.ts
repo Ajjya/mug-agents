@@ -150,6 +150,8 @@ export async function callStructured<T>(
     }
     rung = next;
     failuresOnRung = 0;
+    // A model must not be asked to fix another model's answer: the new rung starts clean.
+    lastIssues = [];
     return true;
   };
 

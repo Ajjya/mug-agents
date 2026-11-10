@@ -143,6 +143,29 @@ describe('callStructured', () => {
     expect(silentLogger.logs.filter((l) => l.message === 'llm rung change')).toHaveLength(2);
   });
 
+  it("a new rung starts with a clean prompt: no other model's issues are carried over", async () => {
+    const { provider, run } = setup([BAD_ENUM, BAD_ENUM, VALID]);
+    await run();
+    expect(provider.requests.map((q) => q.model)).toEqual(['small', 'small', 'medium']);
+    expect(provider.requests[1]?.prompt).toContain('rejected by validation'); // same rung: correction
+    expect(provider.requests[2]?.prompt).not.toContain('rejected by validation'); // new rung: clean
+    expect(provider.requests[2]?.prompt).not.toContain('owner:');
+    expect(provider.requests[2]?.prompt).toBe(provider.requests[0]?.prompt);
+  });
+
+  it('after climbing, the new rung still gets its own correction retry', async () => {
+    const { provider, run } = setup([BAD_ENUM, BAD_ENUM, BAD_ENUM, VALID]);
+    await run();
+    expect(provider.requests.map((q) => q.model)).toEqual(['small', 'small', 'medium', 'medium']);
+    expect(provider.requests[3]?.prompt).toContain('rejected by validation');
+  });
+
+  it('keeps the last issues for the error when the ladder is exhausted', async () => {
+    const { run } = setup([BAD_ENUM, BAD_ENUM], { ladder: [ladder[0] as ModelRef] });
+    const e = (await run().catch((x: unknown) => x)) as StructuredOutputError;
+    expect(e.issues.length).toBeGreaterThan(0);
+  });
+
   it('stops at LLM_MAX_ATTEMPTS even if rungs remain', async () => {
     const { provider, run } = setup([BAD_ENUM, BAD_ENUM, BAD_ENUM, BAD_ENUM], { maxAttempts: 4 });
     const e = (await run().catch((x: unknown) => x)) as StructuredOutputError;
