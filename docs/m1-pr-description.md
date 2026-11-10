@@ -143,8 +143,34 @@ the timeline node: neither showed a quality gap in the deterministic checks.
 **Honest limits.** One run, ten cases, one sample per cell: differences of one case are noise. The
 assertions check structure and logic, not usefulness of the tasks; a human should read a few plans
 before trusting the ladder. Latencies were measured while 3 requests were in flight against a shared
-provider and will move. `LLM_MAX_ATTEMPTS=4` means the third rung is unreachable by default (2 + 2);
-set 6 to use it.
+provider and will move. The original `LLM_MAX_ATTEMPTS=4` made the third rung unreachable; fixed in review item 1.
+
+## M1 review follow-ups (one commit each)
+
+1. **Attempt budget vs ladder.** `LLM_MAX_ATTEMPTS` now defaults to `ATTEMPTS_PER_RUNG` x ladder
+   length (6 for three rungs) and config load fails, naming every unreachable rung, if the budget
+   cannot reach them all (3 rungs with 4 attempts is refused at boot). `ATTEMPTS_PER_RUNG = 2` is
+   one named constant used by both the config check and `callStructured`. This supersedes the earlier
+   "default 4, set 6 for the third rung" caveat.
+2. **Tool calling probed as a third strategy: not honoured, no policy change** (table above):
+   `gpt-oss:20b` returns a tool call but violates the enum; `gemma4:31b` ignores `tools`.
+   `supportsToolSchema` was not added.
+3. **Eval idempotency.** `rerun-creates-no-additional-tasks` is now
+   `persist-is-idempotent-for-the-same-draft`; a separate
+   `ensure-planned-is-idempotent-for-the-same-brief` calls `ensurePlanned` twice and requires
+   `already_planned` and no model call on the second (the model is replaced by a replay of the draft,
+   so no extra credits). The pass/fail logic is in pure functions that are tested to fail.
+4. **`npm run reset-dev-db`** (`scripts/reset-dev-db.ts`): drops the configured database, refuses when
+   `NODE_ENV` is `production` or `MONGODB_DB` does not end in `_dev`, prints what it dropped. It lives
+   outside `src/`. README states that the no-delete policy governs agent behaviour and domain data,
+   not an operator's explicit reset. **Consequence:** the current dev database `mug_agents` is
+   refused; rename it (e.g. `MONGODB_DB=mug_agents_dev`; `.env.example` now says so).
+5. **Climbing a rung clears `lastIssues`**, so a model is never asked to fix another model's answer.
+   The test fails if the reset is removed (checked by mutation).
+6. **No-delete matcher narrowed**: `bulkWrite` is allowed as such; the test now catches driver delete
+   calls (`.deleteOne(`, `.dropDatabase(`, ...), delete operations smuggled through `bulkWrite`
+   (`{ deleteMany: ... }`) and exported helpers named delete/remove/drop. A domain method such as
+   `deleteDraftFlag()` does not trip it. The matcher has its own positive and negative tests.
 
 ## Not done / follow-ups
 
