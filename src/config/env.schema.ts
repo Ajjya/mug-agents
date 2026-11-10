@@ -28,7 +28,7 @@ export function parseModelRef(raw: string): ModelRef | string {
   return { provider: provider as LlmProviderName, model };
 }
 
-export const DEFAULT_MODEL_LADDER = 'ollama:gpt-oss:20b,ollama:gemma4:31b,ollama:mistral-large-4';
+export const DEFAULT_MODEL_LADDER = 'ollama:gemma4:31b,ollama:gpt-oss:20b,ollama:mistral-large-4';
 
 /** Ordered, comma-separated model refs. Rungs must differ; one rung means "no escalation". */
 export const modelLadderSchema = z

@@ -1,4 +1,5 @@
 import 'reflect-metadata';
+import { Logger } from '@nestjs/common';
 import { existsSync } from 'node:fs';
 import { readFile, readdir, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
@@ -179,6 +180,7 @@ async function main(): Promise<number> {
   }
 
   const logger = new AppLogger(config);
+  Logger.overrideLogger(logger); // repository/service logs respect LOG_LEVEL instead of Nest's default
   const providers = buildProviders(config); // one shared semaphore for every case x model
   const cases = await loadCases();
   const now = new Date();

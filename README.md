@@ -1,8 +1,9 @@
 # mug-agents
 
-Multi-agent system for MongoDB User Group Lisbon. This is **M0**: a NestJS service with typed
-domain models, MongoDB persistence, validated config, health checks and tests. No LLM, graph or
-external integrations yet (see `specs/M0-skeleton.md`).
+Multi-agent system for MongoDB User Group Lisbon. **M0** is the NestJS service with typed domain
+models, MongoDB persistence, validated config, health checks and tests (`specs/M0-skeleton.md`).
+**M1** adds the first model call: an event planner graph (see [Event planner](#event-planner-m1)).
+No external integrations yet.
 
 ## Requirements
 
@@ -25,13 +26,20 @@ Or `npm run build && npm start`.
 Validated with Zod at boot (`src/config/env.schema.ts`). Invalid or missing values exit non-zero
 with a list of every problem.
 
-| Variable      | Required | Default       | Notes                                                                    |
-| ------------- | -------- | ------------- | ------------------------------------------------------------------------ |
-| `MONGODB_URI` | yes      | –             | `mongodb://…` or `mongodb+srv://…`                                       |
-| `MONGODB_DB`  | yes      | –             | Database name                                                            |
-| `NODE_ENV`    | no       | `development` | `development` \| `test` \| `production`                                  |
-| `PORT`        | no       | `3000`        |                                                                          |
-| `LOG_LEVEL`   | no       | `info`        | `silent` \| `fatal` \| `error` \| `warn` \| `info` \| `debug` \| `trace` |
+| Variable                 | Required            | Default                                                       | Notes                                                                    |
+| ------------------------ | ------------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| `MONGODB_URI`            | yes                 | –                                                             | `mongodb://…` or `mongodb+srv://…`                                       |
+| `MONGODB_DB`             | yes                 | –                                                             | Database name                                                            |
+| `NODE_ENV`               | no                  | `development`                                                 | `development` \| `test` \| `production`                                  |
+| `PORT`                   | no                  | `3000`                                                        |                                                                          |
+| `LOG_LEVEL`              | no                  | `info`                                                        | `silent` \| `fatal` \| `error` \| `warn` \| `info` \| `debug` \| `trace` |
+| `OLLAMA_BASE_URL`        | no                  | `https://ollama.com/v1`                                       | OpenAI-compatible endpoint                                               |
+| `OLLAMA_API_KEY`         | at first model call | –                                                             | **Secret.** Not required at boot or for `npm test`                       |
+| `OLLAMA_MAX_CONCURRENCY` | no                  | `3`                                                           | Provider limit, not a tuning knob                                        |
+| `LLM_MODEL_LADDER`       | no                  | `ollama:gemma4:31b,ollama:gpt-oss:20b,ollama:mistral-large-4` | Ordered rungs; unknown provider or duplicates rejected                   |
+| `LLM_PRICES`             | no                  | `{}`                                                          | JSON map model ref → `{inputPerMTok, outputPerMTok}`                     |
+| `LLM_TIMEOUT_MS`         | no                  | `60000`                                                       | Per provider call                                                        |
+| `LLM_MAX_ATTEMPTS`       | no                  | `4`                                                           | Total provider calls per structured call (prompt-only mode)              |
 
 `process.env` is read only in `src/config/config.module.ts`.
 
@@ -68,6 +76,87 @@ both places together.
   downloads on demand, the test hook timeout allows for it).
 - Offline/air-gapped runners: set `MONGOMS_DISABLE_POSTINSTALL=1` and point
   `MONGOMS_SYSTEM_BINARY=/path/to/mongod` at a preinstalled binary of the same major.
+
+## Event planner (M1)
+
+Given an event brief, the planner produces a validated timeline and checklist, persists them as
+`Task` documents linked to an `Event`, and can be measured across models.
+
+```
+normaliseBrief (code) -> generateTimeline (model) -> generateChecklist (model)   [LangGraph StateGraph]
+```
+
+The model never computes dates and never invents ids: milestone dates come from the event date in
+code (`src/agents/planner/timeline.ts`), and every task's `dueAt` is its milestone's date. LLM output
+is validated by strict Zod schemas (`llm-schemas.ts`) that have no id, version or date fields.
+
+### Ollama Cloud setup
+
+There is no local model: one provider, Ollama Cloud (`https://ollama.com/v1`, OpenAI-compatible).
+
+1. Create an API key at <https://ollama.com/settings/keys> (needs an Ollama account/plan).
+2. Put it in `.env` (never commit it): `OLLAMA_API_KEY=...`. It is only required when a model call
+   is attempted, so `npm test` and the unit suite need no key and no network.
+3. List what your account can use: `curl -s https://ollama.com/api/tags -H "Authorization: Bearer $OLLAMA_API_KEY"`.
+   Use the names it returns (e.g. `gemma4:31b`), not the `:cloud` suffix used by the local daemon.
+
+### The model ladder
+
+`LLM_MODEL_LADDER` is an ordered, comma-separated list of `provider:model` refs, cheapest first:
+
+```
+LLM_MODEL_LADDER=ollama:gemma4:31b,ollama:gpt-oss:20b,ollama:mistral-large-4
+```
+
+The default order comes from the first eval (`evals/report-2026-11-10.md`): `gemma4:31b` was the
+fastest and most reliable, `gpt-oss:20b` is a cheap second opinion from a different model family,
+and `mistral-large-4` is a last resort (slow: some calls hit the 60 s timeout).
+
+On a validation failure the planner retries the same model once with the issues appended, then
+moves to the next rung. `LLM_MAX_ATTEMPTS` (default 4) is the total number of provider calls, so with
+the default only the first two rungs can be reached (2 + 2); raise it to 6 to allow all three. A ladder of
+one means no escalation. The provider is an abstraction (`src/llm/model.types.ts`); only `ollama` is
+configured, so adding a vendor is a new provider class plus an env-var change.
+
+**Accepted consequence of a single provider:** all rungs share one failure domain. Climbing helps when
+the _model_ is the problem (it cannot hold the schema), not when the _provider_ is. On an outage, an
+auth failure or a queue that stays full, the run aborts with `ProviderUnavailableError`, writes
+nothing and never touches the next rung; it is reported separately from `StructuredOutputError`
+(validation failure) in logs and in the eval report.
+
+`OLLAMA_MAX_CONCURRENCY` (default 3) is the provider's limit, enforced by one process-wide semaphore.
+`LLM_PRICES` is a JSON map of model ref to `{inputPerMTok, outputPerMTok}` used only for cost
+accounting; prices are never hard-coded.
+
+> Ollama Cloud currently **ignores** schema-constrained decoding (`format` / `response_format`): the
+> schema goes into the prompt and the retry policy is load-bearing. See `docs/m1-pr-description.md`
+> for the probe, and `scripts/probe-format.mjs` to re-test it.
+
+### Run the planner
+
+```bash
+LOG_LEVEL=warn npm run plan -- --brief examples/brief.json
+```
+
+Edit the `date` in `examples/brief.json` if it has passed (a past date is rejected before any model
+call). It prints the timeline and checklist and writes the Event and Tasks to MongoDB
+(`MONGODB_URI`). Running it again on the same brief says "already planned" and does not call the
+model or write anything (a model rarely repeats its wording exactly, so a title-only check would add a
+second copy of the checklist). `--replan` generates again and adds only task titles that do not
+exist yet; nothing is ever deleted.
+
+Idempotency key for tasks: `(relatedEventId, milestoneKey, normalised title)` (case and whitespace
+ignored), checked before insert. The event is matched by `brief.eventId` if given, otherwise by
+same day + same theme.
+
+### Run the evals
+
+```bash
+npm run eval -- --models ollama:gemma4:31b,ollama:gpt-oss:20b,ollama:mistral-large-4
+```
+
+Calls the real provider (spends credits; not part of `npm test`). Writes `evals/report-<date>.md`.
+See `evals/README.md`.
 
 ## Design notes
 

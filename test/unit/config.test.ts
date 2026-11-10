@@ -39,8 +39,8 @@ describe('parseEnv', () => {
       expect(c.LLM_MAX_ATTEMPTS).toBe(4);
       expect(c.LLM_PRICES).toEqual({});
       expect(c.LLM_MODEL_LADDER.map((r) => r.model)).toEqual([
-        'gpt-oss:20b',
         'gemma4:31b',
+        'gpt-oss:20b',
         'mistral-large-4',
       ]);
     });
