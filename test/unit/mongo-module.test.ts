@@ -3,19 +3,19 @@ import { Test } from '@nestjs/testing';
 import type { Db } from 'mongodb';
 import { describe, expect, it } from 'vitest';
 import { ConfigModule } from '../../src/config/config.module.js';
+import { parseEnv } from '../../src/config/env.schema.js';
 import { MONGO_DB } from '../../src/mongo/tokens.js';
 import { MongoModule } from '../../src/mongo/mongo.module.js';
 import { HealthModule } from '../../src/health/health.module.js';
 import { EVENTS_REPOSITORY } from '../../src/repositories/events.repository.js';
 import { RepositoriesModule } from '../../src/repositories/repositories.module.js';
 
-const cfg = {
-  NODE_ENV: 'test' as const,
-  PORT: 1,
+const cfg = parseEnv({
+  NODE_ENV: 'test',
   MONGODB_URI: 'mongodb://127.0.0.1:1', // never connected: these tests only compile the DI graph
   MONGODB_DB: 'x',
-  LOG_LEVEL: 'silent' as const,
-};
+  LOG_LEVEL: 'silent',
+});
 
 @Module({
   providers: [{ provide: 'NEEDS_DB', inject: [MONGO_DB], useFactory: (db: Db) => db }],

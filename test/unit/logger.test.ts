@@ -1,16 +1,13 @@
+import { parseEnv } from '../../src/config/env.schema.js';
 import { Writable } from 'node:stream';
 import { describe, expect, it } from 'vitest';
 import { AppLogger } from '../../src/logging/logger.module.js';
 
 function capture() {
   const lines: Record<string, unknown>[] = [];
-  const logger = new AppLogger({
-    NODE_ENV: 'test',
-    PORT: 1,
-    MONGODB_URI: 'mongodb://x',
-    MONGODB_DB: 'x',
-    LOG_LEVEL: 'debug',
-  });
+  const logger = new AppLogger(
+    parseEnv({ NODE_ENV: 'test', MONGODB_URI: 'mongodb://x', MONGODB_DB: 'x', LOG_LEVEL: 'debug' }),
+  );
   // Swap the pino destination for an in-memory stream.
   const sink = new Writable({
     write(chunk: Buffer, _enc, cb) {

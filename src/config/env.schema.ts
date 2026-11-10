@@ -3,6 +3,89 @@ import { z } from 'zod';
 export const NODE_ENVS = ['development', 'test', 'production'] as const;
 export const LOG_LEVELS = ['silent', 'fatal', 'error', 'warn', 'info', 'debug', 'trace'] as const;
 
+/** Providers the registry knows how to build. Adding a vendor = add it here + implement it. */
+export const LLM_PROVIDERS = ['ollama'] as const;
+export type LlmProviderName = (typeof LLM_PROVIDERS)[number];
+
+export interface ModelRef {
+  provider: LlmProviderName;
+  model: string;
+}
+
+/** `ollama:gpt-oss:20b` -> { provider: 'ollama', model: 'gpt-oss:20b' } (split on the FIRST colon). */
+export function formatModelRef(ref: ModelRef): string {
+  return `${ref.provider}:${ref.model}`;
+}
+
+export function parseModelRef(raw: string): ModelRef | string {
+  const idx = raw.indexOf(':');
+  const provider = idx === -1 ? raw : raw.slice(0, idx);
+  const model = idx === -1 ? '' : raw.slice(idx + 1);
+  if (!(LLM_PROVIDERS as readonly string[]).includes(provider)) {
+    return `unknown provider "${provider}" in "${raw}" (known: ${LLM_PROVIDERS.join(', ')})`;
+  }
+  if (model.trim() === '') return `missing model name in "${raw}"`;
+  return { provider: provider as LlmProviderName, model };
+}
+
+export const DEFAULT_MODEL_LADDER = 'ollama:gpt-oss:20b,ollama:gemma4:31b,ollama:mistral-large-4';
+
+/** Ordered, comma-separated model refs. Rungs must differ; one rung means "no escalation". */
+export const modelLadderSchema = z
+  .string()
+  .default(DEFAULT_MODEL_LADDER)
+  .transform((value, ctx) => {
+    const refs: ModelRef[] = [];
+    for (const part of value.split(',').map((p) => p.trim())) {
+      if (part === '') continue;
+      const parsed = parseModelRef(part);
+      if (typeof parsed === 'string') {
+        ctx.addIssue({ code: 'custom', message: parsed });
+        return z.NEVER;
+      }
+      refs.push(parsed);
+    }
+    if (refs.length === 0) {
+      ctx.addIssue({ code: 'custom', message: 'must contain at least one model ref' });
+      return z.NEVER;
+    }
+    const names = refs.map(formatModelRef);
+    const dup = names.find((n, i) => names.indexOf(n) !== i);
+    if (dup !== undefined) {
+      ctx.addIssue({ code: 'custom', message: `duplicate rung "${dup}": rungs must differ` });
+      return z.NEVER;
+    }
+    return refs;
+  });
+
+export const PriceSchema = z
+  .object({ inputPerMTok: z.number().nonnegative(), outputPerMTok: z.number().nonnegative() })
+  .strict();
+export type Price = z.infer<typeof PriceSchema>;
+
+/** JSON map of model ref -> price per 1M tokens. Never hard-coded: prices change. */
+export const pricesSchema = z
+  .string()
+  .default('{}')
+  .transform((value, ctx) => {
+    let json: unknown;
+    try {
+      json = JSON.parse(value);
+    } catch {
+      ctx.addIssue({ code: 'custom', message: 'must be valid JSON' });
+      return z.NEVER;
+    }
+    const parsed = z.record(z.string(), PriceSchema).safeParse(json);
+    if (!parsed.success) {
+      ctx.addIssue({
+        code: 'custom',
+        message: `must map model ref to { inputPerMTok, outputPerMTok }: ${parsed.error.issues[0]?.message ?? 'invalid'}`,
+      });
+      return z.NEVER;
+    }
+    return parsed.data;
+  });
+
 export const envSchema = z.object({
   NODE_ENV: z.enum(NODE_ENVS).default('development'),
   PORT: z.coerce.number().int().min(1).max(65535).default(3000),
@@ -14,6 +97,17 @@ export const envSchema = z.object({
     }),
   MONGODB_DB: z.string().min(1),
   LOG_LEVEL: z.enum(LOG_LEVELS).default('info'),
+
+  OLLAMA_BASE_URL: z.url().default('https://ollama.com/v1'),
+  /** Secret. Optional at boot (tests run without it); checked when a model call is attempted. */
+  OLLAMA_API_KEY: z.string().min(1).optional(),
+  /** A provider limit, not a tuning knob. */
+  OLLAMA_MAX_CONCURRENCY: z.coerce.number().int().min(1).default(3),
+  LLM_MODEL_LADDER: modelLadderSchema,
+  LLM_PRICES: pricesSchema,
+  LLM_TIMEOUT_MS: z.coerce.number().int().min(1).default(60_000),
+  /** Total provider calls per structured call. Prompt-only mode (no constrained decoding): 4. */
+  LLM_MAX_ATTEMPTS: z.coerce.number().int().min(1).default(4),
 });
 
 export type AppConfig = z.infer<typeof envSchema>;

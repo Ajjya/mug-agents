@@ -8,7 +8,7 @@ import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AppModule } from '../../src/app.module.js';
 import { APP_CONFIG, ConfigModule } from '../../src/config/config.module.js';
-import type { AppConfig } from '../../src/config/env.schema.js';
+import { type AppConfig, parseEnv } from '../../src/config/env.schema.js';
 import { HealthModule } from '../../src/health/health.module.js';
 import { AppLogger, LoggerModule } from '../../src/logging/logger.module.js';
 import { INDEXES } from '../../src/mongo/indexes.js';
@@ -19,13 +19,14 @@ import { openTestMongo, type TestMongo } from '../support/mongo-test.js';
 
 const httpOf = (app: INestApplication) => app.getHttpServer() as Server;
 
-const config = (uri: string, db: string): AppConfig => ({
-  NODE_ENV: 'test',
-  PORT: 0,
-  MONGODB_URI: uri,
-  MONGODB_DB: db,
-  LOG_LEVEL: 'silent',
-});
+const config = (uri: string, db: string): AppConfig =>
+  parseEnv({
+    NODE_ENV: 'test',
+    PORT: '3000',
+    MONGODB_URI: uri,
+    MONGODB_DB: db,
+    LOG_LEVEL: 'silent',
+  });
 
 async function createApp(cfg: AppConfig): Promise<INestApplication> {
   const moduleRef = await Test.createTestingModule({
