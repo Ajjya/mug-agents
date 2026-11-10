@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { type ModelRef } from '../../src/config/env.schema.js';
+import { type ModelRef, minAttemptsToReachAllRungs } from '../../src/config/env.schema.js';
 import { ProviderUnavailableError, StructuredOutputError } from '../../src/llm/errors.js';
 import { ProviderError } from '../../src/llm/model.types.js';
 import { callStructured, type StructuredDeps } from '../../src/llm/structured.js';
@@ -150,6 +150,17 @@ describe('callStructured', () => {
     expect(e.reason).toBe('max_attempts');
     expect(provider.requests).toHaveLength(4);
     expect(provider.requests.map((q) => q.model)).toEqual(['small', 'small', 'medium', 'medium']);
+  });
+
+  it('with the minimum budget that config accepts, every rung is actually reached', async () => {
+    const budget = minAttemptsToReachAllRungs(ladder.length);
+    const { provider, run } = setup([BAD_ENUM, BAD_ENUM, BAD_ENUM, BAD_ENUM, BAD_ENUM, BAD_ENUM], {
+      maxAttempts: budget,
+    });
+    await expect(run()).rejects.toBeInstanceOf(StructuredOutputError);
+    expect(new Set(provider.requests.map((q) => q.model))).toEqual(
+      new Set(['small', 'medium', 'large']),
+    );
   });
 
   it('a ladder of one never escalates', async () => {

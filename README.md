@@ -26,20 +26,20 @@ Or `npm run build && npm start`.
 Validated with Zod at boot (`src/config/env.schema.ts`). Invalid or missing values exit non-zero
 with a list of every problem.
 
-| Variable                 | Required            | Default                                                       | Notes                                                                    |
-| ------------------------ | ------------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------ |
-| `MONGODB_URI`            | yes                 | –                                                             | `mongodb://…` or `mongodb+srv://…`                                       |
-| `MONGODB_DB`             | yes                 | –                                                             | Database name                                                            |
-| `NODE_ENV`               | no                  | `development`                                                 | `development` \| `test` \| `production`                                  |
-| `PORT`                   | no                  | `3000`                                                        |                                                                          |
-| `LOG_LEVEL`              | no                  | `info`                                                        | `silent` \| `fatal` \| `error` \| `warn` \| `info` \| `debug` \| `trace` |
-| `OLLAMA_BASE_URL`        | no                  | `https://ollama.com/v1`                                       | OpenAI-compatible endpoint                                               |
-| `OLLAMA_API_KEY`         | at first model call | –                                                             | **Secret.** Not required at boot or for `npm test`                       |
-| `OLLAMA_MAX_CONCURRENCY` | no                  | `3`                                                           | Provider limit, not a tuning knob                                        |
-| `LLM_MODEL_LADDER`       | no                  | `ollama:gemma4:31b,ollama:gpt-oss:20b,ollama:mistral-large-4` | Ordered rungs; unknown provider or duplicates rejected                   |
-| `LLM_PRICES`             | no                  | `{}`                                                          | JSON map model ref → `{inputPerMTok, outputPerMTok}`                     |
-| `LLM_TIMEOUT_MS`         | no                  | `60000`                                                       | Per provider call                                                        |
-| `LLM_MAX_ATTEMPTS`       | no                  | `4`                                                           | Total provider calls per structured call (prompt-only mode)              |
+| Variable                 | Required            | Default                                                       | Notes                                                                                                        |
+| ------------------------ | ------------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `MONGODB_URI`            | yes                 | –                                                             | `mongodb://…` or `mongodb+srv://…`                                                                           |
+| `MONGODB_DB`             | yes                 | –                                                             | Database name                                                                                                |
+| `NODE_ENV`               | no                  | `development`                                                 | `development` \| `test` \| `production`                                                                      |
+| `PORT`                   | no                  | `3000`                                                        |                                                                                                              |
+| `LOG_LEVEL`              | no                  | `info`                                                        | `silent` \| `fatal` \| `error` \| `warn` \| `info` \| `debug` \| `trace`                                     |
+| `OLLAMA_BASE_URL`        | no                  | `https://ollama.com/v1`                                       | OpenAI-compatible endpoint                                                                                   |
+| `OLLAMA_API_KEY`         | at first model call | –                                                             | **Secret.** Not required at boot or for `npm test`                                                           |
+| `OLLAMA_MAX_CONCURRENCY` | no                  | `3`                                                           | Provider limit, not a tuning knob                                                                            |
+| `LLM_MODEL_LADDER`       | no                  | `ollama:gemma4:31b,ollama:gpt-oss:20b,ollama:mistral-large-4` | Ordered rungs; unknown provider or duplicates rejected                                                       |
+| `LLM_PRICES`             | no                  | `{}`                                                          | JSON map model ref → `{inputPerMTok, outputPerMTok}`                                                         |
+| `LLM_TIMEOUT_MS`         | no                  | `60000`                                                       | Per provider call                                                                                            |
+| `LLM_MAX_ATTEMPTS`       | no                  | 2 × ladder length                                             | Total provider calls per structured call; must let every rung be reached (3 rungs need ≥ 5), else boot fails |
 
 `process.env` is read only in `src/config/config.module.ts`.
 
@@ -113,9 +113,10 @@ fastest and most reliable, `gpt-oss:20b` is a cheap second opinion from a differ
 and `mistral-large-4` is a last resort (slow: some calls hit the 60 s timeout).
 
 On a validation failure the planner retries the same model once with the issues appended, then
-moves to the next rung. `LLM_MAX_ATTEMPTS` (default 4) is the total number of provider calls, so with
-the default only the first two rungs can be reached (2 + 2); raise it to 6 to allow all three. A ladder of
-one means no escalation. The provider is an abstraction (`src/llm/model.types.ts`); only `ollama` is
+moves to the next rung (`ATTEMPTS_PER_RUNG` = 2 calls per rung). `LLM_MAX_ATTEMPTS` is the total
+number of provider calls; it defaults to 2 × the ladder length, and boot **fails** if it is too small for
+every rung to be reachable (3 rungs need at least 5), naming the unreachable rungs. A ladder of one
+means no escalation. The provider is an abstraction (`src/llm/model.types.ts`); only `ollama` is
 configured, so adding a vendor is a new provider class plus an env-var change.
 
 **Accepted consequence of a single provider:** all rungs share one failure domain. Climbing helps when

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { type ModelRef, formatModelRef } from '../config/env.schema.js';
+import { ATTEMPTS_PER_RUNG, type ModelRef, formatModelRef } from '../config/env.schema.js';
 import { ProviderUnavailableError, StructuredOutputError } from './errors.js';
 import {
   type AttemptOutcome,
@@ -104,7 +104,8 @@ const realSleep = (ms: number): Promise<void> => new Promise((resolve) => setTim
 
 /**
  * Walks the model ladder. Policy (spec section 6):
- *  - temperature 0; a validation failure retries the same rung once with the issues appended;
+ *  - temperature 0; a validation failure retries the same rung once (ATTEMPTS_PER_RUNG calls per rung in total)
+ *    with the issues appended;
  *  - a second failure moves to the next rung (reason logged); never repairs output in code;
  *  - timeouts / transport errors count as attempts and are handled like validation failures;
  *  - queue_full retries the same rung after a backoff and never climbs;
@@ -199,7 +200,7 @@ export async function callStructured<T>(
       lastKind = 'invalid';
       queueRejections = 0;
       failuresOnRung++;
-      if (failuresOnRung >= 2 && !climb('validation')) {
+      if (failuresOnRung >= ATTEMPTS_PER_RUNG && !climb('validation')) {
         throw new StructuredOutputError(options.node, calls, lastIssues, 'ladder_exhausted');
       }
     } catch (err) {
@@ -231,7 +232,7 @@ export async function callStructured<T>(
         continue;
       }
       failuresOnRung++;
-      if (failuresOnRung >= 2 && !climb(err.kind)) {
+      if (failuresOnRung >= ATTEMPTS_PER_RUNG && !climb(err.kind)) {
         throw new StructuredOutputError(options.node, calls, [err.message], 'ladder_exhausted');
       }
     }

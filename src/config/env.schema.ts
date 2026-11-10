@@ -86,7 +86,20 @@ export const pricesSchema = z
     return parsed.data;
   });
 
-export const envSchema = z.object({
+/**
+ * Provider calls one ladder rung gets before the ladder climbs: the first try plus one correction
+ * retry. The single source for both the config check below and callStructured's climbing rule.
+ */
+export const ATTEMPTS_PER_RUNG = 2;
+
+/** Attempts needed for the last rung to be reachable: every earlier rung is fully used first. */
+export const minAttemptsToReachAllRungs = (rungs: number): number =>
+  ATTEMPTS_PER_RUNG * (rungs - 1) + 1;
+
+/** Default budget: every rung gets its full share. */
+export const defaultMaxAttempts = (rungs: number): number => ATTEMPTS_PER_RUNG * rungs;
+
+const baseEnvSchema = z.object({
   NODE_ENV: z.enum(NODE_ENVS).default('development'),
   PORT: z.coerce.number().int().min(1).max(65535).default(3000),
   MONGODB_URI: z
@@ -106,8 +119,35 @@ export const envSchema = z.object({
   LLM_MODEL_LADDER: modelLadderSchema,
   LLM_PRICES: pricesSchema,
   LLM_TIMEOUT_MS: z.coerce.number().int().min(1).default(60_000),
-  /** Total provider calls per structured call. Prompt-only mode (no constrained decoding): 4. */
-  LLM_MAX_ATTEMPTS: z.coerce.number().int().min(1).default(4),
+  /**
+   * Total provider calls per structured call. Default: ATTEMPTS_PER_RUNG x ladder length. Must be
+   * large enough that every rung is reachable (checked below).
+   */
+  LLM_MAX_ATTEMPTS: z.coerce.number().int().min(1).optional(),
+});
+
+export const envSchema = baseEnvSchema.transform((env, ctx) => {
+  const ladder = env.LLM_MODEL_LADDER;
+  const maxAttempts = env.LLM_MAX_ATTEMPTS ?? defaultMaxAttempts(ladder.length);
+  // Rung i (0-based) is first used on attempt ATTEMPTS_PER_RUNG * i + 1.
+  const unreachable = ladder
+    .map((ref, i) => ({ ref, rung: i + 1, firstAttempt: ATTEMPTS_PER_RUNG * i + 1 }))
+    .filter((r) => r.firstAttempt > maxAttempts);
+  if (unreachable.length > 0) {
+    const names = unreachable
+      .map((r) => `rung ${String(r.rung)} (${formatModelRef(r.ref)})`)
+      .join(', ');
+    ctx.addIssue({
+      code: 'custom',
+      path: ['LLM_MAX_ATTEMPTS'],
+      message:
+        `${String(maxAttempts)} attempts can never reach ${names}: each rung gets ${String(ATTEMPTS_PER_RUNG)} attempts, ` +
+        `so ${String(ladder.length)} rungs need at least ${String(minAttemptsToReachAllRungs(ladder.length))}. ` +
+        `Raise LLM_MAX_ATTEMPTS (default ${String(defaultMaxAttempts(ladder.length))}) or shorten LLM_MODEL_LADDER`,
+    });
+    return z.NEVER;
+  }
+  return { ...env, LLM_MAX_ATTEMPTS: maxAttempts };
 });
 
 export type AppConfig = z.infer<typeof envSchema>;
