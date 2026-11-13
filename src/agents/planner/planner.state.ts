@@ -1,6 +1,8 @@
 import { registry } from '@langchain/langgraph/zod';
 import { z } from 'zod';
 import { ENTITY_ID_RE } from '../../domain/common.js';
+import type { DecisionValue } from '../../approvals/approval.schema.js';
+import type { PlanReviewPayload } from '../../approvals/plan-review.payload.js';
 import type { LlmCallRecord } from '../../llm/model.types.js';
 import { MILESTONE_KEYS } from './timeline.js';
 import { ChecklistOutputSchema, TimelineOutputSchema } from './llm-schemas.js';
@@ -49,8 +51,19 @@ export const PlannerStateSchema = z.object({
   /** Ladder index the model nodes start at (default 0). */
   startAt: z.number().int().min(0).optional(),
   milestones: z.array(MilestoneSchema).optional(),
-  timeline: TimelineOutputSchema.optional(),
-  checklist: ChecklistOutputSchema.optional(),
+  // nullable: a new run on a reused thread resets run-scoped fields to null (undefined means "no update").
+  timeline: TimelineOutputSchema.nullable().optional(),
+  checklist: ChecklistOutputSchema.nullable().optional(),
+  /** The event this run plans. Resolved by the service before the graph starts. */
+  eventId: z.string().optional(),
+  /** Identifies one planning run of a thread; makes the approval request idempotent across resumes. */
+  runId: z.string().optional(),
+  /** What the human was shown (the interrupt payload). */
+  payload: z.custom<PlanReviewPayload>().nullable().optional(),
+  /** What the human answered, as returned by interrupt(). */
+  decision: z.custom<DecisionValue>().nullable().optional(),
+  outcome: z.enum(['persisted', 'rejected']).nullable().optional(),
+  persisted: z.object({ created: z.number(), skipped: z.number() }).nullable().optional(),
   calls: z
     .custom<LlmCallRecord[]>()
     .default(() => [])

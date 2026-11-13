@@ -154,21 +154,23 @@ describe('idempotency assertions', () => {
 
   it('evaluateEnsurePlanned fails if the second call plans again or reaches the model', () => {
     const ok = {
-      firstStatus: 'planned',
+      firstStatus: 'awaiting_approval',
       secondStatus: 'already_planned',
-      modelRuns: 1,
+      modelCalls: 2,
+      expectedModelCalls: 2,
       totalAfterFirst: 5,
       totalAfterSecond: 5,
     } as const;
     expect(evaluateEnsurePlanned(ok).pass).toBe(true);
     const again = evaluateEnsurePlanned({
       ...ok,
-      secondStatus: 'planned',
-      modelRuns: 2,
+      secondStatus: 'awaiting_approval',
+      modelCalls: 4,
       totalAfterSecond: 9,
     });
     expect(again.pass).toBe(false);
-    expect(again.detail).toContain("second call returned 'planned'");
-    expect(again.detail).toContain('model ran 2 times');
+    expect(again.detail).toContain("second call returned 'awaiting_approval'");
+    expect(again.detail).toContain('model ran 4 times');
+    expect(evaluateEnsurePlanned({ ...ok, firstStatus: 'already_planned' }).pass).toBe(false);
   });
 });

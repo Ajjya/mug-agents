@@ -29,7 +29,7 @@ describe('autonomy policy table', () => {
   it('is exhaustive at compile time: the table keys are exactly the action union', () => {
     // These fail `npm run typecheck` if an action is added without a table entry, or the reverse.
     expectTypeOf<keyof typeof AUTONOMY_POLICY>().toEqualTypeOf<AutonomyAction>();
-    expectTypeOf(AUTONOMY_POLICY).toMatchTypeOf<Readonly<Record<AutonomyAction, AutonomyLevel>>>();
+    expectTypeOf(AUTONOMY_POLICY).toExtend<Readonly<Record<AutonomyAction, AutonomyLevel>>>();
     // @ts-expect-error a table missing an action does not type-check
     const incomplete: Record<AutonomyAction, AutonomyLevel> = { create_task: 'auto' };
     expect(incomplete).toBeDefined();

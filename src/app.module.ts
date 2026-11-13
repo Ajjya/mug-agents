@@ -1,5 +1,5 @@
 import { type DynamicModule, Module } from '@nestjs/common';
-import { PlannerModule } from './agents/planner/planner.module.js';
+import { ApprovalsModule } from './approvals/approvals.module.js';
 import { ConfigModule } from './config/config.module.js';
 import type { AppConfig } from './config/env.schema.js';
 import { HealthModule } from './health/health.module.js';
@@ -21,7 +21,7 @@ export class AppModule {
         LlmModule.register(),
         MongoModule,
         RepositoriesModule,
-        PlannerModule,
+        ApprovalsModule,
         HealthModule,
       ],
     };

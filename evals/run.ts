@@ -5,7 +5,6 @@ import { readFile, readdir, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { LangGraphPlanner } from '../src/agents/planner/planner.graph.js';
-import { PlannerService } from '../src/agents/planner/planner.service.js';
 import { PastEventDateError } from '../src/agents/planner/timeline.js';
 import { loadConfig } from '../src/config/config.module.js';
 import {
@@ -24,12 +23,9 @@ import {
 import type { LlmCallRecord } from '../src/llm/model.types.js';
 import type { StructuredCall } from '../src/llm/structured.js';
 import { AppLogger } from '../src/logging/logger.module.js';
-import {
-  InMemoryEventsRepository,
-  InMemoryTasksRepository,
-} from '../test/support/in-memory.repositories.js';
 import { assertDraft, firstFailure } from './assertions.js';
 import { idempotencyAssertions } from './idempotency.js';
+import { buildEvalServices } from './services.js';
 import { type CaseOutcome, renderReport } from './report.js';
 
 interface EvalCase {
@@ -78,9 +74,7 @@ async function runCase(
     }
   };
   const graph = new LangGraphPlanner(tracked);
-  const events = new InMemoryEventsRepository();
-  const tasks = new InMemoryTasksRepository();
-  const service = new PlannerService(graph, events, tasks);
+  const services = buildEvalServices(tracked);
   const date = isoDay(new Date(now.getTime() + c.daysFromNow * 86_400_000));
   const raw = { ...c.brief, date };
   const outcome = (status: CaseOutcome['status'], failure?: string): CaseOutcome => ({
@@ -93,7 +87,7 @@ async function runCase(
 
   if (c.expect === 'reject') {
     try {
-      await service.plan(raw, { now });
+      await services.planner.startPlan(raw, { now });
       return outcome('fail', 'expected the past date to be rejected, but a plan was produced');
     } catch (err) {
       if (!(err instanceof PastEventDateError)) {
@@ -109,7 +103,7 @@ async function runCase(
   }
 
   try {
-    const brief = service.parseBrief(raw);
+    const brief = services.planner.parseBrief(raw);
     const draft = await graph.run(brief, { now });
     const results = assertDraft(draft);
 

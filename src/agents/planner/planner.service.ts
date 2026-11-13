@@ -1,22 +1,21 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import type { Event } from '../../domain/event.schema.js';
-import type { Task } from '../../domain/task.schema.js';
-import type { LlmCallRecord } from '../../llm/model.types.js';
-import { EVENTS_REPOSITORY, type EventsRepository } from '../../repositories/events.repository.js';
-import { TASKS_REPOSITORY, type TasksRepository } from '../../repositories/tasks.repository.js';
-import type { Page } from '../../repositories/base.repository.js';
-import type { ChecklistOutput, TimelineOutput } from './llm-schemas.js';
+import { PLANNER_RUNTIME } from '../../approvals/approvals.service.js';
 import {
-  eventInputFromBrief,
-  eventPatchFromBrief,
-  mapChecklistToTasks,
-  taskNaturalKey,
-} from './mapping.js';
-import type { PlanDraft, PlanRunOptions, PlannerGraph } from './planner.graph.js';
+  APPROVAL_REQUESTS_REPOSITORY,
+  type ApprovalRequestsRepository,
+} from '../../approvals/approvals.repository.js';
+import type { PlanReviewPayload } from '../../approvals/plan-review.payload.js';
+import type { Event } from '../../domain/event.schema.js';
+import { threadIdFor } from '../../graph/thread.js';
+import { ProviderUnavailableError, StructuredOutputError } from '../../llm/errors.js';
+import type { LlmCallRecord } from '../../llm/model.types.js';
+import { NODE_REQUEST_APPROVAL } from './planner.graph.js';
+import { PlanPersistence } from './plan-persistence.js';
+import type { PlannerRuntime, ThreadView } from './planner.runtime.js';
 import { EventBriefSchema, type EventBrief } from './planner.state.js';
-import { type Milestone, computeMilestones, utcDay } from './timeline.js';
+import { computeMilestones } from './timeline.js';
 
-export const PLANNER_GRAPH = Symbol('PLANNER_GRAPH');
+export const PLAN_PERSISTENCE = Symbol('PLAN_PERSISTENCE');
 
 export class InvalidBriefError extends Error {
   constructor(public readonly issues: readonly string[]) {
@@ -25,30 +24,54 @@ export class InvalidBriefError extends Error {
   }
 }
 
-export class EventNotFoundError extends Error {
-  constructor(public readonly eventId: string) {
-    super(`No event with id ${eventId}`);
-    this.name = 'EventNotFoundError';
+/**
+ * A run stopped because the provider or the model failed. The thread keeps its state at the last
+ * completed node: nothing was lost, and `approvals resume <threadId>` re-runs only what failed.
+ * `cause` says which kind of failure it was; the two are never mixed.
+ */
+export class PlanRunInterruptedError extends Error {
+  constructor(
+    public readonly threadId: string,
+    public override readonly cause: ProviderUnavailableError | StructuredOutputError,
+  ) {
+    super(
+      `${cause instanceof ProviderUnavailableError ? 'Provider failure' : 'Model failure'} in plan run ${threadId}: ${cause.message}. ` +
+        `The run is resumable: npm run approvals -- resume ${threadId}`,
+    );
+    this.name = 'PlanRunInterruptedError';
   }
 }
 
-export interface PlanResult {
-  event: Event;
-  /** True when the event was created by this run (false: an existing event was updated). */
-  eventCreated: boolean;
-  milestones: Milestone[];
-  timeline: TimelineOutput;
-  checklist: ChecklistOutput;
-  /** Tasks inserted by this run. */
-  created: Task[];
-  /** Checklist items that already existed (same event + milestone + normalised title). */
-  skipped: number;
-  /** Every model call made, for evals and cost accounting. */
-  calls: LlmCallRecord[];
+export interface PlanStartOptions {
+  now?: Date;
+  /** Ladder index the model nodes start at. */
+  startAt?: number;
+  /** Plan again even if the event already has agent-created tasks (only new titles are added). */
+  replan?: boolean;
 }
 
-export type PlanOutcome =
-  | ({ status: 'planned' } & PlanResult)
+export type PlanStartResult =
+  | {
+      /** Suspended at the approval point. Nothing is persisted until a human decides. */
+      status: 'awaiting_approval';
+      event: Event;
+      threadId: string;
+      requestId: string | undefined;
+      /** True when a thread was already waiting: it is continued, no second run is started. */
+      alreadyWaiting: boolean;
+      review: PlanReviewPayload | undefined;
+      calls: LlmCallRecord[];
+    }
+  | {
+      /** Ran to the end in this call (only when the policy table says plan_review is `auto`). */
+      status: 'completed';
+      event: Event;
+      threadId: string;
+      outcome: 'persisted' | 'rejected';
+      created: number;
+      skipped: number;
+      calls: LlmCallRecord[];
+    }
   | {
       /** The event already has an agent-generated plan; no model was called, nothing was written. */
       status: 'already_planned';
@@ -56,30 +79,14 @@ export type PlanOutcome =
       existingTasks: number;
     };
 
-export interface EnsurePlannedOptions extends PlanRunOptions {
-  /** Generate again even if the event already has agent-created tasks (only new titles are added). */
-  replan?: boolean;
-}
-
-async function allPages<T>(fetchPage: (after?: string) => Promise<Page<T>>): Promise<T[]> {
-  const items: T[] = [];
-  let after: string | undefined;
-  do {
-    const page = await fetchPage(after);
-    items.push(...page.items);
-    after = page.nextCursor;
-  } while (after !== undefined);
-  return items;
-}
-
 @Injectable()
 export class PlannerService {
   private readonly logger = new Logger(PlannerService.name);
 
   constructor(
-    @Inject(PLANNER_GRAPH) private readonly graph: PlannerGraph,
-    @Inject(EVENTS_REPOSITORY) private readonly events: EventsRepository,
-    @Inject(TASKS_REPOSITORY) private readonly tasks: TasksRepository,
+    @Inject(PLAN_PERSISTENCE) private readonly persistence: PlanPersistence,
+    @Inject(PLANNER_RUNTIME) private readonly runtime: PlannerRuntime,
+    @Inject(APPROVAL_REQUESTS_REPOSITORY) private readonly requests: ApprovalRequestsRepository,
   ) {}
 
   /** Validates the brief. Never touches a model or the database. */
@@ -92,112 +99,98 @@ export class PlannerService {
   }
 
   /**
-   * Runs the graph, then persists. Order matters: the brief and its date are validated first (a
-   * past date throws PastEventDateError here, before any model call), and nothing is written
-   * until the model work has fully succeeded, so a failed run leaves no half-written plan.
+   * Plans an event, pausing for a human decision. Thread identity is deterministic
+   * (`event:<eventId>:plan`), so a second call for the same event can only ever continue the same
+   * thread, never fork a parallel one:
+   *  - thread waiting for a decision  -> reported as waiting; no model call;
+   *  - thread stopped by a failure    -> continued: only the failed node runs again;
+   *  - thread finished, tasks exist   -> already_planned (unless `replan`);
+   *  - otherwise                      -> a new run on that thread.
+   * A past date or an invalid brief is rejected before any lookup or model call. The event is
+   * created/updated first (idempotent): it is what the thread hangs off.
    */
-  async plan(input: unknown, options: PlanRunOptions = {}): Promise<PlanResult> {
+  async startPlan(input: unknown, options: PlanStartOptions = {}): Promise<PlanStartResult> {
     const brief = this.parseBrief(input);
-    computeMilestones(brief.date, options.now ?? new Date()); // reject a past date up front
-    const draft = await this.graph.run(brief, options);
-    return await this.persist(draft);
-  }
+    computeMilestones(brief.date, options.now ?? new Date());
+    const { event } = await this.persistence.upsertEvent(brief);
+    const threadId = threadIdFor(event._id, 'plan');
+    const before = await this.runtime.inspect(threadId);
 
-  /**
-   * The entry point for "plan this brief" (CLI). Idempotent at the plan level: a model does not
-   * reproduce its titles exactly on every run, so the natural-key check alone would let a second
-   * run add a differently-worded copy of the whole checklist. If the matched event already has
-   * agent-created tasks, nothing is generated or written unless `replan` is set.
-   */
-  async ensurePlanned(input: unknown, options: EnsurePlannedOptions = {}): Promise<PlanOutcome> {
-    const brief = this.parseBrief(input);
-    computeMilestones(brief.date, options.now ?? new Date()); // reject a past date before anything else
-    const existing = options.replan ? null : await this.findEvent(brief);
-    if (existing) {
-      const tasks = await allPages((after) =>
-        this.tasks.findByEventId(existing._id, { limit: 200, ...(after ? { after } : {}) }),
+    if (before.status === 'awaiting_decision') {
+      this.logger.log(`event ${event._id} already has a plan waiting for a decision`);
+      return await this.result(event, before, 0, true);
+    }
+    if (before.status === 'resumable') {
+      this.logger.log(
+        `event ${event._id}: continuing stopped thread at ${before.failedNode ?? '?'}`,
       );
-      const agentTasks = tasks.filter((t) => t.source === 'agent').length;
-      if (agentTasks > 0) {
-        this.logger.log(
-          `event ${existing._id} already planned (${String(agentTasks)} agent tasks); skipping`,
-        );
-        return { status: 'already_planned', event: existing, existingTasks: agentTasks };
-      }
+      return await this.result(
+        event,
+        await this.guard(threadId, () => this.runtime.continue(threadId)),
+        before.calls.length,
+        true,
+      );
     }
-    return { status: 'planned', ...(await this.plan(brief, options)) };
-  }
 
-  /**
-   * Creates or updates the Event and inserts the checklist as Tasks. Idempotent: a task is skipped
-   * when its natural key (eventId, milestoneKey, normalised title) already exists. Nothing is ever
-   * deleted or modified: re-planning only adds what is missing.
-   *
-   * Why a key check and not a unique index: the key includes a normalised title that is not a
-   * stored field, and agents may legitimately create manual tasks with the same title. The check
-   * is not atomic, so two planners racing on the same event could both insert; a run is a
-   * deliberate CLI action, and a later run reports skipped rather than duplicating.
-   */
-  async persist(draft: PlanDraft): Promise<PlanResult> {
-    const { event, created: eventCreated } = await this.upsertEvent(draft.brief);
-    const existing = await allPages((after) =>
-      this.tasks.findByEventId(event._id, { limit: 200, ...(after ? { after } : {}) }),
-    );
-    const known = new Set(existing.map((t) => taskNaturalKey(event._id, t.milestoneKey, t.title)));
-
-    const created: Task[] = [];
-    let skipped = 0;
-    for (const input of mapChecklistToTasks(draft.checklist, draft.milestones, event._id)) {
-      const key = taskNaturalKey(event._id, input.milestoneKey, input.title);
-      if (known.has(key)) {
-        skipped++;
-        continue;
-      }
-      created.push(await this.tasks.insert(input));
-      known.add(key);
+    if (!options.replan) {
+      const existingTasks = await this.persistence.agentTaskCount(event._id);
+      if (existingTasks > 0) return { status: 'already_planned', event, existingTasks };
     }
-    this.logger.log(
-      `planned event ${event._id}: ${String(created.length)} tasks created, ${String(skipped)} already existed`,
-    );
-    return {
-      event,
-      eventCreated,
-      milestones: draft.milestones,
-      timeline: draft.timeline,
-      checklist: draft.checklist,
-      created,
-      skipped,
-      calls: draft.calls,
-    };
-  }
-
-  /** brief.eventId wins; otherwise match an event on the same day with the same theme; else create. */
-  private async upsertEvent(brief: EventBrief): Promise<{ event: Event; created: boolean }> {
-    const existing = await this.findEvent(brief);
-    if (!existing) {
-      return { event: await this.events.insert(eventInputFromBrief(brief)), created: true };
-    }
-    const updated = await this.events.updateWithRetry(existing._id, (doc) =>
-      eventPatchFromBrief(brief, doc.phase),
-    );
-    return { event: updated ?? existing, created: false };
-  }
-
-  private async findEvent(brief: EventBrief): Promise<Event | null> {
-    if (brief.eventId) {
-      const found = await this.events.findById(brief.eventId);
-      if (!found) throw new EventNotFoundError(brief.eventId);
-      return found;
-    }
-    const day = utcDay(new Date(brief.date));
-    const next = new Date(day.getTime() + 86_400_000);
-    const sameDay = await allPages((after) =>
-      this.events.findByDateRange(day.toISOString(), next.toISOString(), {
-        limit: 200,
-        ...(after ? { after } : {}),
+    const view = await this.guard(threadId, () =>
+      this.runtime.start(threadId, {
+        brief,
+        eventId: event._id,
+        ...(options.now ? { now: options.now } : {}),
+        ...(options.startAt === undefined ? {} : { startAt: options.startAt }),
       }),
     );
-    const theme = brief.theme.trim().toLowerCase();
-    return sameDay.find((e) => e.theme?.trim().toLowerCase() === theme) ?? null;
+    return await this.result(event, view, before.calls.length, false);
+  }
+
+  private async guard(threadId: string, run: () => Promise<ThreadView>): Promise<ThreadView> {
+    try {
+      return await run();
+    } catch (err) {
+      if (err instanceof ProviderUnavailableError || err instanceof StructuredOutputError) {
+        throw new PlanRunInterruptedError(threadId, err);
+      }
+      throw err;
+    }
+  }
+
+  private async result(
+    event: Event,
+    view: ThreadView,
+    callsBefore: number,
+    alreadyWaiting: boolean,
+  ): Promise<PlanStartResult> {
+    const calls = view.calls.slice(callsBefore);
+    if (view.status === 'awaiting_decision') {
+      const request =
+        view.runId === undefined
+          ? null
+          : await this.requests.findByKey(view.threadId, view.runId, NODE_REQUEST_APPROVAL);
+      return {
+        status: 'awaiting_approval',
+        event,
+        threadId: view.threadId,
+        requestId: request?._id,
+        alreadyWaiting,
+        review: view.review,
+        calls,
+      };
+    }
+    if (view.status === 'completed' && view.outcome) {
+      return {
+        status: 'completed',
+        event,
+        threadId: view.threadId,
+        outcome: view.outcome,
+        created: view.persisted?.created ?? 0,
+        skipped: view.persisted?.skipped ?? 0,
+        calls,
+      };
+    }
+    throw new Error(`Plan run ${view.threadId} ended in an unexpected state: ${view.status}`);
   }
 }
