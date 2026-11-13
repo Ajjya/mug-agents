@@ -31,12 +31,26 @@ describe('resetDevDb (real MongoDB)', () => {
     expect(await mongo.db.collection('keep').countDocuments()).toBe(1);
   });
 
+  it('names the unfinished graph threads it discards, and not the finished ones', async () => {
+    const name = `t${randomUUID().replaceAll('-', '')}_dev`;
+    const checkpoints = mongo.client.db(name).collection('graph_checkpoints');
+    await checkpoints.insertMany([
+      { thread_id: 'event:a:plan', checkpoint_id: '1' }, // paused or failed: no expire_at
+      { thread_id: 'event:a:plan', checkpoint_id: '2' },
+      { thread_id: 'event:b:plan', checkpoint_id: '1', expire_at: new Date('2030-01-01') }, // finished
+    ]);
+    const report = await resetDevDb(mongo.client, { NODE_ENV: 'development', MONGODB_DB: name });
+    expect(report.discardedThreads).toEqual(['event:a:plan']);
+    expect(report.collections).toEqual([{ name: 'graph_checkpoints', documents: 3 }]);
+  });
+
   it('an empty or missing database is not an error', async () => {
     const report = await resetDevDb(mongo.client, {
       NODE_ENV: 'development',
       MONGODB_DB: `t${randomUUID().replaceAll('-', '')}_dev`,
     });
     expect(report.collections).toEqual([]);
+    expect(report.discardedThreads).toEqual([]);
   });
 
   it('refuses a database without the _dev suffix and drops nothing', async () => {

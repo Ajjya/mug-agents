@@ -35,6 +35,8 @@ export function assertResetAllowed(config: Pick<AppConfig, 'NODE_ENV' | 'MONGODB
 export interface ResetReport {
   database: string;
   collections: { name: string; documents: number }[];
+  /** Graph threads that were not finished (paused for approval or stopped by a failure) and are now gone. */
+  discardedThreads: string[];
 }
 
 /** Drops the configured database after the guards pass, and reports what was in it. */
@@ -51,8 +53,13 @@ export async function resetDevDb(
       documents: await db.collection(c.name).countDocuments(),
     })),
   );
+  // Checkpoint state is part of what a reset drops: say which unfinished threads go with it, because a
+  // reset during development otherwise silently discards runs that were waiting for a decision.
+  const unfinished = (await db
+    .collection('graph_checkpoints')
+    .distinct('thread_id', { expire_at: { $exists: false } })) as string[];
   await db.dropDatabase();
-  return { database: config.MONGODB_DB, collections };
+  return { database: config.MONGODB_DB, collections, discardedThreads: unfinished.sort() };
 }
 
 async function main(): Promise<number> {
@@ -84,6 +91,14 @@ async function main(): Promise<number> {
     if (report.collections.length === 0) console.log('  (it was empty or did not exist)');
     for (const c of report.collections) {
       console.log(`  ${c.name}: ${String(c.documents)} document(s)`);
+    }
+    if (report.discardedThreads.length > 0) {
+      console.log(
+        `\nWARNING: this also discarded checkpoint state for ${String(report.discardedThreads.length)} unfinished graph thread(s): paused approvals and stopped runs can no longer be resumed:`,
+      );
+      for (const t of report.discardedThreads) console.log(`  ${t}`);
+    } else {
+      console.log('\nNo unfinished graph threads were affected.');
     }
     return 0;
   } finally {
