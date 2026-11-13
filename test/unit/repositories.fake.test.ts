@@ -1,10 +1,14 @@
 import {
+  InMemoryApprovalDecisionsRepository,
+  InMemoryApprovalRequestsRepository,
   InMemoryEventsRepository,
   InMemoryOrganisationsRepository,
   InMemorySpeakersRepository,
   InMemoryTasksRepository,
 } from '../support/in-memory.repositories.js';
 import {
+  approvalDecisionsContract,
+  approvalRequestsContract,
   eventsContract,
   organisationsContract,
   speakersContract,
@@ -16,3 +20,5 @@ eventsContract(() => new InMemoryEventsRepository());
 speakersContract(() => new InMemorySpeakersRepository());
 organisationsContract(() => new InMemoryOrganisationsRepository());
 tasksContract(() => new InMemoryTasksRepository());
+approvalRequestsContract(() => new InMemoryApprovalRequestsRepository());
+approvalDecisionsContract(() => new InMemoryApprovalDecisionsRepository());

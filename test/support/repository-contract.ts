@@ -19,6 +19,23 @@ import type { EventsRepository } from '../../src/repositories/events.repository.
 import type { OrganisationsRepository } from '../../src/repositories/organisations.repository.js';
 import type { SpeakersRepository } from '../../src/repositories/speakers.repository.js';
 import type { TasksRepository } from '../../src/repositories/tasks.repository.js';
+import {
+  type ApprovalDecision,
+  type ApprovalDecisionInput,
+  type ApprovalDecisionPatch,
+  type ApprovalRequest,
+  type ApprovalRequestInput,
+  type ApprovalRequestPatch,
+} from '../../src/approvals/approval.schema.js';
+import type {
+  ApprovalDecisionsRepository,
+  ApprovalRequestsRepository,
+} from '../../src/approvals/approvals.repository.js';
+import {
+  approvalDecisionInput,
+  approvalRequestInput,
+  planReviewPayload,
+} from './approval-fixtures.js';
 import { ID_A, ID_B, eventInput, organisationInput, speakerInput, taskInput } from './fixtures.js';
 
 type Base = { _id: EntityId; version: number; createdAt: string; updatedAt: string };
@@ -32,6 +49,8 @@ interface Case<I, D extends Base, P, R extends Repository<I, D, P>> {
   patched: [keyof D, unknown];
   unknownFieldInput: unknown;
   invalidPatch: unknown;
+  /** An audit record that is never updated: skips the update and locking tests. */
+  immutable?: boolean;
 }
 
 /**
@@ -111,133 +130,135 @@ function baseContract<I, D extends Base, P, R extends Repository<I, D, P>>(
     await expect(repo.findMany({ after: 'garbage' })).rejects.toThrow();
   });
 
-  it('updateById: applies the patch, bumps version and updatedAt, keeps createdAt', async () => {
-    const doc = await repo.insert(c.input(1));
-    await new Promise((r) => setTimeout(r, 5));
-    const updated = await repo.updateById(doc._id, c.patch, doc.version);
-    expect(updated?.[c.patched[0]]).toEqual(c.patched[1]);
-    expect(updated?.version).toBe(2);
-    expect(updated?.createdAt).toBe(doc.createdAt);
-    expect(new Date(updated?.updatedAt ?? 0).getTime()).toBeGreaterThan(
-      new Date(doc.updatedAt).getTime(),
-    );
-    expect(await repo.findById(doc._id)).toEqual(updated);
-  });
-
-  it('optimistic locking: a stale version throws VersionConflictError and changes nothing', async () => {
-    const doc = await repo.insert(c.input(1));
-    const winner = await repo.updateById(doc._id, c.patch, doc.version);
-    await expect(repo.updateById(doc._id, c.patch, doc.version)).rejects.toBeInstanceOf(
-      VersionConflictError,
-    );
-    expect(await repo.findById(doc._id)).toEqual(winner);
-  });
-
-  it('optimistic locking: of two concurrent updates from the same version exactly one wins', async () => {
-    const doc = await repo.insert(c.input(1));
-    const results = await Promise.allSettled([
-      repo.updateById(doc._id, c.patch, doc.version),
-      repo.updateById(doc._id, c.patch, doc.version),
-    ]);
-    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
-    const lost = results.find((r) => r.status === 'rejected');
-    expect(lost?.reason).toBeInstanceOf(VersionConflictError);
-    expect((await repo.findById(doc._id))?.version).toBe(2);
-  });
-
-  describe('updateWithRetry', () => {
-    it('applies mutate to the current document and returns the updated one', async () => {
+  if (c.immutable !== true) {
+    it('updateById: applies the patch, bumps version and updatedAt, keeps createdAt', async () => {
       const doc = await repo.insert(c.input(1));
-      const seen: number[] = [];
-      const updated = await repo.updateWithRetry(doc._id, (d) => {
-        seen.push(d.version);
-        return c.patch;
-      });
-      expect(seen).toEqual([1]);
-      expect(updated?.version).toBe(2);
+      await new Promise((r) => setTimeout(r, 5));
+      const updated = await repo.updateById(doc._id, c.patch, doc.version);
       expect(updated?.[c.patched[0]]).toEqual(c.patched[1]);
+      expect(updated?.version).toBe(2);
+      expect(updated?.createdAt).toBe(doc.createdAt);
+      expect(new Date(updated?.updatedAt ?? 0).getTime()).toBeGreaterThan(
+        new Date(doc.updatedAt).getTime(),
+      );
+      expect(await repo.findById(doc._id)).toEqual(updated);
     });
 
-    it('re-reads and retries when another writer got in between', async () => {
+    it('optimistic locking: a stale version throws VersionConflictError and changes nothing', async () => {
       const doc = await repo.insert(c.input(1));
-      const seen: number[] = [];
-      const updated = await repo.updateWithRetry(doc._id, async (d) => {
-        seen.push(d.version);
-        // A competing writer wins the first attempt.
-        if (seen.length === 1) await repo.updateById(doc._id, c.patch, d.version);
-        return c.patch;
-      });
-      expect(seen).toEqual([1, 2]); // second attempt saw the fresh version
-      expect(updated?.version).toBe(3);
+      const winner = await repo.updateById(doc._id, c.patch, doc.version);
+      await expect(repo.updateById(doc._id, c.patch, doc.version)).rejects.toBeInstanceOf(
+        VersionConflictError,
+      );
+      expect(await repo.findById(doc._id)).toEqual(winner);
     });
 
-    it('rethrows VersionConflictError once the attempts are exhausted', async () => {
+    it('optimistic locking: of two concurrent updates from the same version exactly one wins', async () => {
       const doc = await repo.insert(c.input(1));
-      let calls = 0;
-      await expect(
-        repo.updateWithRetry(
-          doc._id,
-          async (d) => {
-            calls++;
-            await repo.updateById(doc._id, c.patch, d.version); // always lose the race
-            return c.patch;
-          },
-          { attempts: 2 },
-        ),
-      ).rejects.toBeInstanceOf(VersionConflictError);
-      expect(calls).toBe(2);
-    });
-
-    it('two concurrent read-modify-writes both land (version 3), none is lost', async () => {
-      const doc = await repo.insert(c.input(1));
-      const results = await Promise.all([
-        repo.updateWithRetry(doc._id, () => c.patch),
-        repo.updateWithRetry(doc._id, () => c.patch),
+      const results = await Promise.allSettled([
+        repo.updateById(doc._id, c.patch, doc.version),
+        repo.updateById(doc._id, c.patch, doc.version),
       ]);
-      expect(results.every((r) => r !== null)).toBe(true);
-      expect((await repo.findById(doc._id))?.version).toBe(3);
+      expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+      const lost = results.find((r) => r.status === 'rejected');
+      expect(lost?.reason).toBeInstanceOf(VersionConflictError);
+      expect((await repo.findById(doc._id))?.version).toBe(2);
     });
 
-    it('returns null without calling mutate for a missing or malformed id', async () => {
-      let calls = 0;
-      const mutate = () => {
-        calls++;
-        return c.patch;
-      };
-      expect(await repo.updateWithRetry('f'.repeat(24), mutate)).toBeNull();
-      expect(await repo.updateWithRetry('abc', mutate)).toBeNull();
-      expect(calls).toBe(0);
-    });
+    describe('updateWithRetry', () => {
+      it('applies mutate to the current document and returns the updated one', async () => {
+        const doc = await repo.insert(c.input(1));
+        const seen: number[] = [];
+        const updated = await repo.updateWithRetry(doc._id, (d) => {
+          seen.push(d.version);
+          return c.patch;
+        });
+        expect(seen).toEqual([1]);
+        expect(updated?.version).toBe(2);
+        expect(updated?.[c.patched[0]]).toEqual(c.patched[1]);
+      });
 
-    it('does not retry other errors (invalid patch) and rejects bad attempts', async () => {
-      const doc = await repo.insert(c.input(1));
-      let calls = 0;
-      await expect(
-        repo.updateWithRetry(doc._id, () => {
+      it('re-reads and retries when another writer got in between', async () => {
+        const doc = await repo.insert(c.input(1));
+        const seen: number[] = [];
+        const updated = await repo.updateWithRetry(doc._id, async (d) => {
+          seen.push(d.version);
+          // A competing writer wins the first attempt.
+          if (seen.length === 1) await repo.updateById(doc._id, c.patch, d.version);
+          return c.patch;
+        });
+        expect(seen).toEqual([1, 2]); // second attempt saw the fresh version
+        expect(updated?.version).toBe(3);
+      });
+
+      it('rethrows VersionConflictError once the attempts are exhausted', async () => {
+        const doc = await repo.insert(c.input(1));
+        let calls = 0;
+        await expect(
+          repo.updateWithRetry(
+            doc._id,
+            async (d) => {
+              calls++;
+              await repo.updateById(doc._id, c.patch, d.version); // always lose the race
+              return c.patch;
+            },
+            { attempts: 2 },
+          ),
+        ).rejects.toBeInstanceOf(VersionConflictError);
+        expect(calls).toBe(2);
+      });
+
+      it('two concurrent read-modify-writes both land (version 3), none is lost', async () => {
+        const doc = await repo.insert(c.input(1));
+        const results = await Promise.all([
+          repo.updateWithRetry(doc._id, () => c.patch),
+          repo.updateWithRetry(doc._id, () => c.patch),
+        ]);
+        expect(results.every((r) => r !== null)).toBe(true);
+        expect((await repo.findById(doc._id))?.version).toBe(3);
+      });
+
+      it('returns null without calling mutate for a missing or malformed id', async () => {
+        let calls = 0;
+        const mutate = () => {
           calls++;
-          return c.invalidPatch as P;
-        }),
-      ).rejects.toBeInstanceOf(z.ZodError);
-      expect(calls).toBe(1);
-      await expect(
-        repo.updateWithRetry(doc._id, () => c.patch, { attempts: 0 }),
-      ).rejects.toBeInstanceOf(RangeError);
-    });
-  });
+          return c.patch;
+        };
+        expect(await repo.updateWithRetry('f'.repeat(24), mutate)).toBeNull();
+        expect(await repo.updateWithRetry('abc', mutate)).toBeNull();
+        expect(calls).toBe(0);
+      });
 
-  it('updateById: null for a missing or malformed id; rejects invalid and empty patches', async () => {
-    expect(await repo.updateById('f'.repeat(24), c.patch, 1)).toBeNull();
-    expect(await repo.updateById('abc', c.patch, 1)).toBeNull();
-    expect(await repo.findById('abc')).toBeNull();
-    const doc = await repo.insert(c.input(1));
-    await expect(repo.updateById(doc._id, c.invalidPatch as P, doc.version)).rejects.toBeInstanceOf(
-      z.ZodError,
-    );
-    await expect(repo.updateById(doc._id, {} as P, doc.version)).rejects.toBeInstanceOf(
-      InvalidPatchError,
-    );
-    expect(await repo.findById(doc._id)).toEqual(doc);
-  });
+      it('does not retry other errors (invalid patch) and rejects bad attempts', async () => {
+        const doc = await repo.insert(c.input(1));
+        let calls = 0;
+        await expect(
+          repo.updateWithRetry(doc._id, () => {
+            calls++;
+            return c.invalidPatch as P;
+          }),
+        ).rejects.toBeInstanceOf(z.ZodError);
+        expect(calls).toBe(1);
+        await expect(
+          repo.updateWithRetry(doc._id, () => c.patch, { attempts: 0 }),
+        ).rejects.toBeInstanceOf(RangeError);
+      });
+    });
+
+    it('updateById: null for a missing or malformed id; rejects invalid and empty patches', async () => {
+      expect(await repo.updateById('f'.repeat(24), c.patch, 1)).toBeNull();
+      expect(await repo.updateById('abc', c.patch, 1)).toBeNull();
+      expect(await repo.findById('abc')).toBeNull();
+      const doc = await repo.insert(c.input(1));
+      await expect(
+        repo.updateById(doc._id, c.invalidPatch as P, doc.version),
+      ).rejects.toBeInstanceOf(z.ZodError);
+      await expect(repo.updateById(doc._id, {} as P, doc.version)).rejects.toBeInstanceOf(
+        InvalidPatchError,
+      );
+      expect(await repo.findById(doc._id)).toEqual(doc);
+    });
+  }
 }
 
 /** Exported so the Mongo repository can assert its specific error type for bad cursors. */
@@ -451,6 +472,147 @@ export function tasksContract(create: Factory<TasksRepository>): void {
         expect(r.items[0]?.milestoneKey).toBe('T-4w');
         expect((await repo.findByEventId(newEntityId())).items).toEqual([]);
         await expect(repo.findByEventId('not-an-id')).rejects.toBeInstanceOf(z.ZodError);
+      });
+    });
+  });
+}
+
+export function approvalRequestsContract(create: Factory<ApprovalRequestsRepository>): void {
+  describe('approval requests repository contract', () => {
+    baseContract<
+      ApprovalRequestInput,
+      ApprovalRequest,
+      ApprovalRequestPatch,
+      ApprovalRequestsRepository
+    >({
+      create,
+      input: (n) => approvalRequestInput({ runId: `run-${String(n)}` }),
+      patch: { status: 'decided', decidedAt: '2026-11-10T10:00:00.000Z' },
+      patched: ['status', 'decided'],
+      unknownFieldInput: { ...approvalRequestInput(), surprise: 1 },
+      invalidPatch: { payload: planReviewPayload() },
+    });
+
+    describe('finders and uniqueness', () => {
+      let repo: ApprovalRequestsRepository;
+      beforeEach(async () => {
+        repo = await create();
+      });
+
+      it('findByStatus filters by status', async () => {
+        await repo.insert(approvalRequestInput({ runId: 'r1' }));
+        await repo.insert(approvalRequestInput({ runId: 'r2', status: 'expired' }));
+        expect((await repo.findByStatus('pending')).items.map((r) => r.runId)).toEqual(['r1']);
+        expect((await repo.findByStatus('expired')).items.map((r) => r.runId)).toEqual(['r2']);
+        await expect(repo.findByStatus({ $ne: 'x' } as never)).rejects.toBeInstanceOf(z.ZodError);
+      });
+
+      it('findByKey returns the request for that exact thread + run + node, any status', async () => {
+        const a = await repo.insert(approvalRequestInput({ runId: 'r1' }));
+        await repo.insert(approvalRequestInput({ runId: 'r2' }));
+        expect((await repo.findByKey(a.threadId, 'r1', 'requestPlanApproval'))?._id).toBe(a._id);
+        expect(await repo.findByKey(a.threadId, 'r3', 'requestPlanApproval')).toBeNull();
+        expect(await repo.findByKey(a.threadId, 'r1', 'otherNode')).toBeNull();
+        await expect(repo.findByKey({ $ne: 'x' } as never, 'r1', 'n')).rejects.toBeInstanceOf(
+          z.ZodError,
+        );
+      });
+
+      it('findByThread returns every request of a thread', async () => {
+        await repo.insert(approvalRequestInput({ runId: 'r1' }));
+        await repo.insert(approvalRequestInput({ runId: 'r2' }));
+        await repo.insert(approvalRequestInput({ threadId: `event:${ID_B}:plan`, runId: 'r1' }));
+        expect((await repo.findByThread(`event:${ID_A}:plan`)).items).toHaveLength(2);
+      });
+
+      it('a second request for the same thread + run + node is a DuplicateKeyError', async () => {
+        await repo.insert(approvalRequestInput());
+        await expect(repo.insert(approvalRequestInput())).rejects.toBeInstanceOf(DuplicateKeyError);
+        expect(await repo.count()).toBe(1);
+      });
+
+      it('round-trips the nested payload and has no way to delete', async () => {
+        const doc = await repo.insert(approvalRequestInput());
+        expect(doc.payload).toEqual(planReviewPayload());
+        expect('deleteById' in repo).toBe(false);
+      });
+    });
+  });
+}
+
+export function approvalDecisionsContract(create: Factory<ApprovalDecisionsRepository>): void {
+  describe('approval decisions repository contract', () => {
+    baseContract<
+      ApprovalDecisionInput,
+      ApprovalDecision,
+      ApprovalDecisionPatch,
+      ApprovalDecisionsRepository
+    >({
+      create,
+      input: (n) => approvalDecisionInput({ requestId: n.toString(16).padStart(24, '0') }),
+      patch: { reason: 'x' },
+      patched: ['reason', 'x'],
+      unknownFieldInput: { ...approvalDecisionInput(), surprise: 1 },
+      invalidPatch: { decision: 'approve' },
+      immutable: true,
+    });
+
+    describe('conditional fields, finder and uniqueness', () => {
+      let repo: ApprovalDecisionsRepository;
+      beforeEach(async () => {
+        repo = await create();
+      });
+
+      it('edit needs editedPayload, reject needs a reason, approve takes neither', async () => {
+        await expect(
+          repo.insert(approvalDecisionInput({ decision: 'edit' })),
+        ).rejects.toBeInstanceOf(z.ZodError);
+        await expect(
+          repo.insert(approvalDecisionInput({ decision: 'reject' })),
+        ).rejects.toBeInstanceOf(z.ZodError);
+        await expect(
+          repo.insert(approvalDecisionInput({ reason: 'because' })),
+        ).rejects.toBeInstanceOf(z.ZodError);
+        await expect(
+          repo.insert(approvalDecisionInput({ editedPayload: planReviewPayload() })),
+        ).rejects.toBeInstanceOf(z.ZodError);
+        expect(await repo.count()).toBe(0);
+      });
+
+      it('stores each of the three decisions with its own data', async () => {
+        const approve = await repo.insert(approvalDecisionInput({ requestId: ID_A }));
+        const edit = await repo.insert(
+          approvalDecisionInput({
+            requestId: ID_B,
+            decision: 'edit',
+            editedPayload: planReviewPayload(),
+          }),
+        );
+        const reject = await repo.insert(
+          approvalDecisionInput({
+            requestId: 'c'.repeat(24),
+            decision: 'reject',
+            reason: 'wrong venue',
+          }),
+        );
+        expect(approve).toMatchObject({ decision: 'approve', decidedBy: 'vlad' });
+        expect(edit.editedPayload).toEqual(planReviewPayload());
+        expect(reject.reason).toBe('wrong venue');
+      });
+
+      it('findByRequestId finds the decision, or null', async () => {
+        const d = await repo.insert(approvalDecisionInput({ requestId: ID_A }));
+        expect((await repo.findByRequestId(ID_A))?._id).toBe(d._id);
+        expect(await repo.findByRequestId(ID_B)).toBeNull();
+        await expect(repo.findByRequestId('nope')).rejects.toBeInstanceOf(z.ZodError);
+      });
+
+      it('a second decision for the same request is a DuplicateKeyError', async () => {
+        await repo.insert(approvalDecisionInput({ requestId: ID_A }));
+        await expect(
+          repo.insert(approvalDecisionInput({ requestId: ID_A, decision: 'reject', reason: 'x' })),
+        ).rejects.toBeInstanceOf(DuplicateKeyError);
+        expect(await repo.count()).toBe(1);
       });
     });
   });

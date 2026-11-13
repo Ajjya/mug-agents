@@ -1,4 +1,19 @@
-import type { z } from 'zod';
+import {
+  ApprovalDecisionInputSchema,
+  ApprovalDecisionPatchSchema,
+  ApprovalDecisionSchema,
+  type ApprovalDecision,
+  ApprovalRequestInputSchema,
+  ApprovalRequestPatchSchema,
+  ApprovalRequestSchema,
+  type ApprovalRequest,
+  type ApprovalRequestStatus,
+} from '../../src/approvals/approval.schema.js';
+import type {
+  ApprovalDecisionsRepository,
+  ApprovalRequestsRepository,
+} from '../../src/approvals/approvals.repository.js';
+import { z } from 'zod';
 import {
   type EntityId,
   entityId,
@@ -279,5 +294,95 @@ export class InMemoryTasksRepository
   async findByEventId(eventId: EntityId, options?: FindManyOptions): Promise<Page<Task>> {
     toStorage(entityId, eventId); // same validation as the Mongo repository (throws ZodError)
     return this.where((d) => d.relatedEventId === eventId.toLowerCase(), options);
+  }
+}
+
+export class InMemoryApprovalRequestsRepository
+  extends InMemoryRepository<
+    typeof ApprovalRequestInputSchema,
+    typeof ApprovalRequestSchema,
+    typeof ApprovalRequestPatchSchema
+  >
+  implements ApprovalRequestsRepository
+{
+  constructor() {
+    super({
+      input: ApprovalRequestInputSchema,
+      doc: ApprovalRequestSchema,
+      patch: ApprovalRequestPatchSchema,
+    });
+  }
+  /** Same rule as the unique index (threadId, runId, nodeName). */
+  protected override beforeWrite(
+    next: ApprovalRequest,
+    previous: ApprovalRequest | undefined,
+  ): void {
+    const clash = this.all().find(
+      (d) =>
+        d._id !== previous?._id &&
+        d.threadId === next.threadId &&
+        d.runId === next.runId &&
+        d.nodeName === next.nodeName,
+    );
+    if (clash) {
+      throw new DuplicateKeyError('approval_requests', { threadId: 1, runId: 1, nodeName: 1 });
+    }
+  }
+  async findByStatus(
+    status: ApprovalRequestStatus,
+    options?: FindManyOptions,
+  ): Promise<Page<ApprovalRequest>> {
+    const valid = ApprovalRequestInputSchema.shape.status.parse(status);
+    return this.where((d) => d.status === valid, options);
+  }
+  async findByKey(
+    threadId: string,
+    runId: string,
+    nodeName: string,
+  ): Promise<ApprovalRequest | null> {
+    const nonEmptyText = z.string().min(1);
+    nonEmptyText.parse(threadId);
+    nonEmptyText.parse(runId);
+    nonEmptyText.parse(nodeName);
+    const found = this.where(
+      (d) => d.threadId === threadId && d.runId === runId && d.nodeName === nodeName,
+      { limit: 1 },
+    );
+    return found.items[0] ?? null;
+  }
+  async findByThread(threadId: string, options?: FindManyOptions): Promise<Page<ApprovalRequest>> {
+    return this.where((d) => d.threadId === threadId, options);
+  }
+}
+
+export class InMemoryApprovalDecisionsRepository
+  extends InMemoryRepository<
+    typeof ApprovalDecisionInputSchema,
+    typeof ApprovalDecisionSchema,
+    typeof ApprovalDecisionPatchSchema
+  >
+  implements ApprovalDecisionsRepository
+{
+  constructor() {
+    super({
+      input: ApprovalDecisionInputSchema,
+      doc: ApprovalDecisionSchema,
+      patch: ApprovalDecisionPatchSchema,
+    });
+  }
+  /** Same rule as the unique index (requestId): one decision per request. */
+  protected override beforeWrite(
+    next: ApprovalDecision,
+    previous: ApprovalDecision | undefined,
+  ): void {
+    if (this.all().some((d) => d._id !== previous?._id && d.requestId === next.requestId)) {
+      throw new DuplicateKeyError('approval_decisions', { requestId: 1 });
+    }
+  }
+  async findByRequestId(requestId: EntityId): Promise<ApprovalDecision | null> {
+    toStorage(entityId, requestId);
+    return (
+      this.where((d) => d.requestId === requestId.toLowerCase(), { limit: 1 }).items[0] ?? null
+    );
   }
 }

@@ -3,6 +3,10 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { InvalidIdError } from '../../src/domain/common.js';
 import { INDEXES, type CollectionName } from '../../src/mongo/indexes.js';
 import { DuplicateKeyError, SchemaDriftError } from '../../src/repositories/base.repository.js';
+import {
+  MongoApprovalDecisionsRepository,
+  MongoApprovalRequestsRepository,
+} from '../../src/approvals/approvals.repository.js';
 import { MongoEventsRepository } from '../../src/repositories/events.repository.js';
 import { MongoOrganisationsRepository } from '../../src/repositories/organisations.repository.js';
 import { MongoSpeakersRepository } from '../../src/repositories/speakers.repository.js';
@@ -10,6 +14,8 @@ import { MongoTasksRepository } from '../../src/repositories/tasks.repository.js
 import { eventInput, speakerInput, taskInput } from '../support/fixtures.js';
 import { openTestMongo, type TestMongo } from '../support/mongo-test.js';
 import {
+  approvalDecisionsContract,
+  approvalRequestsContract,
   eventsContract,
   organisationsContract,
   speakersContract,
@@ -49,6 +55,14 @@ organisationsContract(async () => {
 tasksContract(async () => {
   await fresh(mongo.db, 'tasks');
   return new MongoTasksRepository(mongo.db);
+});
+approvalRequestsContract(async () => {
+  await fresh(mongo.db, 'approval_requests');
+  return new MongoApprovalRequestsRepository(mongo.db);
+});
+approvalDecisionsContract(async () => {
+  await fresh(mongo.db, 'approval_decisions');
+  return new MongoApprovalDecisionsRepository(mongo.db);
 });
 
 describe('Mongo-specific behaviour', () => {
