@@ -5,6 +5,7 @@ import {
   type PlanReviewPayload,
 } from '../../approvals/plan-review.payload.js';
 import type { LlmCallRecord } from '../../llm/model.types.js';
+import { type ThreadLock, withLock } from '../../graph/thread-lock.js';
 import type { ApprovalGraph } from './planner.graph.js';
 import type { EventBrief } from './planner.state.js';
 
@@ -35,6 +36,8 @@ export interface ThreadView {
   /** The plan the human was shown (the interrupt payload), once the run got that far. */
   review?: PlanReviewPayload;
   calls: LlmCallRecord[];
+  /** Set by inFlight(): another process holds the thread's lease right now. */
+  running?: boolean;
 }
 
 export interface RetentionPort {
@@ -72,6 +75,8 @@ export class PlannerRuntime {
   constructor(
     private readonly graph: ApprovalGraph,
     private readonly retention: RetentionPort,
+    /** One run per thread at a time, across processes. */
+    readonly lock: ThreadLock,
   ) {}
 
   async inspect(threadId: string): Promise<ThreadView> {
@@ -131,14 +136,20 @@ export class PlannerRuntime {
 
   /** Starts a run. A completed thread being reused must not expire mid-run, so its stamp is lifted first. */
   async start(threadId: string, input: StartInput): Promise<ThreadView> {
+    return await withLock(this.lock, threadId, () => this.startLocked(threadId, input));
+  }
+
+  private async startLocked(threadId: string, input: StartInput): Promise<ThreadView> {
     await this.retention.cancelExpiry(threadId);
     try {
       await this.graph.invoke(
         {
           brief: input.brief,
           eventId: input.eventId,
-          ...(input.now ? { nowIso: input.now.toISOString() } : {}),
-          ...(input.startAt === undefined ? {} : { startAt: input.startAt }),
+          // Always written, null when absent: these are per-run inputs, and a reused thread must not
+          // inherit the previous run's ladder rung or "today" from its checkpoint.
+          nowIso: input.now ? input.now.toISOString() : null,
+          startAt: input.startAt ?? null,
         },
         cfg(threadId),
       );
@@ -151,6 +162,10 @@ export class PlannerRuntime {
 
   /** Resumes a suspended thread with a human decision. */
   async resume(threadId: string, decision: DecisionValue): Promise<ThreadView> {
+    return await withLock(this.lock, threadId, () => this.resumeLocked(threadId, decision));
+  }
+
+  private async resumeLocked(threadId: string, decision: DecisionValue): Promise<ThreadView> {
     try {
       await this.graph.invoke(new Command({ resume: decision }), cfg(threadId));
     } finally {
@@ -164,6 +179,10 @@ export class PlannerRuntime {
    * point). Only nodes that did not complete run again: completed nodes are not repeated.
    */
   async continue(threadId: string): Promise<ThreadView> {
+    return await withLock(this.lock, threadId, () => this.continueLocked(threadId));
+  }
+
+  private async continueLocked(threadId: string): Promise<ThreadView> {
     try {
       await this.graph.invoke(null, cfg(threadId));
     } finally {
@@ -175,7 +194,9 @@ export class PlannerRuntime {
   /** Threads that have not completed: suspended, failed or orphaned. */
   async inFlight(): Promise<ThreadView[]> {
     const ids = await this.retention.inFlightThreadIds();
-    return await Promise.all(ids.map((id) => this.inspect(id)));
+    return await Promise.all(
+      ids.map(async (id) => ({ ...(await this.inspect(id)), running: await this.lock.isHeld(id) })),
+    );
   }
 
   private async settle(threadId: string): Promise<void> {

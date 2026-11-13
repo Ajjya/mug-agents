@@ -1,8 +1,10 @@
+import { ThreadBusyError } from '../../src/graph/thread-lock.js';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { PlanRunInterruptedError } from '../../src/agents/planner/planner.service.js';
 import { PastEventDateError, computeMilestones } from '../../src/agents/planner/timeline.js';
 import {
+  ApprovalConflictError,
   ApprovalNotFoundError,
   ApprovalNotPendingError,
   ApprovalOrphanError,
@@ -241,6 +243,135 @@ export function plannerWorkflowSuite(
           h.approvals.decide('f'.repeat(24), { decision: 'approve' }, 'v', NOW),
         ).rejects.toBeInstanceOf(ApprovalNotFoundError);
         expect(await h.repos.decisions.count()).toBe(0);
+      });
+    });
+
+    describe('review fixes', () => {
+      it('a recorded decision is reused only if identical: a different edit after a crash is refused', async () => {
+        const a = await awaiting();
+        const editA = edited(a);
+        // An earlier attempt recorded edit A and died before marking the request decided.
+        await h.repos.decisions.insert({
+          requestId: a.requestId ?? '',
+          decision: 'edit',
+          editedPayload: editA,
+          decidedBy: 'vlad',
+          decidedAt: NOW.toISOString(),
+        });
+        const editB = structuredClone(editA);
+        editB.checklist = [
+          { milestone: 'T-8w', title: 'Something else entirely', owner: 'organiser' },
+        ];
+        await expect(
+          h.approvals.decide(
+            a.requestId ?? '',
+            { decision: 'edit', editedPayload: editB },
+            'vlad',
+            NOW,
+          ),
+        ).rejects.toBeInstanceOf(ApprovalConflictError);
+        await expect(
+          h.approvals.decide(a.requestId ?? '', { decision: 'reject', reason: 'x' }, 'vlad', NOW),
+        ).rejects.toBeInstanceOf(ApprovalConflictError);
+        expect(await h.repos.tasks.count()).toBe(0);
+
+        // Retrying with the SAME edit delivers exactly what is on record.
+        const out = await h.approvals.decide(
+          a.requestId ?? '',
+          { decision: 'edit', editedPayload: editA },
+          'vlad',
+          NOW,
+        );
+        const titles = (await h.repos.tasks.findByEventId(a.event._id)).items.map((t) => t.title);
+        expect(titles).toEqual(['The human-edited task']);
+        expect(out.decision.editedPayload).toEqual(editA);
+        expect(await h.repos.decisions.count()).toBe(1);
+      });
+
+      it('startAt does not leak from one run into the next on the same thread', async () => {
+        const first = await h.planner.startPlan(brief(), { now: NOW, startAt: 2 });
+        if (first.status !== 'awaiting_approval') throw new Error(first.status);
+        expect(h.modelStartAts).toEqual([2, 2]);
+        await h.approvals.decide(
+          first.requestId ?? '',
+          { decision: 'reject', reason: 'redo' },
+          'vlad',
+          NOW,
+        );
+        const second = await h.planner.startPlan(brief(), { now: NOW });
+        expect(second.status).toBe('awaiting_approval');
+        expect(h.modelStartAts).toEqual([2, 2, undefined, undefined]);
+      });
+
+      it('calls that start nothing leave the event untouched', async () => {
+        const a = await awaiting();
+        const before = await h.repos.events.findById(a.event._id);
+        const waiting = await plan({ capacity: 999, notes: 'changed' });
+        expect(waiting).toMatchObject({ status: 'awaiting_approval', alreadyWaiting: true });
+        expect(await h.repos.events.findById(a.event._id)).toEqual(before);
+
+        await h.approvals.decide(a.requestId ?? '', { decision: 'approve' }, 'vlad', NOW);
+        const approved = await h.repos.events.findById(a.event._id);
+        expect((await plan({ capacity: 999 })).status).toBe('already_planned');
+        expect(await h.repos.events.findById(a.event._id)).toEqual(approved);
+      });
+
+      it('re-planning after a rejection keeps the rejection reason on the event', async () => {
+        const a = await awaiting();
+        await h.approvals.decide(
+          a.requestId ?? '',
+          { decision: 'reject', reason: 'wrong venue' },
+          'vlad',
+          NOW,
+        );
+        const again = await plan({ notes: 'Bring stickers' });
+        expect(again.status).toBe('awaiting_approval');
+        const notes = (await h.repos.events.findById(a.event._id))?.notes ?? '';
+        expect(notes).toContain('Bring stickers');
+        expect(notes).toContain('Plan rejected: wrong venue');
+      });
+
+      it('a multi-line reason is recorded once, as one line, even if the step runs twice', async () => {
+        const a = await awaiting();
+        const reason = 'wrong venue\nretry in   March';
+        await h.approvals.decide(a.requestId ?? '', { decision: 'reject', reason }, 'vlad', NOW);
+        await h.persistence.recordRejection(a.event._id, reason); // a re-executed node
+        const notes = (await h.repos.events.findById(a.event._id))?.notes ?? '';
+        expect(notes.split('\n').filter((l) => l.startsWith('Plan rejected:'))).toEqual([
+          'Plan rejected: wrong venue retry in March',
+        ]);
+      });
+
+      it('two concurrent plan calls for the same brief: one run and one request, never two', async () => {
+        const results = await Promise.allSettled([plan(), plan()]);
+        // Either the second call is refused while the first holds the lease, or it runs after the
+        // first finished and finds the waiting thread. Never a second run.
+        for (const r of results) {
+          if (r.status === 'rejected') expect(r.reason).toBeInstanceOf(ThreadBusyError);
+          else expect(r.value.status).toBe('awaiting_approval');
+        }
+        expect(results.filter((r) => r.status === 'fulfilled').length).toBeGreaterThanOrEqual(1);
+        expect(h.modelCalls).toEqual(['generateTimeline', 'generateChecklist']);
+        expect(await h.repos.requests.count()).toBe(1);
+        expect(await h.repos.events.count()).toBe(1);
+      });
+
+      it('a thread another process is running is listed as running, not resumable, and cannot be resumed', async () => {
+        h.behaviour.failNode = 'generateTimeline';
+        const err = (await plan().catch((e: unknown) => e)) as PlanRunInterruptedError;
+        h.behaviour.failNode = undefined;
+        const release = await h.runtime.lock.acquire(err.threadId); // "another process"
+        const listing = await h.approvals.list(NOW);
+        expect(listing.resumable).toEqual([]);
+        expect(listing.running.map((t) => t.threadId)).toEqual([err.threadId]);
+        await expect(h.approvals.resumeThread(err.threadId)).rejects.toBeInstanceOf(
+          ThreadBusyError,
+        );
+        await release();
+        expect((await h.approvals.list(NOW)).resumable.map((t) => t.threadId)).toEqual([
+          err.threadId,
+        ]);
+        expect((await h.approvals.resumeThread(err.threadId)).status).toBe('resumed');
       });
     });
 

@@ -57,6 +57,7 @@ describe('formatListing', () => {
         { request: r, thread: thread({ status: 'resumable' }), orphan: true, ageMs: 90_000 },
       ],
       resumable: [],
+      running: [],
     });
     expect(text).toContain(r._id);
     expect(text).toContain('ORPHAN');
@@ -67,6 +68,7 @@ describe('formatListing', () => {
   it('lists an actionable request without the marker, and failed threads with the failed node', () => {
     const text = formatListing({
       pending: [{ request: request(), thread: thread(), orphan: false, ageMs: 5000 }],
+      running: [],
       resumable: [
         thread({
           status: 'resumable',
@@ -78,7 +80,7 @@ describe('formatListing', () => {
     expect(text).not.toContain('ORPHAN');
     expect(text).toContain('stopped at generateTimeline');
     expect(text).toContain('ProviderUnavailableError');
-    expect(formatListing({ pending: [], resumable: [] })).toContain('none');
+    expect(formatListing({ pending: [], resumable: [], running: [] })).toContain('none');
   });
 });
 

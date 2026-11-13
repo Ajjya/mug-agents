@@ -54,10 +54,10 @@ code was written (three separate processes):
   stopped means continued (only the failed node re-runs); finished with tasks means `already_planned`;
   finished without tasks (rejected) or `--replan` means a new run on the same thread. A second thread for
   one purpose cannot be built.
-- **The event is created before the graph starts**, because the thread id needs the event id. This is a
-  deviation from M1's "nothing is written until the model work succeeded": an event in phase `planning` can now
-  exist for a run that failed. It is idempotent (matched by id or same day + theme), and the run is resumable.
-  Tasks are still written only after approval.
+- **The event is created (or updated) when a new run starts, before the graph runs**, because the thread
+  id needs the event id. This is a deviation from M1's "nothing is written until the model work
+  succeeded": an event in phase `planning` can exist for a run that failed. It is idempotent (matched by id
+  or same day + theme), and the run is resumable. Tasks are still written only after approval.
 - **Approval request** carries one extra field beyond the spec, `runId` (one planning run of a thread). A
   unique index on `(threadId, runId, nodeName)` means a re-run node cannot create a second request, even
   under a race. Without it, the re-execution on resume would have no way to tell "my request" from "a new
@@ -84,6 +84,25 @@ AutonomyLevel>` (adding an action without an entry fails the build) and `require
 - **Evals** now run the real approval graph on in-memory storage and an in-memory checkpointer.
   `ensure-planned-is-idempotent-for-the-same-brief` plans, approves, plans again and requires
   `already_planned` with no further model calls (the model is a replay of the draft).
+
+## Review fixes (Opus review, before push)
+
+- **Decision reuse compares the whole value.** A decision recorded by a crashed attempt is reused only
+  if kind, edited payload and reason are identical; otherwise `ApprovalConflictError`. The graph is
+  resumed with exactly the recorded value, so the audit record and the persisted plan cannot differ.
+- **`startAt` and `nowIso` are per-run inputs.** `PlannerRuntime.start` always writes them (null when
+  absent), so a re-plan on a reused thread no longer inherits the previous run's ladder rung or "today".
+- **Calls that start nothing do not write.** `startPlan` looks the event up first; the waiting, stopped
+  and already-planned paths leave it untouched. The event is created or updated only when a new run
+  starts, and an update keeps earlier `Plan rejected: ...` lines. Rejection reasons are flattened to one
+  line, so the step is idempotent for multi-line reasons too.
+- **One run per thread across processes.** A lease in the operational `graph_locks` collection
+  (`src/graph/thread-lock.ts`): acquire is an upsert on `{ _id: key, expiresAt <= now }`, so a live lease
+  makes the insert collide on `_id` (11000 = busy); release expires the lease (no delete). `start`,
+  `resume` and `continue` take the thread's lease; `startPlan` also takes a lease on the brief's natural
+  key so two concurrent calls cannot both create the event. A busy thread raises `ThreadBusyError`;
+  `approvals list` shows it under RUNNING NOW instead of offering it for resume. Lease: 15 minutes, so a
+  crashed holder blocks that thread for at most that long.
 
 ## Retention: how and why
 

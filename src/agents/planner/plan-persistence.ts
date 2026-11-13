@@ -8,6 +8,7 @@ import type { ChecklistOutput } from './llm-schemas.js';
 import {
   eventInputFromBrief,
   eventPatchFromBrief,
+  rejectionNote,
   mapChecklistToTasks,
   taskNaturalKey,
 } from './mapping.js';
@@ -76,7 +77,7 @@ export class PlanPersistence {
       return { event: await this.events.insert(eventInputFromBrief(brief)), created: true };
     }
     const updated = await this.events.updateWithRetry(existing._id, (doc) =>
-      eventPatchFromBrief(brief, doc.phase),
+      eventPatchFromBrief(brief, doc.phase, doc.notes),
     );
     return { event: updated ?? existing, created: false };
   }
@@ -123,7 +124,7 @@ export class PlanPersistence {
    * event's notes once. The decision itself is persisted by the approvals service.
    */
   async recordRejection(eventId: string, reason: string): Promise<void> {
-    const line = `Plan rejected: ${reason.trim()}`;
+    const line = rejectionNote(reason);
     await this.events.updateWithRetry(eventId, (doc) => {
       const notes = doc.notes ?? '';
       return {

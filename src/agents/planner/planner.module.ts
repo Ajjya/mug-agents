@@ -14,13 +14,17 @@ import { EVENTS_REPOSITORY, type EventsRepository } from '../../repositories/eve
 import { RepositoriesModule } from '../../repositories/repositories.module.js';
 import { TASKS_REPOSITORY, type TasksRepository } from '../../repositories/tasks.repository.js';
 import type { BaseCheckpointSaver } from '@langchain/langgraph';
+import type { Db } from 'mongodb';
+import { MongoThreadLock } from '../../graph/thread-lock.js';
+import { MongoModule } from '../../mongo/mongo.module.js';
+import { MONGO_DB } from '../../mongo/tokens.js';
 import { PlanPersistence } from './plan-persistence.js';
 import { buildApprovalGraph } from './planner.graph.js';
 import { PlannerRuntime } from './planner.runtime.js';
 import { PLAN_PERSISTENCE, PlannerService } from './planner.service.js';
 
 @Module({
-  imports: [RepositoriesModule, ApprovalsStoreModule, CheckpointerModule],
+  imports: [MongoModule, RepositoriesModule, ApprovalsStoreModule, CheckpointerModule],
   providers: [
     {
       provide: PLAN_PERSISTENCE,
@@ -36,6 +40,7 @@ import { PLAN_PERSISTENCE, PlannerService } from './planner.service.js';
         PLAN_PERSISTENCE,
         CHECKPOINTER,
         CHECKPOINT_RETENTION,
+        MONGO_DB,
       ],
       useFactory: (
         call: StructuredCall,
@@ -43,10 +48,12 @@ import { PLAN_PERSISTENCE, PlannerService } from './planner.service.js';
         persistence: PlanPersistence,
         checkpointer: BaseCheckpointSaver,
         retention: CheckpointRetention,
+        db: Db,
       ) =>
         new PlannerRuntime(
           buildApprovalGraph({ call, gate, persistence }, checkpointer),
           retention,
+          new MongoThreadLock(db),
         ),
     },
     PlannerService,

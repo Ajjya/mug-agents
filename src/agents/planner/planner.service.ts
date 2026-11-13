@@ -6,6 +6,7 @@ import {
 } from '../../approvals/approvals.repository.js';
 import type { PlanReviewPayload } from '../../approvals/plan-review.payload.js';
 import type { Event } from '../../domain/event.schema.js';
+import { withLock } from '../../graph/thread-lock.js';
 import { threadIdFor } from '../../graph/thread.js';
 import { ProviderUnavailableError, StructuredOutputError } from '../../llm/errors.js';
 import type { LlmCallRecord } from '../../llm/model.types.js';
@@ -16,6 +17,13 @@ import { EventBriefSchema, type EventBrief } from './planner.state.js';
 import { computeMilestones } from './timeline.js';
 
 export const PLAN_PERSISTENCE = Symbol('PLAN_PERSISTENCE');
+
+/** Lock key for starting a plan from a brief: the event id if given, else its natural key. */
+function planKey(brief: EventBrief): string {
+  return brief.eventId
+    ? `plan-start:event:${brief.eventId.toLowerCase()}`
+    : `plan-start:${brief.date.slice(0, 10)}:${brief.theme.trim().toLowerCase()}`;
+}
 
 export class InvalidBriefError extends Error {
   constructor(public readonly issues: readonly string[]) {
@@ -107,35 +115,50 @@ export class PlannerService {
    *  - thread finished, tasks exist   -> already_planned (unless `replan`);
    *  - otherwise                      -> a new run on that thread.
    * A past date or an invalid brief is rejected before any lookup or model call. The event is
-   * created/updated first (idempotent): it is what the thread hangs off.
+   * created/updated only when a new run starts (it is what the thread hangs off); the paths that
+   * start nothing leave it untouched. Concurrent calls are serialised by a cross-process lease.
    */
   async startPlan(input: unknown, options: PlanStartOptions = {}): Promise<PlanStartResult> {
     const brief = this.parseBrief(input);
     computeMilestones(brief.date, options.now ?? new Date());
+    // Serialise "resolve the event, then start its thread" for the same brief across processes, so
+    // two concurrent calls cannot both create the event or both start a run.
+    return await withLock(this.runtime.lock, planKey(brief), () =>
+      this.startLocked(brief, options),
+    );
+  }
+
+  private async startLocked(
+    brief: EventBrief,
+    options: PlanStartOptions,
+  ): Promise<PlanStartResult> {
+    // Look before writing: the paths that start nothing must not touch the event either.
+    const existing = await this.persistence.findEvent(brief);
+    let callsBefore = 0;
+    if (existing) {
+      const threadId = threadIdFor(existing._id, 'plan');
+      const before = await this.runtime.inspect(threadId);
+      callsBefore = before.calls.length;
+      if (before.status === 'awaiting_decision') {
+        this.logger.log(`event ${existing._id} already has a plan waiting for a decision`);
+        return await this.result(existing, before, 0, true);
+      }
+      if (before.status === 'resumable') {
+        // The stopped run continues with the brief it started with (kept in its checkpoint).
+        this.logger.log(
+          `event ${existing._id}: continuing stopped thread at ${before.failedNode ?? '?'}`,
+        );
+        const view = await this.guard(threadId, () => this.runtime.continue(threadId));
+        return await this.result(existing, view, callsBefore, true);
+      }
+      if (!options.replan) {
+        const existingTasks = await this.persistence.agentTaskCount(existing._id);
+        if (existingTasks > 0) return { status: 'already_planned', event: existing, existingTasks };
+      }
+    }
+    // A new run starts: only now is the event created or brought up to date with the brief.
     const { event } = await this.persistence.upsertEvent(brief);
     const threadId = threadIdFor(event._id, 'plan');
-    const before = await this.runtime.inspect(threadId);
-
-    if (before.status === 'awaiting_decision') {
-      this.logger.log(`event ${event._id} already has a plan waiting for a decision`);
-      return await this.result(event, before, 0, true);
-    }
-    if (before.status === 'resumable') {
-      this.logger.log(
-        `event ${event._id}: continuing stopped thread at ${before.failedNode ?? '?'}`,
-      );
-      return await this.result(
-        event,
-        await this.guard(threadId, () => this.runtime.continue(threadId)),
-        before.calls.length,
-        true,
-      );
-    }
-
-    if (!options.replan) {
-      const existingTasks = await this.persistence.agentTaskCount(event._id);
-      if (existingTasks > 0) return { status: 'already_planned', event, existingTasks };
-    }
     const view = await this.guard(threadId, () =>
       this.runtime.start(threadId, {
         brief,
@@ -144,7 +167,7 @@ export class PlannerService {
         ...(options.startAt === undefined ? {} : { startAt: options.startAt }),
       }),
     );
-    return await this.result(event, view, before.calls.length, false);
+    return await this.result(event, view, callsBefore, false);
   }
 
   private async guard(threadId: string, run: () => Promise<ThreadView>): Promise<ThreadView> {

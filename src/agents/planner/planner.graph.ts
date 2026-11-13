@@ -65,7 +65,7 @@ export async function generateTimeline(
     throw new Error('generateTimeline ran before normaliseBrief');
   const r = await call(TimelineOutputSchema, timelinePrompt(state.brief, state.milestones), {
     node: 'generateTimeline',
-    ...(state.startAt === undefined ? {} : { startAt: state.startAt }),
+    ...(state.startAt === undefined || state.startAt === null ? {} : { startAt: state.startAt }),
   });
   return { timeline: r.value, calls: r.calls };
 }
@@ -82,7 +82,7 @@ export async function generateChecklist(
     checklistPrompt(state.brief, state.milestones, state.timeline),
     {
       node: 'generateChecklist',
-      ...(state.startAt === undefined ? {} : { startAt: state.startAt }),
+      ...(state.startAt === undefined || state.startAt === null ? {} : { startAt: state.startAt }),
     },
   );
   return { checklist: r.value, calls: r.calls };

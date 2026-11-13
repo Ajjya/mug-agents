@@ -13,6 +13,7 @@ import {
 } from '../../src/agents/planner/planner.graph.js';
 import { PlannerRuntime, type RetentionPort } from '../../src/agents/planner/planner.runtime.js';
 import { PlannerService } from '../../src/agents/planner/planner.service.js';
+import { InMemoryThreadLock, type ThreadLock } from '../../src/graph/thread-lock.js';
 import { ProviderUnavailableError } from '../../src/llm/errors.js';
 import type { LlmCallRecord } from '../../src/llm/model.types.js';
 import type { StructuredCall } from '../../src/llm/structured.js';
@@ -77,11 +78,14 @@ export interface Harness {
   behaviour: Behaviour;
   /** Every node the stub model was asked to run, in order. */
   modelCalls: string[];
+  /** The ladder start each model call was given (undefined = first rung). */
+  modelStartAts: (number | undefined)[];
 }
 
 export interface HarnessOptions {
   saver?: BaseCheckpointSaver;
   retention?: RetentionPort;
+  lock?: ThreadLock;
 }
 
 /**
@@ -96,6 +100,7 @@ export function buildHarness(repos: Repos, options: HarnessOptions = {}): Harnes
     checklist: undefined,
   };
   const modelCalls: string[] = [];
+  const modelStartAts: (number | undefined)[] = [];
   const record = (node: string): LlmCallRecord => ({
     node,
     model: 'ollama:stub',
@@ -109,6 +114,7 @@ export function buildHarness(repos: Repos, options: HarnessOptions = {}): Harnes
   });
   const call: StructuredCall = (_schema, _prompt, opts) => {
     modelCalls.push(opts.node);
+    modelStartAts.push(opts.startAt);
     if (behaviour.failNode === opts.node) {
       return Promise.reject(
         new ProviderUnavailableError(
@@ -146,6 +152,7 @@ export function buildHarness(repos: Repos, options: HarnessOptions = {}): Harnes
   const runtime = new PlannerRuntime(
     buildApprovalGraph({ call, gate, persistence }, saver),
     retention,
+    options.lock ?? new InMemoryThreadLock(),
   );
   return {
     repos,
@@ -156,5 +163,6 @@ export function buildHarness(repos: Repos, options: HarnessOptions = {}): Harnes
     retention,
     behaviour,
     modelCalls,
+    modelStartAts,
   };
 }

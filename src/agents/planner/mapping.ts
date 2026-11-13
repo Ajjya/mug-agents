@@ -5,6 +5,13 @@ import { type ChecklistOutput, normaliseTitle } from './llm-schemas.js';
 import type { EventBrief } from './planner.state.js';
 import type { Milestone } from './timeline.js';
 
+export const REJECTION_PREFIX = 'Plan rejected: ';
+
+/** One line, so the note stays a single, recognisable entry (multi-line reasons are flattened). */
+export function rejectionNote(reason: string): string {
+  return `${REJECTION_PREFIX}${reason.replace(/\s+/g, ' ').trim()}`;
+}
+
 /** Brief notes plus the co-host name (the brief has a name, not an organisation id). */
 function notesFrom(brief: EventBrief): string | undefined {
   const parts = [brief.notes?.trim(), brief.coHost ? `Co-host: ${brief.coHost}` : undefined].filter(
@@ -32,8 +39,17 @@ export function eventInputFromBrief(brief: EventBrief): EventInput {
  * Brief -> patch for an existing Event. The phase only moves idea -> planning: planning must never
  * drag an event that is already confirmed/published back to an earlier phase.
  */
-export function eventPatchFromBrief(brief: EventBrief, currentPhase: EventPhase): EventPatch {
-  const notes = notesFrom(brief);
+export function eventPatchFromBrief(
+  brief: EventBrief,
+  currentPhase: EventPhase,
+  currentNotes?: string,
+): EventPatch {
+  // Rejection reasons recorded by earlier runs are history: re-planning must not erase them.
+  const history = (currentNotes ?? '').split('\n').filter((l) => l.startsWith(REJECTION_PREFIX));
+  const merged = [notesFrom(brief), ...history].filter(
+    (p): p is string => p !== undefined && p !== '',
+  );
+  const notes = merged.length > 0 ? merged.join('\n') : undefined;
   return {
     theme: brief.theme,
     date: brief.date,

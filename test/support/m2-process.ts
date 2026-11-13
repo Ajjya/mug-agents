@@ -18,6 +18,7 @@ import {
   MongoApprovalRequestsRepository,
 } from '../../src/approvals/approvals.repository.js';
 import { createCheckpointer } from '../../src/graph/checkpointer.module.js';
+import { MongoThreadLock } from '../../src/graph/thread-lock.js';
 import { CheckpointRetention } from '../../src/graph/retention.js';
 import { MongoEventsRepository } from '../../src/repositories/events.repository.js';
 import { MongoTasksRepository } from '../../src/repositories/tasks.repository.js';
@@ -39,6 +40,7 @@ const repos = {
 const h = buildHarness(repos, {
   saver: createCheckpointer(client, db),
   retention: new CheckpointRetention(db, 30),
+  lock: new MongoThreadLock(db),
 });
 h.behaviour.failNode = process.env['STUB_FAIL_NODE'] || undefined;
 

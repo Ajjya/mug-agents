@@ -2,6 +2,7 @@ import { MemorySaver } from '@langchain/langgraph';
 import { PlanPersistence } from '../src/agents/planner/plan-persistence.js';
 import { buildApprovalGraph } from '../src/agents/planner/planner.graph.js';
 import { PlannerRuntime } from '../src/agents/planner/planner.runtime.js';
+import { InMemoryThreadLock } from '../src/graph/thread-lock.js';
 import { PlannerService } from '../src/agents/planner/planner.service.js';
 import { ApprovalRequestGate } from '../src/approvals/approval-gate.js';
 import { ApprovalsService } from '../src/approvals/approvals.service.js';
@@ -33,6 +34,7 @@ export function buildEvalServices(call: StructuredCall) {
       cancelExpiry: () => Promise.resolve(),
       inFlightThreadIds: () => Promise.resolve([]),
     },
+    new InMemoryThreadLock(),
   );
   return {
     events,

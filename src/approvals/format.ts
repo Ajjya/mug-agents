@@ -58,6 +58,10 @@ export function formatListing(listing: Listing): string {
     );
     out.push(`    resume with: npm run approvals -- resume ${t.threadId}`);
   }
+  if (listing.running.length > 0) {
+    out.push('', `RUNNING NOW (${String(listing.running.length)})`);
+    for (const t of listing.running) out.push(`  ${t.threadId}  (another process holds it)`);
+  }
   return out.join('\n');
 }
 

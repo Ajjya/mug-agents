@@ -47,9 +47,9 @@ export const PlannerStateSchema = z.object({
   // brief is validated explicitly in the normaliseBrief node anyway.
   brief: z.custom<EventBrief>().optional(),
   /** Injected "today", so runs (and tests) are reproducible. */
-  nowIso: z.string().optional(),
+  nowIso: z.string().nullable().optional(),
   /** Ladder index the model nodes start at (default 0). */
-  startAt: z.number().int().min(0).optional(),
+  startAt: z.number().int().min(0).nullable().optional(),
   milestones: z.array(MilestoneSchema).optional(),
   // nullable: a new run on a reused thread resets run-scoped fields to null (undefined means "no update").
   timeline: TimelineOutputSchema.nullable().optional(),

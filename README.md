@@ -219,6 +219,12 @@ npm run approvals -- resume <threadId>          # continue a stopped thread
 - **Threads.** One thread per event and purpose, `event:<eventId>:plan` (`src/graph/thread.ts`, parsed
   only there). Planning an event whose thread is waiting continues it; one that stopped is continued;
   a second thread for the same purpose cannot be built.
+- **One run per thread at a time, across processes**: a lease in `graph_locks` (released by expiring
+  it, 15-minute lifetime for a crashed holder). A second `plan`/`resume`/decision on a thread that is
+  running elsewhere gets "is being run by another process"; `approvals list` shows such threads under
+  RUNNING NOW.
+- Commands that start nothing (the plan is waiting, stopped, or already planned) do not write to the
+  event; a re-plan keeps earlier `Plan rejected: ...` notes.
 - Every graph node is safe to re-run: LangGraph re-executes an interrupted node from its start on
   resume (verified on the installed version). The approval node's request write is idempotent and
   `persistPlan` uses the M1 natural-key check.

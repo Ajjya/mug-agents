@@ -71,6 +71,8 @@ export interface Listing {
   pending: PendingRow[];
   /** Threads that stopped with work left and are not waiting on a human (failed nodes, orphans). */
   resumable: ThreadView[];
+  /** Threads being run by some process right now. */
+  running: ThreadView[];
 }
 
 export interface DecideResult {
@@ -95,6 +97,21 @@ const toValue = (d: ApprovalDecision): DecisionValue => {
       return DecisionValueSchema.parse({ decision: 'reject', reason: d.reason });
   }
 };
+
+/** Structural equality of two decision values (key order independent). */
+function sameDecision(a: DecisionValue, b: DecisionValue): boolean {
+  const canonical = (v: unknown): unknown =>
+    Array.isArray(v)
+      ? v.map(canonical)
+      : v && typeof v === 'object'
+        ? Object.fromEntries(
+            Object.entries(v as Record<string, unknown>)
+              .sort(([x], [y]) => x.localeCompare(y))
+              .map(([k, val]) => [k, canonical(val)]),
+          )
+        : v;
+  return JSON.stringify(canonical(a)) === JSON.stringify(canonical(b));
+}
 
 @Injectable()
 export class ApprovalsService {
@@ -123,8 +140,13 @@ export class ApprovalsService {
         };
       }),
     );
-    const resumable = (await this.runtime.inFlight()).filter((t) => t.status === 'resumable');
-    return { pending, resumable };
+    const inFlight = await this.runtime.inFlight();
+    return {
+      pending,
+      // A thread another process is running right now is not stopped, so it is not offered for resume.
+      resumable: inFlight.filter((t) => t.status === 'resumable' && t.running !== true),
+      running: inFlight.filter((t) => t.running === true),
+    };
   }
 
   async show(
@@ -167,7 +189,8 @@ export class ApprovalsService {
     this.logger.log(
       `approval ${request._id} ${parsed.decision} by ${decidedBy}; resuming ${request.threadId}`,
     );
-    const thread = await this.runtime.resume(request.threadId, parsed);
+    // Resume with exactly what is on record.
+    const thread = await this.runtime.resume(request.threadId, toValue(decision));
     return { request: decided, decision, thread };
   }
 
@@ -232,8 +255,10 @@ export class ApprovalsService {
   ): Promise<ApprovalDecision> {
     const existing = await this.decisions.findByRequestId(request._id);
     if (existing) {
-      // A previous attempt recorded it and died: reuse it if it is the same decision.
-      if (existing.decision !== value.decision) throw new ApprovalConflictError(request._id);
+      // A previous attempt recorded a decision and died before delivering it. Reuse it only if it is
+      // the SAME decision (kind, edited payload and reason): the audit record and what the graph is
+      // resumed with must never differ.
+      if (!sameDecision(toValue(existing), value)) throw new ApprovalConflictError(request._id);
       return existing;
     }
     try {
