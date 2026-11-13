@@ -1,6 +1,5 @@
 import { Module } from '@nestjs/common';
-import { ApprovalsStoreModule } from '../../approvals/approvals.module.js';
-import { APPROVALS_GATE } from '../../approvals/approvals.module.js';
+import { APPROVALS_GATE, ApprovalsStoreModule } from '../../approvals/approvals-store.module.js';
 import { PLANNER_RUNTIME } from '../../approvals/approvals.service.js';
 import type { ApprovalGate } from './planner.graph.js';
 import {

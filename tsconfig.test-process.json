@@ -1,0 +1,5 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": { "rootDir": ".", "outDir": "dist-m2proc", "sourceMap": false },
+  "include": ["src", "test/support/m2-process.ts"]
+}
