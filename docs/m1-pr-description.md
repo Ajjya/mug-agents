@@ -30,6 +30,27 @@ other, and that still needs the Zod check on top, buys nothing over prompt-only,
 `node --env-file=.env scripts/probe-format.mjs` (`PROBE_MODELS`, `PROBE_RUNS` tune it) if Ollama's
 behaviour changes.
 
+**Tool calling on six more models (same probe, same out-of-schema prompt, 3 runs each, 2026-11-13).**
+"Respected the enum" means the arguments parsed as JSON with `owner` inside the enum and a string `title`.
+
+| Model              | Tool call emitted | Arguments respected the enum | Notes                                                               |
+| ------------------ | ----------------- | ---------------------------- | ------------------------------------------------------------------- |
+| `mistral-large-4`  | 3/3               | 3/3                          | one call took 136 s (others 20-27 s)                                |
+| `minimax-m3`       | 3/3               | 3/3                          | 6-10 s per call                                                     |
+| `glm-5.3`          | 2/3               | 2/2                          | third run answered in prose, no tool call                           |
+| `nemotron-3-ultra` | 2/3               | 1/2                          | one run no tool call; one run emitted a call that violated the enum |
+| `gpt-oss:120b`     | 0/3               | n/a                          | `tool_choice` ignored, prose in `content`                           |
+| `kimi-k3`          | 0/3               | n/a                          | `tool_choice` ignored, prose in `content`                           |
+
+Reading: support is model-specific, not a property of the provider. Two models (`mistral-large-4`,
+`minimax-m3`) respected a forced tool schema every time; four did not, and one of those
+(`nemotron-3-ultra`) emitted a call whose arguments broke the enum. None of this shows server-side
+enforcement (a forced `tool_choice` that is ignored, or arguments outside the enum, is not what
+constrained decoding does): it looks like per-model tool-use training. Three runs per cell is a
+smell test, not a measurement. Per the brief, **no code or policy change** in this pass:
+`supportsToolSchema` stays unadded, and the ladder (`gemma4:31b`, `gpt-oss:20b`, `mistral-large-4`)
+still includes two models that ignore tools, so a provider-wide tool strategy would not help it.
+
 Consequences of prompt-only, as the spec prescribes:
 
 - `callStructured` puts the JSON Schema in the prompt; `OllamaProvider.constrainsOutput = false`.
