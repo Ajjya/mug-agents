@@ -119,6 +119,10 @@ const baseEnvSchema = z.object({
   LLM_MODEL_LADDER: modelLadderSchema,
   LLM_PRICES: pricesSchema,
   LLM_TIMEOUT_MS: z.coerce.number().int().min(1).default(60_000),
+  /** Days a *completed* thread's checkpoints are kept. Paused or failed threads never expire. */
+  CHECKPOINT_TTL_DAYS: z.coerce.number().int().min(1).default(30),
+  /** Who approvals are recorded as when the CLI is not given --by. No auth yet: recorded as-is. */
+  APPROVER_NAME: z.string().trim().min(1).optional(),
   /**
    * Total provider calls per structured call. Default: ATTEMPTS_PER_RUNG x ladder length. Must be
    * large enough that every rung is reachable (checked below).
