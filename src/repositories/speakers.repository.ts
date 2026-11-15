@@ -2,6 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import type { Db } from 'mongodb';
 import { type EntityId, isEntityId, toObjectId } from '../domain/common.js';
 import {
+  SPEAKER_HANDLE_RE,
   SpeakerInputSchema,
   SpeakerPatchSchema,
   SpeakerSchema,
@@ -26,6 +27,8 @@ export interface SpeakersRepository extends Repository<SpeakerInput, Speaker, Sp
   findByEmail(email: string): Promise<Speaker | null>;
   /** Speakers that have a `perEvent` entry for the event. Malformed ids match nothing. */
   findByEventId(eventId: EntityId, options?: FindManyOptions): Promise<Page<Speaker>>;
+  /** By the stable handle a seed file or corpus manifest uses. Null when unknown or malformed. */
+  findByHandle(handle: string): Promise<Speaker | null>;
 }
 
 /** The same normalisation the schema applies on write (trim/lower-case + format check). */
@@ -58,5 +61,11 @@ export class MongoSpeakersRepository
   async findByEventId(eventId: EntityId, options?: FindManyOptions): Promise<Page<Speaker>> {
     if (!isEntityId(eventId)) return { items: [] };
     return this.findWhere({ 'perEvent.eventId': toObjectId(eventId) }, options);
+  }
+
+  async findByHandle(handle: string): Promise<Speaker | null> {
+    if (typeof handle !== 'string' || !SPEAKER_HANDLE_RE.test(handle)) return null;
+    const page = await this.findWhere({ handle }, { limit: 1 });
+    return page.items[0] ?? null;
   }
 }

@@ -27,9 +27,16 @@ export const SpeakerEventStatusSchema = z
   })
   .strict();
 
+/** Stable, database-independent key (e.g. `ana-ferreira`): what a seed file and a corpus manifest use. */
+export const SPEAKER_HANDLE_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
 export const SpeakerInputSchema = z
   .object({
     name: nonEmpty,
+    handle: z
+      .string()
+      .regex(SPEAKER_HANDLE_RE, 'must be a lower-case slug like "ana-ferreira"')
+      .optional(),
     // Lower-cased so the unique index on email is effectively case-insensitive.
     email: z.email().toLowerCase().optional(),
     topics: z.array(nonEmpty),

@@ -1,0 +1,38 @@
+The sample corpus in `corpus/sample/` is FICTION, not MUG history: every person, company, event and talk in it is invented.
+
+# Corpus
+
+Material the retrieval layer (M3) searches: past event pages, posts, talk abstracts and notes, as files.
+
+```
+corpus/
+  sample/                 committed, fictional; makes tests and evals run in a fresh clone
+    manifest.json         one entry per file (required)
+    speakers.seed.json    exactly the speakers the sample documents reference
+    events/ posts/ abstracts/ notes/
+  private/                the real corpus and the real speaker seed; git-ignored as a whole
+```
+
+Both roots have the same layout; every command takes the root as an argument (`--corpus corpus/private`).
+
+## manifest.json
+
+```json
+{ "documents": [
+  { "path": "abstracts/x.md", "kind": "abstract", "classification": "public",
+    "date": "2026-03-12", "speaker": "zara-quillfeather", "sourceUrl": "https://...",
+    "eventId": "...", "organisationId": "..." }
+] }
+```
+
+- `kind`: `event | post | abstract | note | host_note`.
+- `classification`: `public | personal` (mandatory). A `public` search never returns `personal` chunks.
+- `speaker`: the speaker's **handle** from `speakers.seed.json`, not a database id, so a manifest works
+  against any database. Ingestion resolves it to the speaker's id (read-only) and fails if it is unknown.
+- Ingestion fails loudly on a file with no manifest entry or an entry with no file.
+
+## speakers.seed.json
+
+`{ "speakers": [ { "handle", "name", "topics", "links", "perEvent" } ] }`. No email addresses in git.
+Seeded by `npm run seed-speakers -- --corpus <root>`, idempotent by handle. Seeding fails if the manifest
+references a handle the seed does not define.

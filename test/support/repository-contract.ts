@@ -369,6 +369,22 @@ export function speakersContract(create: Factory<SpeakersRepository>): void {
         expect(await repo.findById(b._id)).toEqual(b);
       });
 
+      it('findByHandle finds by the stable handle; a duplicate handle is a DuplicateKeyError', async () => {
+        const ana = await repo.insert(speakerInput({ name: 'Ana', handle: 'ana-test' }));
+        await repo.insert(speakerInput({ name: 'No handle' }));
+        await repo.insert(speakerInput({ name: 'Also no handle' }));
+        expect((await repo.findByHandle('ana-test'))?._id).toBe(ana._id);
+        expect(await repo.findByHandle('nobody')).toBeNull();
+        expect(await repo.findByHandle('Not A Slug')).toBeNull();
+        expect(await repo.findByHandle({ $ne: 'x' } as never)).toBeNull();
+        await expect(
+          repo.insert(speakerInput({ name: 'Other', handle: 'ana-test' })),
+        ).rejects.toBeInstanceOf(DuplicateKeyError);
+        await expect(repo.insert(speakerInput({ handle: 'Bad Handle' }))).rejects.toBeInstanceOf(
+          z.ZodError,
+        );
+      });
+
       it('allows any number of speakers without an email', async () => {
         await repo.insert(speakerInput({ name: 'No email 1' }));
         await repo.insert(speakerInput({ name: 'No email 2' }));

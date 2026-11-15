@@ -99,6 +99,47 @@ export const minAttemptsToReachAllRungs = (rungs: number): number =>
 /** Default budget: every rung gets its full share. */
 export const defaultMaxAttempts = (rungs: number): number => ATTEMPTS_PER_RUNG * rungs;
 
+/** Embedding providers the registry can build. Local only, by decision (see docs/data-handling.md). */
+export const EMBEDDING_PROVIDERS = ['ollama-local'] as const;
+export type EmbeddingProviderName = (typeof EMBEDDING_PROVIDERS)[number];
+
+export interface EmbedderRef {
+  provider: EmbeddingProviderName;
+  model: string;
+}
+
+export const formatEmbedderRef = (ref: EmbedderRef): string => `${ref.provider}:${ref.model}`;
+
+/** `ollama-local:nomic-embed-text,ollama-local:other` -> refs. Unknown provider or duplicates rejected. */
+export const embedderListSchema = z.string().transform((value, ctx) => {
+  const refs: EmbedderRef[] = [];
+  for (const part of value
+    .split(',')
+    .map((p) => p.trim())
+    .filter(Boolean)) {
+    const idx = part.indexOf(':');
+    const provider = idx === -1 ? part : part.slice(0, idx);
+    const model = idx === -1 ? '' : part.slice(idx + 1);
+    if (!(EMBEDDING_PROVIDERS as readonly string[]).includes(provider) || model === '') {
+      ctx.addIssue({
+        code: 'custom',
+        message: `"${part}" is not <${EMBEDDING_PROVIDERS.join('|')}>:<model>`,
+      });
+      return z.NEVER;
+    }
+    refs.push({ provider: provider as EmbeddingProviderName, model });
+  }
+  const names = refs.map(formatEmbedderRef);
+  if (refs.length === 0 || new Set(names).size !== names.length) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'must list at least one embedder, without duplicates',
+    });
+    return z.NEVER;
+  }
+  return refs;
+});
+
 const baseEnvSchema = z.object({
   NODE_ENV: z.enum(NODE_ENVS).default('development'),
   PORT: z.coerce.number().int().min(1).max(65535).default(3000),
@@ -121,6 +162,18 @@ const baseEnvSchema = z.object({
   LLM_TIMEOUT_MS: z.coerce.number().int().min(1).default(60_000),
   /** Days a *completed* thread's checkpoints are kept. Paused or failed threads never expire. */
   CHECKPOINT_TTL_DAYS: z.coerce.number().int().min(1).default(30),
+  /** Local Ollama, used for EMBEDDINGS ONLY (generation stays on Ollama Cloud). */
+  OLLAMA_LOCAL_BASE_URL: z.url().default('http://127.0.0.1:11434'),
+  /** The embedding model the service uses. Every chunk records it; a different model is refused at query time. */
+  EMBEDDING_MODEL: z.string().trim().min(1).default('nomic-embed-text'),
+  /** Embedders the retrieval eval compares (a matrix dimension, like the model ladder). Default: EMBEDDING_MODEL. */
+  EVAL_EMBEDDERS: embedderListSchema.optional(),
+  /** Which store the service searches: brute-force cosine in Node, or a $vectorSearch index. */
+  RETRIEVAL_STORE: z.enum(['bruteforce', 'atlas']).default('bruteforce'),
+  /** A MongoDB with Search (mongodb-atlas-local) for the Atlas arm of the eval and its opt-in tests. */
+  ATLAS_LOCAL_URI: z.string().min(1).optional(),
+  /** Cosine below this is "not relevant": returned as nothing, never as the least-bad hit. */
+  VECTOR_MIN_SCORE: z.coerce.number().min(-1).max(1).default(0.6),
   /** Who approvals are recorded as when the CLI is not given --by. No auth yet: recorded as-is. */
   APPROVER_NAME: z.string().trim().min(1).optional(),
   /**

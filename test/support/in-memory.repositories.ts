@@ -38,6 +38,7 @@ import {
   type OrganisationKind,
 } from '../../src/domain/organisation.schema.js';
 import {
+  SPEAKER_HANDLE_RE,
   SpeakerInputSchema,
   SpeakerPatchSchema,
   SpeakerSchema,
@@ -233,13 +234,16 @@ export class InMemorySpeakersRepository
   constructor() {
     super({ input: SpeakerInputSchema, doc: SpeakerSchema, patch: SpeakerPatchSchema });
   }
-  /** MongoDB enforces this with the unique sparse index on email. */
+  /** MongoDB enforces these with the unique sparse indexes on email and handle. */
   protected override beforeWrite(next: Speaker): void {
-    if (next.email === undefined) return;
-    const clash = this.all().some((s) => s._id !== next._id && s.email === next.email);
-    if (clash) throw new DuplicateKeyError('speakers', { email: 1 });
+    const others = this.all().filter((s) => s._id !== next._id);
+    if (next.email !== undefined && others.some((s) => s.email === next.email)) {
+      throw new DuplicateKeyError('speakers', { email: 1 });
+    }
+    if (next.handle !== undefined && others.some((s) => s.handle === next.handle)) {
+      throw new DuplicateKeyError('speakers', { handle: 1 });
+    }
   }
-
   async findByEmail(email: string): Promise<Speaker | null> {
     const normalised = normaliseEmail(email);
     if (normalised === null) return null;
@@ -252,6 +256,10 @@ export class InMemorySpeakersRepository
     if (!isEntityId(eventId)) return { items: [] };
     const id = eventId.toLowerCase();
     return this.where((d) => d.perEvent.some((p) => p.eventId.toLowerCase() === id), options);
+  }
+  async findByHandle(handle: string): Promise<Speaker | null> {
+    if (typeof handle !== 'string' || !SPEAKER_HANDLE_RE.test(handle)) return null;
+    return this.where((d) => d.handle === handle, { limit: 1 }).items[0] ?? null;
   }
 }
 

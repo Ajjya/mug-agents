@@ -1,0 +1,70 @@
+{
+  "documents": [
+    {
+      "path": "abstracts/change-streams-in-production.md",
+      "kind": "abstract",
+      "classification": "public",
+      "date": "2026-03-12",
+      "speaker": "zara-quillfeather"
+    },
+    {
+      "path": "abstracts/sharding-without-tears.md",
+      "kind": "abstract",
+      "classification": "public",
+      "date": "2026-03-12",
+      "speaker": "otto-brambleworth"
+    },
+    {
+      "path": "abstracts/vectors-for-the-curious.md",
+      "kind": "abstract",
+      "classification": "public",
+      "date": "2026-06-18",
+      "speaker": "mira-vantablack"
+    },
+    {
+      "path": "abstracts/modelling-for-reads.md",
+      "kind": "abstract",
+      "classification": "public",
+      "date": "2026-06-18",
+      "speaker": "ignatius-fogwhistle"
+    },
+    {
+      "path": "abstracts/time-series-for-ovens.md",
+      "kind": "abstract",
+      "classification": "public",
+      "date": "2026-09-17",
+      "speaker": "pip-lanternfield"
+    },
+    {
+      "path": "events/2026-03-spring-meetup.md",
+      "kind": "event",
+      "classification": "public",
+      "date": "2026-03-12",
+      "sourceUrl": "https://example.invalid/mug-sample/events/spring"
+    },
+    {
+      "path": "posts/2026-03-spring-recap.md",
+      "kind": "post",
+      "classification": "public",
+      "date": "2026-03-14"
+    },
+    {
+      "path": "posts/community-update.md",
+      "kind": "post",
+      "classification": "public",
+      "date": "2026-04-02"
+    },
+    {
+      "path": "notes/host-grommet-and-sprocket.md",
+      "kind": "host_note",
+      "classification": "public",
+      "date": "2026-03-13"
+    },
+    {
+      "path": "notes/attendee-question.md",
+      "kind": "note",
+      "classification": "personal",
+      "date": "2026-03-13"
+    }
+  ]
+}

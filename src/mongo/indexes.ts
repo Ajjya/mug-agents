@@ -21,7 +21,10 @@ export const INDEXES: Record<CollectionName, IndexDescription[]> = {
     { key: { date: 1 }, name: 'events_date' },
     { key: { phase: 1 }, name: 'events_phase' },
   ],
-  speakers: [{ key: { email: 1 }, name: 'speakers_email_unique', unique: true, sparse: true }],
+  speakers: [
+    { key: { email: 1 }, name: 'speakers_email_unique', unique: true, sparse: true },
+    { key: { handle: 1 }, name: 'speakers_handle_unique', unique: true, sparse: true },
+  ],
   organisations: [{ key: { kind: 1 }, name: 'organisations_kind' }],
   tasks: [
     { key: { status: 1, dueAt: 1 }, name: 'tasks_status_dueAt' },
