@@ -23,6 +23,16 @@ export default defineConfig({
           testTimeout: 30_000,
         },
       },
+      {
+        // Opt-in only (npm run test:atlas): needs mongodb-atlas-local running. Not part of npm test.
+        extends: true,
+        test: {
+          name: 'atlas',
+          include: ['test/atlas/**/*.test.ts'],
+          hookTimeout: 180_000,
+          testTimeout: 60_000,
+        },
+      },
     ],
   },
 });

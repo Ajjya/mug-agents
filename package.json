@@ -14,13 +14,20 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "test:unit": "vitest run test/unit",
-    "test": "vitest run",
+    "test": "vitest run --project unit --project integration",
     "start:build": "npm run build && npm start",
     "build:scripts": "tsc -p tsconfig.scripts.json",
     "plan": "npm run build:scripts --silent && node --env-file-if-exists=.env dist-scripts/scripts/plan.js",
     "eval": "npm run build:scripts --silent && node --env-file-if-exists=.env dist-scripts/evals/run.js",
     "reset-dev-db": "npm run build:scripts --silent && node --env-file-if-exists=.env dist-scripts/scripts/reset-dev-db.js",
-    "approvals": "npm run build:scripts --silent && node --env-file-if-exists=.env dist-scripts/scripts/approvals.js"
+    "approvals": "npm run build:scripts --silent && node --env-file-if-exists=.env dist-scripts/scripts/approvals.js",
+    "test:atlas": "vitest run --project atlas",
+    "atlas:up": "node scripts/atlas-local.mjs up",
+    "ingest": "npm run build:scripts --silent && node --env-file-if-exists=.env dist-scripts/scripts/ingest.js",
+    "seed-speakers": "npm run build:scripts --silent && node --env-file-if-exists=.env dist-scripts/scripts/seed-speakers.js",
+    "search": "npm run build:scripts --silent && node --env-file-if-exists=.env dist-scripts/scripts/search.js",
+    "suggest-speakers": "npm run build:scripts --silent && node --env-file-if-exists=.env dist-scripts/scripts/suggest-speakers.js",
+    "eval:retrieval": "npm run build:scripts --silent && node --env-file-if-exists=.env dist-scripts/evals/retrieval/run.js"
   },
   "dependencies": {
     "@langchain/core": "^1.3.6",

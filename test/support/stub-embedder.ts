@@ -13,7 +13,7 @@ export class StubEmbedder implements Embedder {
   calls = 0;
   constructor(
     readonly model = 'stub-embed',
-    private readonly dim = 64,
+    private readonly dim = 256,
   ) {
     this.ref = `ollama-local:${model}`;
   }
