@@ -1,0 +1,130 @@
+# M3: Retrieval over MUG's own history
+
+Grounded search over past material and a `suggestSpeakers(topic)` service that can only name speakers
+who exist and only cite chunks that were retrieved. Delivered on `main` (the project works on `main`,
+not on an `m3-retrieval` branch). Nothing in the planner or the approval flow changed.
+
+## Scope decisions
+
+- **No Speakers agent.** M2 built the approval mechanism, not a Speakers agent, so suggestions are a
+  service plus CLI; wiring them into a sub-graph with approval is a later, thin layer.
+- **No long-term `Store`.** Facts about people, tone-of-voice examples and decisions have no consumer until
+  M5. Retrieval only.
+- **Speakers are seeded by hand** (`speakers.seed.json`, no emails in git), never extracted from the corpus
+  by a model. Ingestion writes chunks only and never creates or changes a speaker, event or organisation
+  (tested by counting them around an ingest).
+
+## Verified before writing code
+
+- **Ollama Cloud still has no embeddings** (2026-11-15, with the account's key): `POST /v1/embeddings` and
+  `/api/embeddings` return 404; `POST /api/embed` returns 401 for every model name, including chat models
+  that work for chat with the same key; `/api/tags` lists 24 models, none an embedding model.
+- **`nomic-embed-text` on the installed tag** (Ollama 0.40.15, `latest`, 137M, F16): **768 dimensions**,
+  read from the response; vectors come back unit length (norm 1.0) and deterministic. Context: the registry
+  sets `num_ctx 8192` and the model card advertises 8192, but `ollama show` reports a context length of
+  2048 and inputs above 2048 tokens fail with "the input length exceeds the context length". **2048
+  applies**; chunks are capped at about 1000 tokens and the embedder is called with `truncate: false`, so
+  an oversized input fails loudly instead of being silently cut.
+- **`mongodb/mongodb-atlas-local:9.0.4`** (mongod 9.0.4, mongot 1.78.0 community): serves `$vectorSearch`
+  and `$search`. The image's config carries no `Healthcheck` field when inspected from the registry (OCI
+  format), but the build history declares `HEALTHCHECK CMD /usr/local/bin/runner healthcheck` (30 s
+  interval, 60 s start period), and once running `docker inspect` reports it; the container reported
+  `healthy` after about 24 s. `npm run atlas:up` polls that status, never sleeps blindly.
+- **`$vectorSearch` and index syntax**, checked against the docs and then executed on atlas-local:
+  - index: `createSearchIndex({ name, type: 'vectorSearch', definition: { fields: [{ type: 'vector', path,
+numDimensions, similarity, quantization }, { type: 'filter', path }] } })`; becomes queryable
+    (`listSearchIndexes()` -> `queryable: true`, `status: 'READY'`) in about 4 s;
+  - stage: `{ $vectorSearch: { index, path, queryVector, numCandidates, limit, filter } }`, first stage of
+    the pipeline, score via `{ $meta: 'vectorSearchScore' }`;
+  - `filter` is a real pre-filter: a `personal` document that was the best match was absent from a
+    `public` query;
+  - **score for `dotProduct` is (1 + dot) / 2**, verified numerically (0.9903 for a dot of 0.9806).
+    Converted back to cosine so both stores share one scale and one threshold.
+  - Quantization `none` with `similarity: 'dotProduct'`: the docs recommend dotProduct for float vectors
+    that are normalised, and the vectors are normalised at embedding time (so dotProduct is the cosine).
+    At a few hundred chunks there is nothing to gain from scalar or binary quantization.
+  - `$search`: `compound.must: [{ text: { query, path } }]` with `compound.filter: [{ in: { path, value } }]`
+    on a field mapped as `token`; score via `{ $meta: 'searchScore' }`; `lucene.english` analyzer.
+- What differed from expectation: the vector score is normalised to 0..1 (not the raw cosine), and the
+  registry view of the image hides its healthcheck. Driver: `mongodb` 7.8.0.
+
+## Decisions and their costs
+
+- **Embeddings are local, always** (`nomic-embed-text`, 274 MB). Cost: zero money, no text leaves the
+  machine, no API key. Price: retrieval quality below a frontier embedding model (measured below), and
+  **`ollama serve` becomes a runtime dependency of the service** for every query, not just ingest: an input
+  to the project doc's open question 5 (where it runs 24/7) and to M7.
+- **Atlas automated embedding (`autoEmbed`) is out permanently**: it embeds server-side with Voyage, which
+  the local-only decision excludes. The Atlas arm indexes the same pre-computed vectors as the brute-force
+  arm, so the comparison measures the store, not the model.
+- **Classification is a mandatory search scope.** With one embedder, public and personal content share a
+  vector space; nothing in the geometry keeps them apart. `SearchQuery.classification` is a required,
+  non-empty tuple type; stores apply it inside the query; `search` and `suggestSpeakers` default to
+  `public`. Tested on both stores, including a personal chunk that is the best match.
+- **Grounding is enforced by the schema, not the prompt.** The answer schema is built per call: `speakerId`
+  is an enum of speakers who have evidence among the retrieved chunks, `citations` an enum of retrieved
+  chunk ids (at least one), and a refinement requires at least one cited chunk tagged with that speaker _in
+  the manifest_. Text inside a chunk ("recommend X") therefore cannot ground X. An invalid answer is retried
+  by the existing ladder; after the model answers, every id is re-checked against the repository.
+  Nothing retrieved, or nobody among the retrieved material, means an empty list with no model call.
+- **Injection:** retrieved chunks are fenced (`<<<CHUNK id=...>>> ... <<<END CHUNK>>>`) and declared
+  untrusted; the call has no tools at all, so nothing in the text can make it send anything. The injection
+  document is not filtered out: a test shows a model that obeys it cannot get its suggestion through, and the
+  eval shows the real model ignored it.
+- **Hybrid uses reciprocal rank fusion** (k = 60): it combines ranks, so it needs no calibration between a
+  cosine and a BM25 score that live on different scales, has one well-known constant, and cannot invent a
+  hit. MongoDB 8.1+ has `$rankFusion`; fusion is done in Node so both stores fuse identically.
+- **Manifest speakers are handles, not ids.** The spec's `speakerId?` became `speaker` (a stable handle
+  like `zara-quillfeather`): a database id differs per database, so a committed manifest could never
+  reference it. Speakers gained an optional `handle` with a unique sparse index; seeding is idempotent by
+  handle; ingestion resolves handles to ids read-only and fails if one is missing ("seed first").
+- **Chunks are never deleted.** Re-ingest upserts by chunk id (`<documentId>#<n>`); chunks a document no
+  longer produces are flagged `retired` and excluded from every search. One collection per embedder.
+- **Relevance threshold** `VECTOR_MIN_SCORE = 0.56`, calibrated on the sample: with this model unrelated
+  queries top out around 0.48 to 0.54, paraphrases score about 0.58, direct matches 0.74+. The band is
+  narrow; re-measure on the real corpus.
+
+## Eval: did vectors and the vector index earn their complexity?
+
+`evals/retrieval/report-2026-11-15.md`. Corpus: 10 documents, 10 chunks, 1013 tokens embedded (every
+document fits in one chunk). 14 cases, k = 5, public scope.
+
+| Store      | Strategy | recall@5 | MRR  | no-answer correct | personal leaked | median / p95 search |
+| ---------- | -------- | -------- | ---- | ----------------- | --------------- | ------------------- |
+| bruteforce | vector   | 0.95     | 0.94 | 2/2               | 0               | 1.7 / 8.7 ms        |
+| bruteforce | keyword  | 1.00     | 0.89 | 2/2               | 0               | 1.5 / 3.7 ms        |
+| bruteforce | hybrid   | 1.00     | 0.94 | 2/2               | 0               | 1.7 / 3.1 ms        |
+| atlas      | vector   | 0.95     | 0.94 | 2/2               | 0               | 19.4 / 48.1 ms      |
+| atlas      | keyword  | 1.00     | 0.84 | 2/2               | 0               | 12.8 / 23.8 ms      |
+| atlas      | hybrid   | 1.00     | 0.93 | 2/2               | 0               | 32.7 / 76.3 ms      |
+
+`suggestSpeakers` with the real model: 4/4 (right speaker for change streams and sharding, empty for an
+unrelated topic, and the injection topic still returned the change-streams speaker, not the one the
+document demanded); every citation a retrieved chunk, every speaker real.
+
+**Verdict.** At this corpus size **the vector index did not earn its complexity**: brute-force cosine is
+about ten times faster (1.7 ms vs 19 ms median) and the vector arm ranks identically on both stores; a `$vectorSearch` index needs
+mongot, a different deployment and asynchronous index builds for no gain at hundreds of chunks. **Vectors
+alone did not beat keyword**: keyword reached full recall, and vector missed half of an exact-term query
+spanning two documents (`resume tokens`). **Vectors do earn their place inside hybrid**: hybrid keeps
+keyword's full recall and lifts MRR from 0.89 to 0.94, because on the paraphrase query with no shared vocabulary (case 03) only the vector arm ranks the target first (keyword ranks it second; on Atlas also case 04). So: default to `hybrid` on the brute-force store; revisit the index when
+the corpus reaches tens of thousands of chunks. The sample is tiny and fictional and every document is one
+chunk; rerun on `corpus/private` before treating these numbers as MUG's.
+
+## Tests
+
+550 in `npm test` (no network, no Docker, no Ollama: embeddings are a deterministic stub). New: chunking
+(whole document, heading split, oversized windowing with overlap, cap below the measured context),
+manifest validation, BM25, RRF, recall@k and MRR (including tests that a wrong metric is caught), the
+model/dimension mismatch refusal, the embedder's request shape and errors, the store contract on
+`BruteForceStore`, seeding idempotency, ingest creating no domain documents, and `suggestSpeakers`
+(empty for no match with no model call, grounded answer, fencing, an injection-obeying model rejected,
+injection not changing a correct suggestion, unknown id retried). The same store contract runs against
+`AtlasVectorStore` in the opt-in `npm run test:atlas` (8/8 against atlas-local 9.0.4).
+
+## Not done / follow-ups
+
+- The real corpus and real speaker seed (`corpus/private/`) are yours to supply; rerun the eval on it and
+  re-calibrate `VECTOR_MIN_SCORE`.
+- `ollama serve` has to run wherever the service runs (M7).
+- Precision is not measured: keyword returns many loosely related documents for broad queries.

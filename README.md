@@ -41,6 +41,12 @@ with a list of every problem.
 | `LLM_TIMEOUT_MS`         | no                  | `60000`                                                       | Per provider call                                                                                            |
 | `CHECKPOINT_TTL_DAYS`    | no                  | `30`                                                          | Days a finished thread's checkpoints are kept; paused/failed threads never expire                            |
 | `APPROVER_NAME`          | no                  | OS user                                                       | Recorded as the decider when `approvals` has no `--by`                                                       |
+| `OLLAMA_LOCAL_BASE_URL`  | no                  | `http://127.0.0.1:11434`                                      | Local Ollama, for embeddings only                                                                            |
+| `EMBEDDING_MODEL`        | no                  | `nomic-embed-text`                                            | Local embedding model; recorded on every chunk                                                               |
+| `EVAL_EMBEDDERS`         | no                  | `ollama-local:<EMBEDDING_MODEL>`                              | Embedders the retrieval eval compares                                                                        |
+| `RETRIEVAL_STORE`        | no                  | `bruteforce`                                                  | `bruteforce` or `atlas`                                                                                      |
+| `ATLAS_LOCAL_URI`        | no                  | –                                                             | mongodb-atlas-local, for the Atlas arm of tests and eval                                                     |
+| `VECTOR_MIN_SCORE`       | no                  | `0.56`                                                        | Cosine below this is not relevant (calibrated on the sample)                                                 |
 | `LLM_MAX_ATTEMPTS`       | no                  | 2 × ladder length                                             | Total provider calls per structured call; must let every rung be reached (3 rungs need ≥ 5), else boot fails |
 
 `process.env` is read only in `src/config/config.module.ts`.
@@ -260,6 +266,87 @@ domain data (events, tasks, approvals); checkpoints are the exception because th
   delete code in `src/`; MongoDB does the removal, so the no-delete test is untouched.
 - `npm run reset-dev-db` drops checkpoint state too, and its output names the unfinished threads it
   discarded.
+
+## Retrieval over MUG's own history (M3)
+
+Searches past event pages, posts, talk abstracts and notes, and suggests speakers with citations.
+Retrieval only: no long-term memory store, no Speakers agent yet (see `docs/m3-pr-description.md`).
+
+### Corpus and speakers
+
+The corpus is files, not APIs: `corpus/sample/` (committed, **fictional**) and `corpus/private/` (the
+real material, git-ignored). Layout and the `manifest.json` format are in [corpus/README.md](corpus/README.md).
+Ingestion fails on a file without a manifest entry, an entry without a file, or a missing classification.
+
+```bash
+npm run seed-speakers -- --corpus corpus/sample   # idempotent by handle; seeds BEFORE ingest
+npm run ingest -- --corpus corpus/sample          # chunks + local embeddings; writes chunks only
+```
+
+Speakers are seeded by hand from `speakers.seed.json` (no emails in git), never extracted from the
+corpus by a model. Ingestion only _reads_ speakers (to stamp `speakerId` on their chunks) and never
+creates or changes a speaker, event or organisation.
+
+### Embeddings: local, always
+
+`ollama serve` must be running wherever the service runs: it is needed for every query, not just at
+ingest. Generation stays on Ollama Cloud; embeddings never leave the machine.
+
+```bash
+ollama serve &              # if the desktop app is not already running it
+ollama pull nomic-embed-text
+```
+
+`nomic-embed-text` returns 768-dimensional vectors; its effective context on the installed tag is
+**2048 tokens** (longer input is refused), so chunks are capped at about 1000 tokens. Every chunk records
+its model and dimension, and a query from a different model or dimension is refused.
+
+### Search and speaker suggestions
+
+```bash
+npm run search -- "change streams" [--kind abstract] [--strategy vector|keyword|hybrid] [--classification public]
+npm run suggest-speakers -- "change streams"
+```
+
+- Strategies: `keyword` (BM25 in Node / MongoDB Search text on Atlas), `vector` (cosine), `hybrid`
+  (reciprocal rank fusion of both; the default).
+- Every search has an explicit classification scope; the default is `public`.
+- Nothing relevant means **nothing returned**, never the least-bad hit (`VECTOR_MIN_SCORE`, default 0.56).
+- `suggest-speakers` only names speakers who exist and who have their own chunk among the retrieved
+  evidence; every suggestion cites chunk ids. Retrieved text is fenced as untrusted data, and the model
+  call has no tools.
+
+### Stores
+
+| `RETRIEVAL_STORE`      | What                                           | Needs                                         |
+| ---------------------- | ---------------------------------------------- | --------------------------------------------- |
+| `bruteforce` (default) | chunks in a MongoDB collection, cosine in Node | any mongod                                    |
+| `atlas`                | `$vectorSearch` + `$search` indexes            | Atlas or `mongodb/mongodb-atlas-local` (9.0+) |
+
+Chunks live in one collection per embedder (`chunks__ollama_local_nomic_embed_text`); a document's chunks
+that are no longer produced are flagged `retired`, never deleted.
+
+### Running the Atlas arm locally (opt-in)
+
+```bash
+npm run atlas:up       # docker run mongodb/mongodb-atlas-local:9.0.4 on :27018, waits for the image's healthcheck
+ATLAS_LOCAL_URI='mongodb://127.0.0.1:27018/?directConnection=true' npm run test:atlas
+```
+
+`npm test` never needs Docker or Ollama; the Atlas tests are a separate Vitest project and skip unless
+`ATLAS_LOCAL_URI` is set and the container reports healthy. Remove the container with
+`docker rm -f mug-atlas-local`.
+
+### Retrieval eval
+
+```bash
+ATLAS_LOCAL_URI='mongodb://127.0.0.1:27018/?directConnection=true' npm run eval:retrieval
+```
+
+Writes `evals/retrieval/report-<date>.md`: every (embedder x store x strategy) arm with recall@k, MRR,
+no-answer correctness, forbidden (personal) documents returned, latency and corpus size; plus
+`suggestSpeakers` grounding with the real model. Uses the `mug_retrieval_eval` database. The embedder is
+a matrix dimension (`EVAL_EMBEDDERS`), one value today.
 
 ## Design notes
 
