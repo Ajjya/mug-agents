@@ -15,7 +15,8 @@ import { SpeakerSuggester, suggestPrompt } from '../../src/retrieval/suggest-spe
 import { openTestMongo, type TestMongo } from '../support/mongo-test.js';
 import { SAMPLE, STUB_MIN_SCORE, storeSuite } from '../support/store-suite.js';
 import { StubEmbedder } from '../support/stub-embedder.js';
-import { StubProvider, silentLogger } from '../support/stub-provider.js';
+import type { LlmProvider } from '../../src/llm/model.types.js';
+import { silentLogger } from '../support/stub-provider.js';
 
 let mongo: TestMongo;
 beforeAll(async () => {
@@ -103,10 +104,10 @@ describe('suggestSpeakers (grounded)', () => {
   /** The real structured-call ladder, driven by a stub provider that replays scripted answers. */
   const callWith = (answers: (string | ((prompt: string) => string))[]) => {
     const prompts: string[] = [];
-    const provider = new StubProvider([]);
-    const replay = {
-      ...provider,
-      chat: (req: { prompt: string }) => {
+    const replay: LlmProvider = {
+      name: 'ollama',
+      constrainsOutput: false,
+      chat: (req) => {
         prompts.push(req.prompt);
         const a = answers.shift();
         const content = typeof a === 'function' ? a(req.prompt) : a;
@@ -117,7 +118,7 @@ describe('suggestSpeakers (grounded)', () => {
     const call: StructuredCall = (schema, prompt, options) =>
       callStructured(schema, prompt, options, {
         ladder: [{ provider: 'ollama', model: 'stub' }],
-        provider: () => ({ ...replay, name: 'ollama', constrainsOutput: false }),
+        provider: () => replay,
         maxAttempts: 2,
         timeoutMs: 1000,
         logger: silentLogger,

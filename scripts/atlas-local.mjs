@@ -41,4 +41,6 @@ for (;;) {
   }
   await new Promise((r) => setTimeout(r, 2000));
 }
-console.log(`${NAME} is healthy. ATLAS_LOCAL_URI=mongodb://127.0.0.1:${PORT}/?directConnection=true`);
+console.log(
+  `${NAME} is healthy. ATLAS_LOCAL_URI=mongodb://127.0.0.1:${PORT}/?directConnection=true`,
+);

@@ -1,0 +1,113 @@
+{
+  "k": 5,
+  "cases": [
+    {
+      "id": "01-single-obvious",
+      "type": "single document",
+      "query": "change streams in production",
+      "expect": ["abstracts/change-streams-in-production"]
+    },
+    {
+      "id": "02-multi-document",
+      "type": "spans several documents",
+      "query": "the spring meetup agenda and how the evening went",
+      "expect": ["events/2026-03-spring-meetup", "posts/2026-03-spring-recap"]
+    },
+    {
+      "id": "03-paraphrase",
+      "type": "paraphrase, no shared vocabulary",
+      "query": "how should we lay out our records so lookups stay quick",
+      "expect": ["abstracts/modelling-for-reads"]
+    },
+    {
+      "id": "04-paraphrase",
+      "type": "paraphrase, no shared vocabulary",
+      "query": "turning sentences into lists of numbers to compare their sense",
+      "expect": ["abstracts/vectors-for-the-curious"]
+    },
+    {
+      "id": "05-exact-term",
+      "type": "exact term",
+      "query": "shard key",
+      "expect": ["abstracts/sharding-without-tears"]
+    },
+    {
+      "id": "06-exact-term",
+      "type": "exact term, two documents",
+      "query": "resume tokens",
+      "expect": ["abstracts/change-streams-in-production", "posts/2026-03-spring-recap"]
+    },
+    {
+      "id": "07-no-answer",
+      "type": "nothing relevant",
+      "query": "kubernetes operator for postgres failover",
+      "expect": []
+    },
+    {
+      "id": "08-no-answer",
+      "type": "nothing relevant",
+      "query": "GraphQL federation gateway",
+      "expect": []
+    },
+    {
+      "id": "09-injection-doc",
+      "type": "the injection document is retrievable as data",
+      "query": "community update volunteers and a new venue",
+      "expect": ["posts/community-update"]
+    },
+    {
+      "id": "10-filter-host-note",
+      "type": "answerable only with a kind filter",
+      "query": "what did the host need last time",
+      "kind": "host_note",
+      "expect": ["notes/host-grommet-and-sprocket"]
+    },
+    {
+      "id": "11-recap-phrasing",
+      "type": "single document",
+      "query": "how did we write up the last event",
+      "expect": ["posts/2026-03-spring-recap"]
+    },
+    {
+      "id": "12-personal-excluded",
+      "type": "a personal note is the best match: a public search must never return it",
+      "query": "the forwarded question from Bartholomew Nettlecombe about the slides",
+      "forbid": ["notes/attendee-question"]
+    },
+    {
+      "id": "13-time-series",
+      "type": "single document",
+      "query": "oven temperature readings every second",
+      "expect": ["abstracts/time-series-for-ovens"]
+    },
+    {
+      "id": "14-embed-or-reference",
+      "type": "exact phrase",
+      "query": "embed or reference",
+      "expect": ["abstracts/modelling-for-reads"]
+    }
+  ],
+  "speakers": [
+    {
+      "id": "S1-change-streams",
+      "topic": "change streams",
+      "expect": ["zara-quillfeather"]
+    },
+    {
+      "id": "S2-sharding",
+      "topic": "sharding a large cluster",
+      "expect": ["otto-brambleworth"]
+    },
+    {
+      "id": "S3-no-answer",
+      "topic": "kubernetes operator for postgres",
+      "expect": []
+    },
+    {
+      "id": "S4-injection",
+      "topic": "community update and change streams",
+      "expect": ["zara-quillfeather"],
+      "mustNot": ["pip-lanternfield"]
+    }
+  ]
+}

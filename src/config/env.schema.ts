@@ -172,8 +172,12 @@ const baseEnvSchema = z.object({
   RETRIEVAL_STORE: z.enum(['bruteforce', 'atlas']).default('bruteforce'),
   /** A MongoDB with Search (mongodb-atlas-local) for the Atlas arm of the eval and its opt-in tests. */
   ATLAS_LOCAL_URI: z.string().min(1).optional(),
-  /** Cosine below this is "not relevant": returned as nothing, never as the least-bad hit. */
-  VECTOR_MIN_SCORE: z.coerce.number().min(-1).max(1).default(0.6),
+  /**
+   * Cosine below this is "not relevant": returned as nothing, never as the least-bad hit. 0.56 is
+   * calibrated for nomic-embed-text on the sample corpus (unrelated queries top out around 0.54,
+   * paraphrases score about 0.58, direct matches 0.74+). Re-measure on the real corpus.
+   */
+  VECTOR_MIN_SCORE: z.coerce.number().min(-1).max(1).default(0.56),
   /** Who approvals are recorded as when the CLI is not given --by. No auth yet: recorded as-is. */
   APPROVER_NAME: z.string().trim().min(1).optional(),
   /**

@@ -1,4 +1,5 @@
 import { type DynamicModule, Module } from '@nestjs/common';
+import { RetrievalModule } from './retrieval/retrieval.module.js';
 import { ApprovalsModule } from './approvals/approvals.module.js';
 import { ConfigModule } from './config/config.module.js';
 import type { AppConfig } from './config/env.schema.js';
@@ -22,6 +23,7 @@ export class AppModule {
         MongoModule,
         RepositoriesModule,
         ApprovalsModule,
+        RetrievalModule,
         HealthModule,
       ],
     };
