@@ -87,29 +87,45 @@ numDimensions, similarity, quantization }, { type: 'filter', path }] } })`; beco
 ## Eval: did vectors and the vector index earn their complexity?
 
 `evals/retrieval/report-2026-11-15.md`. Corpus: 10 documents, 10 chunks, 1013 tokens embedded (every
-document fits in one chunk). 14 cases, k = 5, public scope.
+document fits in one chunk). 14 cases, k = 5, public scope, so **k/N = 5/9** (the personal document is out
+of scope). **Random baseline: recall@5 0.60, MRR 0.40** averaged over the 11 cases with expected documents.
 
-| Store      | Strategy | recall@5 | MRR  | no-answer correct | personal leaked | median / p95 search |
-| ---------- | -------- | -------- | ---- | ----------------- | --------------- | ------------------- |
-| bruteforce | vector   | 0.95     | 0.94 | 2/2               | 0               | 1.7 / 8.7 ms        |
-| bruteforce | keyword  | 1.00     | 0.89 | 2/2               | 0               | 1.5 / 3.7 ms        |
-| bruteforce | hybrid   | 1.00     | 0.94 | 2/2               | 0               | 1.7 / 3.1 ms        |
-| atlas      | vector   | 0.95     | 0.94 | 2/2               | 0               | 19.4 / 48.1 ms      |
-| atlas      | keyword  | 1.00     | 0.84 | 2/2               | 0               | 12.8 / 23.8 ms      |
-| atlas      | hybrid   | 1.00     | 0.93 | 2/2               | 0               | 32.7 / 76.3 ms      |
+| Store      | Strategy | recall@5 (baseline 0.60) | MRR (baseline 0.40) | no-answer correct | personal leaked | median / p95 search |
+| ---------- | -------- | ------------------------ | ------------------- | ----------------- | --------------- | ------------------- |
+| bruteforce | vector   | 0.95                     | 0.94                | 2/2               | 0               | 1.7 / 8.7 ms        |
+| bruteforce | keyword  | 1.00                     | 0.89                | 2/2               | 0               | 1.5 / 3.7 ms        |
+| bruteforce | hybrid   | 1.00                     | 0.94                | 2/2               | 0               | 1.7 / 3.1 ms        |
+| atlas      | vector   | 0.95                     | 0.94                | 2/2               | 0               | 19.4 / 48.1 ms      |
+| atlas      | keyword  | 1.00                     | 0.84                | 2/2               | 0               | 12.8 / 23.8 ms      |
+| atlas      | hybrid   | 1.00                     | 0.93                | 2/2               | 0               | 32.7 / 76.3 ms      |
 
 `suggestSpeakers` with the real model: 4/4 (right speaker for change streams and sharding, empty for an
 unrelated topic, and the injection topic still returned the change-streams speaker, not the one the
 document demanded); every citation a retrieved chunk, every speaker real.
 
-**Verdict.** At this corpus size **the vector index did not earn its complexity**: brute-force cosine is
-about ten times faster (1.7 ms vs 19 ms median) and the vector arm ranks identically on both stores; a `$vectorSearch` index needs
-mongot, a different deployment and asynchronous index builds for no gain at hundreds of chunks. **Vectors
-alone did not beat keyword**: keyword reached full recall, and vector missed half of an exact-term query
-spanning two documents (`resume tokens`). **Vectors do earn their place inside hybrid**: hybrid keeps
-keyword's full recall and lifts MRR from 0.89 to 0.94, because on the paraphrase query with no shared vocabulary (case 03) only the vector arm ranks the target first (keyword ranks it second; on Atlas also case 04). So: default to `hybrid` on the brute-force store; revisit the index when
-the corpus reaches tens of thousands of chunks. The sample is tiny and fictional and every document is one
-chunk; rerun on `corpus/private` before treating these numbers as MUG's.
+**Verdict: what is measured.**
+
+- **Latency.** At this size brute-force cosine in Node answers in about 1.7 ms median, the
+  `$vectorSearch` index in about 19 ms (keyword 1.5 vs 13 ms; hybrid 1.7 vs 33 ms). This is measured on
+  every case and every arm, and it is the basis for defaulting to the brute-force store: a vector index
+  needs mongot, a different deployment and asynchronous index builds, and buys nothing here.
+- **Safety properties.** No personal document was returned by any public search on any arm, and both
+  no-answer cases came back empty on every arm.
+- **Both stores rank the same way** (identical vector results; keyword differs only through Atlas's own
+  BM25 and analyzer).
+
+**Verdict: what is only demonstrated.** The ranking columns do not rank the strategies. Every arm is far
+above the random baseline, and the gaps between arms come from one or two cases out of fourteen:
+
+- keyword 1.00 vs vector 0.95 recall is **case 06** alone (exact term `resume tokens` across two
+  documents; vector found one of them);
+- the MRR gap (keyword 0.89 vs vector and hybrid 0.94) is **case 03** (and **04** on Atlas): a paraphrase
+  with no shared vocabulary, where only the vector arm ranks the target first.
+
+These show the _mechanisms_ hybrid is meant to combine (keyword catches exact terms, vectors catch
+paraphrases, and reciprocal rank fusion keeps both), which is why hybrid is the default. They are not
+evidence that hybrid ranks better on MUG's material. The sample is tiny and fictional and every
+document is one chunk. Rerun on `corpus/private` before treating any ranking number as MUG's.
 
 ## Tests
 
