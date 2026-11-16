@@ -61,7 +61,13 @@ export interface SearchQuery {
  * hit drops it; hybrid only fuses what passed its own arm's gate, and the RRF score itself has no
  * threshold (it is a rank statistic, not a similarity, so a cosine threshold cannot apply to it).
  *
- *  - vector:  `minScore`, an absolute cosine (-1..1) per hit, calibrated per embedding model.
+ *  - vector:  two gates, both must pass.
+ *             `minScore`: an absolute cosine (-1..1) per hit, calibrated per embedding model.
+ *             `minGap`: scale-free, per query: the top cosine minus the MEDIAN cosine of the arm's
+ *             retrieved set must reach it. A query that matches nothing scores every chunk about the
+ *             same; a real match stands out from the rest, whatever the model's score band. Not
+ *             applied when the retrieved set has fewer than {@link GAP_MIN_SET} chunks (a median of
+ *             two or three is not a background), which the report says.
  *  - keyword: `minCoverage`, the share of the query's distinct terms (stopwords removed, light
  *             stemming) that the chunk contains. BM25 scores are not comparable across queries or
  *             corpora, so the keyword arm is gated on coverage, computed in Node the same way on
@@ -70,18 +76,28 @@ export interface SearchQuery {
  */
 export interface RelevanceGates {
   minScore: number;
+  minGap: number;
   minCoverage: number;
 }
 
 /** Gates that let everything through: for probes and latency benchmarks, never for answers. */
-export const OPEN_GATES: RelevanceGates = { minScore: -1, minCoverage: 0 };
+export const OPEN_GATES: RelevanceGates = { minScore: -1, minGap: 0, minCoverage: 0 };
+
+/** Below this many retrieved chunks the gap gate is not applied (no meaningful median). */
+export const GAP_MIN_SET = 5;
 
 /** What each arm saw and how many of its candidates passed its gate. */
 export interface VectorArmReport {
   candidates: number;
   /** Best cosine among the candidates (null when there were none). */
   top: number | null;
+  /** Hits at or above `minScore`: the absolute gate's decision (0 = rejected). */
   aboveMinScore: number;
+  /** Median cosine of the retrieved set, and top minus median. Null when there were no candidates. */
+  median: number | null;
+  gap: number | null;
+  /** The gap gate's decision: `n/a` when the set is smaller than GAP_MIN_SET. */
+  gapGate: 'pass' | 'reject' | 'n/a';
 }
 export interface KeywordArmReport {
   /** Chunks that matched at least one query term. */
@@ -145,15 +161,32 @@ export function gateVector(
   candidates: readonly Hit[],
   gates: RelevanceGates,
 ): { hits: Hit[]; report: VectorArmReport } {
-  const hits = candidates.filter((h) => h.score >= gates.minScore);
+  const above = candidates.filter((h) => h.score >= gates.minScore);
+  const scores = candidates.map((h) => h.score).sort((a, b) => a - b);
+  const median = medianOf(scores);
+  const top = scores.at(-1) ?? null;
+  const gap = top === null || median === null ? null : top - median;
+  const gapGate: VectorArmReport['gapGate'] =
+    candidates.length < GAP_MIN_SET ? 'n/a' : (gap ?? 0) >= gates.minGap ? 'pass' : 'reject';
   return {
-    hits,
+    hits: gapGate === 'reject' ? [] : above,
     report: {
       candidates: candidates.length,
-      top: candidates[0]?.score ?? null,
-      aboveMinScore: hits.length,
+      top,
+      aboveMinScore: above.length,
+      median,
+      gap,
+      gapGate,
     },
   };
+}
+
+function medianOf(sorted: readonly number[]): number | null {
+  if (sorted.length === 0) return null;
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 1
+    ? (sorted[mid] ?? 0)
+    : ((sorted[mid - 1] ?? 0) + (sorted[mid] ?? 0)) / 2;
 }
 
 /** Share of the query's distinct terms that occur in the chunk's heading or text (0..1). */

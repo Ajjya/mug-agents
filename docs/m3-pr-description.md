@@ -85,7 +85,8 @@ numDimensions, similarity, quantization }, { type: 'filter', path }] } })`; beco
   the query was a hit, and hybrid fused that ungated keyword list, so hybrid's no-answer rested on the
   keyword arm happening to find no shared word. Both no-answer cases in the first eval passed only
   because their words occur nowhere in the corpus. Now:
-  - vector: per-hit cosine >= `VECTOR_MIN_SCORE`;
+  - vector: per-hit cosine >= `VECTOR_MIN_SCORE` (absolute), **and** top cosine minus the median of the
+    retrieved set >= `VECTOR_MIN_GAP` (scale-free, not applied below 5 retrieved chunks);
   - keyword: per-chunk coverage of the query's distinct terms >= `KEYWORD_MIN_COVERAGE` (0.5), computed
     in Node identically on both stores (BM25 and `$search` scores are not comparable across queries);
   - hybrid: no threshold; it fuses only hits that passed their own arm. An RRF score is a rank
@@ -94,9 +95,17 @@ numDimensions, similarity, quantization }, { type: 'filter', path }] } })`; beco
   The shared `decide()` applies the gates for both stores; a store only retrieves candidates. Tested per
   strategy on both stores with a query whose one shared word ("pizza") occurs in three documents.
 
-- **Relevance threshold** `VECTOR_MIN_SCORE = 0.56`, calibrated on the sample: with this model unrelated
-  queries top out around 0.48 to 0.54, paraphrases score about 0.58, direct matches 0.74+. The band is
-  narrow; re-measure on the real corpus.
+- **Relevance thresholds, calibrated on the 12-document sample.** `VECTOR_MIN_SCORE = 0.575`: unrelated
+  queries top out at 0.569, the weakest answerable case scores 0.582, direct matches 0.70+. The margin is
+  under 0.01 either side, and it moved when the corpus grew: 0.56 was enough at 10 documents, and at 12 both
+  no-answer queries scored above it. The best unrelated score rises as the corpus grows, so a fixed
+  cosine needs re-measuring on every substantial corpus change.
+- **The scale-free gap gate does not separate on this sample** (added after review, kept alongside the
+  absolute threshold). No-answer queries have a gap of about 0.10 (top 0.57 over a low median of 0.47),
+  inside the answerable range 0.055 to 0.27: something always stands out a little. `VECTOR_MIN_GAP =
+0.05` sits below every answerable case, so here it rejects nothing. It is a guard against a flat
+  score distribution (for example after a model change that shifts the band), not what makes no-answer
+  work today. The eval reports both decisions for every case.
 
 ## Eval: did vectors and the vector index earn their complexity?
 

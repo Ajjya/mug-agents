@@ -26,7 +26,10 @@ import {
 import { seedSpeakers } from '../../src/retrieval/seed-speakers.js';
 import { SpeakerSuggester } from '../../src/retrieval/suggest-speakers.js';
 import {
+  GAP_MIN_SET,
+  type KeywordArmReport,
   OPEN_GATES,
+  type VectorArmReport,
   type RelevanceGates,
   STRATEGIES,
   type Strategy,
@@ -96,6 +99,9 @@ interface Row {
   /** A forbidden document was returned. */
   leaked?: boolean;
   searchMs: number;
+  /** Each arm's gate statistics for this case. */
+  vectorGate?: VectorArmReport;
+  keywordGate?: KeywordArmReport;
 }
 
 const fmt = (n: number | undefined, d = 2): string => (n === undefined ? 'n/a' : n.toFixed(d));
@@ -129,6 +135,7 @@ async function main(): Promise<number> {
   );
   const gates: RelevanceGates = {
     minScore: config.VECTOR_MIN_SCORE,
+    minGap: config.VECTOR_MIN_GAP,
     minCoverage: config.KEYWORD_MIN_COVERAGE,
   };
   const embedderRefs = config.EVAL_EMBEDDERS ?? [
@@ -202,7 +209,7 @@ async function main(): Promise<number> {
         for (const store of stores) {
           for (const strategy of STRATEGIES) {
             const started = performance.now();
-            const hits = await store.search({
+            const outcome = await store.explain({
               text: c.query,
               classification: ['public'],
               limit: spec.k * 3,
@@ -214,6 +221,7 @@ async function main(): Promise<number> {
               ...(c.kind ? { kind: c.kind } : {}),
             });
             const searchMs = performance.now() - started;
+            const hits = outcome.hits;
             const got = distinctInOrder(hits.map((h) => h.chunk.documentId)).slice(0, spec.k);
             const expect = c.expect ?? [];
             const recall = c.expect ? recallAtK(got, expect, spec.k) : undefined;
@@ -246,6 +254,8 @@ async function main(): Promise<number> {
               ...(c.expect?.length === 0 ? { emptyOk: got.length === 0 } : {}),
               ...(c.forbid ? { leaked: c.forbid.some((f) => all.includes(f)) } : {}),
               searchMs,
+              ...(outcome.vector ? { vectorGate: outcome.vector } : {}),
+              ...(outcome.keyword ? { keywordGate: outcome.keyword } : {}),
             });
           }
         }
@@ -301,7 +311,7 @@ async function main(): Promise<number> {
   const arms = [...new Set(rows.map((r) => `${r.embedder}|${r.store}|${r.strategy}`))];
   const lines: string[] = [`# Retrieval eval report (${date})`, ''];
   lines.push(
-    `Corpus: \`${values.corpus}\`. Cases: ${String(spec.cases.length)}, k = ${String(spec.k)}. Scope: public. Vector threshold (VECTOR_MIN_SCORE): ${String(config.VECTOR_MIN_SCORE)}. Query embedding tokens: ${String(queryTokens)}.`,
+    `Corpus: \`${values.corpus}\`. Cases: ${String(spec.cases.length)}, k = ${String(spec.k)}. Scope: public. Gates: VECTOR_MIN_SCORE ${String(config.VECTOR_MIN_SCORE)} (absolute cosine), VECTOR_MIN_GAP ${String(config.VECTOR_MIN_GAP)} (top minus median of the retrieved set; not applied below ${String(GAP_MIN_SET)} chunks), KEYWORD_MIN_COVERAGE ${String(config.KEYWORD_MIN_COVERAGE)}. Query embedding tokens: ${String(queryTokens)}.`,
     '',
   );
   lines.push(
@@ -378,6 +388,59 @@ async function main(): Promise<number> {
       ),
     );
   }
+  // Which gate decided: both vector decisions are reported, not just the combined one.
+  const vectorDecision = (g: VectorArmReport | undefined): string =>
+    g === undefined ? '-' : `${g.aboveMinScore > 0 ? 'pass' : 'reject'} / ${g.gapGate}`;
+  const keywordDecision = (g: KeywordArmReport | undefined): string =>
+    g === undefined
+      ? '-'
+      : g.candidates === 0
+        ? 'no term match'
+        : g.aboveMinCoverage > 0
+          ? 'pass'
+          : 'reject';
+  const gateRow = (r: Row): string =>
+    `| ${r.caseId} | ${r.store} | ${r.strategy} | ${fmt(r.vectorGate?.top ?? undefined, 3)} | ${fmt(r.vectorGate?.median ?? undefined, 3)} | ${fmt(r.vectorGate?.gap ?? undefined, 3)} | ${vectorDecision(r.vectorGate)} | ${fmt(r.keywordGate?.topCoverage ?? undefined)} | ${keywordDecision(r.keywordGate)} | ${r.got.length === 0 ? '(nothing)' : String(r.got.length) + ' documents'} |`;
+  const gateHeader = [
+    '| Case | Store | Strategy | vector top | median | gap | vector gates: absolute / gap | keyword top coverage | keyword gate | returned |',
+    '|---|---|---|---|---|---|---|---|---|---|',
+  ];
+  const noAnswer = rows.filter((r) => r.emptyOk !== undefined);
+  lines.push(
+    '',
+    '## No-answer cases: which gate rejected',
+    '',
+    'Both vector decisions are shown separately: the absolute gate (any hit at or above VECTOR_MIN_SCORE) and the scale-free gap gate (top minus median of the retrieved set at or above VECTOR_MIN_GAP). The vector arm returns hits only when both pass. Hybrid has no gate of its own: it is empty when both of its arms are.',
+    '',
+    ...gateHeader,
+    ...noAnswer.map(gateRow),
+  );
+  // Answerable cases that a gate rejected are the cost of the gates: list them, never hide them.
+  const falseRejects = rows.filter(
+    (r) =>
+      r.expect.length > 0 &&
+      ((r.vectorGate !== undefined &&
+        (r.vectorGate.aboveMinScore === 0 || r.vectorGate.gapGate === 'reject')) ||
+        (r.keywordGate !== undefined && r.keywordGate.aboveMinCoverage === 0)),
+  );
+  lines.push(
+    '',
+    '## Answerable cases where a gate rejected an arm',
+    '',
+    falseRejects.length === 0
+      ? 'None.'
+      : 'The arm returned nothing for a case that has an answer. In hybrid the other arm may still have answered (see recall).',
+    '',
+    ...(falseRejects.length === 0 ? [] : [...gateHeader, ...falseRejects.map(gateRow)]),
+  );
+  // Calibration data for both vector gates: every case, the vector strategy, each store.
+  lines.push(
+    '',
+    '## Vector arm per case (calibration data for both vector gates)',
+    '',
+    ...gateHeader,
+    ...rows.filter((r) => r.strategy === 'vector').map(gateRow),
+  );
   lines.push('', '## suggestSpeakers grounding (real model)', '');
   if (speakerLines.length === 0) lines.push('Not run: OLLAMA_API_KEY is not set.');
   else

@@ -14,7 +14,7 @@ import { StubEmbedder } from './stub-embedder.js';
 
 export const SAMPLE = 'corpus/sample';
 /** The stub embedder's bag-of-words cosines are lower than a real model's. */
-export const STUB_GATES: RelevanceGates = { minScore: 0.25, minCoverage: 0.5 };
+export const STUB_GATES: RelevanceGates = { minScore: 0.25, minGap: 0, minCoverage: 0.5 };
 
 /**
  * Behaviour every VectorStore must have, run against BruteForceStore (default suite, memory server)
@@ -118,6 +118,19 @@ export function storeSuite(
         }
       },
     );
+
+    it('reports both vector decisions: the gap gate can reject what the absolute gate passed', async () => {
+      const q = 'sharding shard key balancer';
+      const lenient = await retrieval.explain(q, { strategy: 'vector' });
+      expect(lenient.vector?.aboveMinScore).toBeGreaterThan(0);
+      expect(lenient.vector?.gapGate).toBe('pass'); // STUB_GATES.minGap is 0
+      expect(lenient.vector?.median).toBeLessThan(lenient.vector?.top ?? 0);
+      const strict = new RetrievalService(embedder, store, { ...STUB_GATES, minGap: 1.5 });
+      const out = await strict.explain(q, { strategy: 'vector' });
+      expect(out.vector?.aboveMinScore).toBe(lenient.vector?.aboveMinScore);
+      expect(out.vector?.gapGate).toBe('reject');
+      expect(out.hits).toEqual([]);
+    });
 
     it('refuses a query embedded with a different model or dimension', async () => {
       const other = new RetrievalService(new StubEmbedder('other-model', 256), store, STUB_GATES);

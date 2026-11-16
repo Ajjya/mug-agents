@@ -46,7 +46,8 @@ with a list of every problem.
 | `EVAL_EMBEDDERS`         | no                  | `ollama-local:<EMBEDDING_MODEL>`                              | Embedders the retrieval eval compares                                                                        |
 | `RETRIEVAL_STORE`        | no                  | `bruteforce`                                                  | `bruteforce` or `atlas`                                                                                      |
 | `ATLAS_LOCAL_URI`        | no                  | –                                                             | mongodb-atlas-local, for the Atlas arm of tests and eval                                                     |
-| `VECTOR_MIN_SCORE`       | no                  | `0.56`                                                        | Cosine below this is not relevant (calibrated on the sample)                                                 |
+| `VECTOR_MIN_SCORE`       | no                  | `0.575`                                                       | Cosine below this is not relevant (calibrated on the sample)                                                 |
+| `VECTOR_MIN_GAP`         | no                  | `0.05`                                                        | Scale-free vector gate: top cosine minus the median of the retrieved set                                     |
 | `KEYWORD_MIN_COVERAGE`   | no                  | `0.5`                                                         | Keyword arm: share of the query's distinct terms a chunk must contain                                        |
 | `LLM_MAX_ATTEMPTS`       | no                  | 2 × ladder length                                             | Total provider calls per structured call; must let every rung be reached (3 rungs need ≥ 5), else boot fails |
 
@@ -314,8 +315,11 @@ npm run suggest-speakers -- "change streams"
 - Every search has an explicit classification scope; the default is `public`.
 - Nothing relevant means **nothing returned**, never the least-bad hit. Each strategy has its own gate,
   applied before anything is fused:
-  - **vector**: a hit's cosine must reach `VECTOR_MIN_SCORE` (default 0.56, calibrated for
-    `nomic-embed-text`);
+  - **vector**: two gates, both must pass. Absolute: a hit's cosine must reach `VECTOR_MIN_SCORE`
+    (default 0.575, calibrated for `nomic-embed-text`). Scale-free: the top cosine minus the median
+    cosine of the retrieved set must reach `VECTOR_MIN_GAP` (default 0.05; not applied below 5
+    retrieved chunks). On the sample only the absolute gate separates no-answer queries; the eval
+    reports both decisions;
   - **keyword**: a chunk must contain at least `KEYWORD_MIN_COVERAGE` (default 0.5) of the query's
     distinct terms. BM25 scores are not comparable across queries, so the gate is on coverage, not on
     the score;

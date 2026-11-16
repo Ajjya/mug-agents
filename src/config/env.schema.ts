@@ -173,11 +173,20 @@ const baseEnvSchema = z.object({
   /** A MongoDB with Search (mongodb-atlas-local) for the Atlas arm of the eval and its opt-in tests. */
   ATLAS_LOCAL_URI: z.string().min(1).optional(),
   /**
-   * Cosine below this is "not relevant": returned as nothing, never as the least-bad hit. 0.56 is
-   * calibrated for nomic-embed-text on the sample corpus (unrelated queries top out around 0.54,
-   * paraphrases score about 0.58, direct matches 0.74+). Re-measure on the real corpus.
+   * Cosine below this is "not relevant": returned as nothing, never as the least-bad hit. 0.575 is
+   * calibrated for nomic-embed-text on the 12-document sample (unrelated queries top out at 0.569, the
+   * weakest answerable case at 0.582, direct matches 0.70+). The margin is under 0.01 either side and
+   * it moved when the corpus grew (0.56 was enough at 10 documents). Re-measure on the real corpus.
    */
-  VECTOR_MIN_SCORE: z.coerce.number().min(-1).max(1).default(0.56),
+  VECTOR_MIN_SCORE: z.coerce.number().min(-1).max(1).default(0.575),
+  /**
+   * Scale-free vector gate, alongside VECTOR_MIN_SCORE (both must pass): the top cosine minus the
+   * median cosine of the retrieved set. Not tied to a model's score band. On the sample it does NOT
+   * separate no-answer from answerable queries (no-answer gaps about 0.10; answerable 0.055 to 0.27),
+   * so 0.05 sits below every answerable case and rejects nothing there: it guards against a flat
+   * score distribution, it is not what makes no-answer work today. See the eval report.
+   */
+  VECTOR_MIN_GAP: z.coerce.number().min(0).max(2).default(0.05),
   /**
    * The keyword arm's own no-answer gate: the share of the query's distinct terms (stopwords removed)
    * a chunk must contain. Without it any single shared word made a chunk a keyword hit. BM25 scores
