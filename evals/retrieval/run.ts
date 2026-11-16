@@ -1,5 +1,5 @@
 import 'reflect-metadata';
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile, readdir, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { MongoClient, type Db } from 'mongodb';
@@ -449,6 +449,23 @@ async function main(): Promise<number> {
       '|---|---|---|---|---|---|---|---|',
       ...speakerLines,
     );
+  // The latency crossover is measured separately (npm run bench:crossover, synthetic vectors at
+  // 100 to 1M chunks); the latest result is embedded so the report carries it as its own table.
+  const evalDir = fileURLToPath(new URL('evals/retrieval/', repoRoot));
+  const crossoverFile = (await readdir(evalDir))
+    .filter((f) => /^crossover-\d{4}-\d{2}-\d{2}\.md$/.test(f))
+    .sort()
+    .at(-1);
+  lines.push('', '## Brute force vs Atlas: latency crossover (synthetic vectors)', '');
+  if (crossoverFile)
+    lines.push(
+      `From \`evals/retrieval/${crossoverFile}\` (\`npm run bench:crossover\`).`,
+      '',
+      (
+        await readFile(new URL(crossoverFile, new URL('evals/retrieval/', repoRoot)), 'utf8')
+      ).trim(),
+    );
+  else lines.push('Not measured yet: run `npm run bench:crossover` with ATLAS_LOCAL_URI set.');
   lines.push('');
   const out = fileURLToPath(new URL(`report-${date}.md`, new URL('evals/retrieval/', repoRoot)));
   await writeFile(out, lines.join('\n'));

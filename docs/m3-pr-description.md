@@ -137,6 +137,36 @@ document demanded); every citation a retrieved chunk, every speaker real.
 - **Both stores rank the same way** (identical vector results; keyword differs only through Atlas's own
   BM25 and analyzer).
 
+**Crossover, measured without embeddings** (`npm run bench:crossover`, `evals/retrieval/crossover-2026-11-16.md`).
+Random unit vectors (768 dimensions) stored exactly as the stores keep chunks, 20 random queries per size,
+vector strategy:
+
+| Chunks    | brute force median / p95 | Atlas median / p95 | Atlas recall@5 vs exact |
+| --------- | ------------------------ | ------------------ | ----------------------- |
+| 100       | 3.9 / 8.2 ms             | 12.1 / 13.9 ms     | 1.00                    |
+| 300       | 11.1 / 20.7 ms           | 11.7 / 15.2 ms     | 1.00                    |
+| 1,000     | 37.2 / 41.3 ms           | 13.7 / 17.7 ms     | 1.00                    |
+| 3,000     | 117 / 157 ms             | 12.0 / 17.0 ms     | 1.00                    |
+| 10,000    | 448 / 510 ms             | 28.2 / 60.8 ms     | 1.00                    |
+| 30,000    | 1.74 / 2.12 s            | 22.5 / 33.4 ms     | 0.99                    |
+| 100,000   | 9.93 / 11.1 s            | 98 / 223 ms        | 0.95                    |
+| 1,000,000 | not run                  | not run            | -                       |
+
+- **The crossover is about 320 chunks**, not "tens of thousands": brute force costs about 0.04 ms per
+  in-scope chunk, because it loads every in-scope vector from MongoDB and decodes it on every query. Atlas
+  stays at 12 to 30 ms up to 30,000 chunks. That replaces the earlier guess.
+- **1M was not run.** Stored as BSON arrays of float64, 1M chunks need about 9.7 GB for brute force and
+  about 15 GB with the vector index. The machine had 14 to 18 GB free, and the script keeps 10 GB
+  headroom. Brute force at 1M would also need about 13 GB of Node heap per query. On the measured trend
+  (about 0.1 ms per chunk at 100k) it would take on the order of 100 s per query: not viable whatever the
+  disk.
+- **What it means for the default.** The sample (20 chunks) and any MUG corpus of a few hundred chunks
+  sit at or below the crossover, so brute force stays the default. Past roughly 1,000 chunks, `atlas` is
+  faster, by 10x at 3,000 and 100x at 100,000, at the price of mongot and index builds. Random vectors
+  are the worst case for an approximate index, so Atlas recall (0.95 at 100k) is a floor.
+- The benchmark exposed a per-query `countDocuments` in the Atlas vector arm (a collection scan for the
+  model check). It is now a single `findOne`.
+
 **Verdict: what is only demonstrated.** The ranking columns do not rank the strategies. Every arm is far
 above the random baseline, and the gaps between arms come from one or two cases out of fourteen:
 
@@ -166,4 +196,6 @@ injection not changing a correct suggestion, unknown id retried). The same store
 - The real corpus and real speaker seed (`corpus/private/`) are yours to supply; rerun the eval on it and
   re-calibrate `VECTOR_MIN_SCORE`.
 - `ollama serve` has to run wherever the service runs (M7).
+- 1M chunks not benchmarked (disk). Storing vectors as BSON float32 binary vectors would cut storage about
+  3x and decoding cost for brute force; not done.
 - Precision is not measured: keyword returns many loosely related documents for broad queries.

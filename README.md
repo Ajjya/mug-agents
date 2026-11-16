@@ -340,6 +340,10 @@ npm run suggest-speakers -- "change streams"
 | `bruteforce` (default) | chunks in a MongoDB collection, cosine in Node | any mongod                                    |
 | `atlas`                | `$vectorSearch` + `$search` indexes            | Atlas or `mongodb/mongodb-atlas-local` (9.0+) |
 
+Which is faster depends on size (`npm run bench:crossover`, synthetic 768-dim vectors): brute force
+grows about 0.04 ms per in-scope chunk, Atlas stays at 12 to 30 ms up to 30,000 chunks. **They cross at
+about 320 chunks**; past about 1,000, use `atlas`.
+
 Chunks live in one collection per embedder (`chunks__ollama_local_nomic_embed_text`); a document's chunks
 that are no longer produced are flagged `retired`, never deleted.
 
@@ -348,6 +352,7 @@ that are no longer produced are flagged `retired`, never deleted.
 ```bash
 npm run atlas:up       # docker run mongodb/mongodb-atlas-local:9.0.4 on :27018, waits for the image's healthcheck
 ATLAS_LOCAL_URI='mongodb://127.0.0.1:27018/?directConnection=true' npm run test:atlas
+ATLAS_LOCAL_URI='mongodb://127.0.0.1:27018/?directConnection=true' npm run bench:crossover -- --sizes 100,1000,10000
 ```
 
 `npm test` never needs Docker or Ollama; the Atlas tests are a separate Vitest project and skip unless

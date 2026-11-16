@@ -27,7 +27,8 @@
     "seed-speakers": "npm run build:scripts --silent && node --env-file-if-exists=.env dist-scripts/scripts/seed-speakers.js",
     "search": "npm run build:scripts --silent && node --env-file-if-exists=.env dist-scripts/scripts/search.js",
     "suggest-speakers": "npm run build:scripts --silent && node --env-file-if-exists=.env dist-scripts/scripts/suggest-speakers.js",
-    "eval:retrieval": "npm run build:scripts --silent && node --env-file-if-exists=.env dist-scripts/evals/retrieval/run.js"
+    "eval:retrieval": "npm run build:scripts --silent && node --env-file-if-exists=.env dist-scripts/evals/retrieval/run.js",
+    "bench:crossover": "npm run build:scripts --silent && node --env-file-if-exists=.env dist-scripts/evals/retrieval/crossover.js"
   },
   "dependencies": {
     "@langchain/core": "^1.3.6",

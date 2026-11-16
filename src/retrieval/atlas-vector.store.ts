@@ -112,9 +112,17 @@ export class AtlasVectorStore extends BruteForceStore {
     const scope = [...q.classification];
 
     const vector = async (): Promise<Hit[]> => {
-      const stats = await this.stats();
-      if (stats.chunks === 0) return [];
-      if (q.queryModel) assertCompatible(stats, q.queryModel);
+      // One findOne, not stats(): a count would scan the collection on every query.
+      const stored = await this.raw.findOne(
+        { retired: false },
+        { projection: { _id: 0, model: 1, dim: 1 } },
+      );
+      if (!stored) return [];
+      if (q.queryModel)
+        assertCompatible(
+          { model: stored['model'] as string, dim: stored['dim'] as number },
+          q.queryModel,
+        );
       const docs = await this.raw
         .aggregate([
           {
