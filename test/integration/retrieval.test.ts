@@ -40,10 +40,10 @@ describe('seeding and ingestion boundaries', () => {
     await db.collection('speakers').createIndexes(INDEXES.speakers);
     const repo = new MongoSpeakersRepository(db);
     const first = await seedSpeakers(SAMPLE, repo);
-    expect(first.created).toHaveLength(5);
+    expect(first.created).toHaveLength(6);
     const second = await seedSpeakers(SAMPLE, repo);
     expect(second).toEqual({ created: [], updated: [], unchanged: first.created });
-    expect(await repo.count()).toBe(5);
+    expect(await repo.count()).toBe(6);
     await db.dropDatabase();
   });
 

@@ -16,7 +16,13 @@ import { CORPUS_KINDS } from '../../src/retrieval/corpus.js';
 import { type Embedder, OllamaLocalEmbedder } from '../../src/retrieval/embedder.js';
 import { ingestCorpus } from '../../src/retrieval/ingest.js';
 import { RetrievalService } from '../../src/retrieval/retrieval.service.js';
-import { distinctInOrder, reciprocalRank, recallAtK } from '../../src/retrieval/scoring.js';
+import {
+  distinctInOrder,
+  randomReciprocalRank,
+  randomRecallAtK,
+  reciprocalRank,
+  recallAtK,
+} from '../../src/retrieval/scoring.js';
 import { seedSpeakers } from '../../src/retrieval/seed-speakers.js';
 import { SpeakerSuggester } from '../../src/retrieval/suggest-speakers.js';
 import { STRATEGIES, type Strategy, type VectorStore } from '../../src/retrieval/vector-store.js';
@@ -34,6 +40,8 @@ const CasesSchema = z.object({
       expect: z.array(z.string()).optional(),
       /** Documents that must NEVER come back (e.g. personal content in a public search). */
       forbid: z.array(z.string()).optional(),
+      /** Chunk ids that must come back: answers that sit in a non-first chunk of a split document. */
+      expectChunks: z.array(z.string()).optional(),
     }),
   ),
   speakers: z.array(
@@ -42,6 +50,8 @@ const CasesSchema = z.object({
       topic: z.string(),
       expect: z.array(z.string()),
       mustNot: z.array(z.string()).optional(),
+      /** The expected speaker must cite at least one of these chunk ids. */
+      citeChunks: z.array(z.string()).optional(),
     }),
   ),
 });
@@ -68,6 +78,14 @@ interface Row {
   got: string[];
   recall?: number;
   rr?: number;
+  /** What a random ordering of the documents in scope would score on this case. */
+  baselineRecall?: number;
+  baselineRr?: number;
+  /** Chunk-level, for cases whose answer is a specific chunk. */
+  expectChunks?: string[];
+  gotChunks?: string[];
+  chunkRecall?: number;
+  chunkRr?: number;
   emptyOk?: boolean;
   /** A forbidden document was returned. */
   leaked?: boolean;
@@ -114,6 +132,7 @@ async function main(): Promise<number> {
   const rows: Row[] = [];
   const corpusLines: string[] = [];
   const speakerLines: string[] = [];
+  const scopeLines: string[] = [];
   let queryTokens = 0;
   try {
     const bfDb = appClient.db(EVAL_DB);
@@ -158,6 +177,14 @@ async function main(): Promise<number> {
         `| \`${embedder.ref}\` | ${String(ingest.documents)} | ${String(ingest.chunks)} | ${String(totalTokens)} | ${ingest.model} | ${String(ingest.dim)} |`,
       );
 
+      // N for the random baseline: documents a public search (with the case's kind filter) can return.
+      const publicChunks = ingest.chunkList.filter((c) => c.classification === 'public');
+      const docsInScope = (kind?: string): number =>
+        new Set(publicChunks.filter((c) => !kind || c.kind === kind).map((c) => c.documentId)).size;
+      scopeLines.push(
+        `\`${embedder.ref}\`: k = ${String(spec.k)}, N = ${String(docsInScope())} public documents (${String(publicChunks.length)} public chunks) of ${String(ingest.documents)} documents; k/N = ${(spec.k / docsInScope()).toFixed(2)}.`,
+      );
+
       for (const c of spec.cases) {
         const q = await embedder.embedQuery(c.query);
         queryTokens += q.tokens;
@@ -182,6 +209,12 @@ async function main(): Promise<number> {
             const recall = c.expect ? recallAtK(got, expect, spec.k) : undefined;
             const rr = c.expect ? reciprocalRank(got, expect) : undefined;
             const all = distinctInOrder(hits.map((h) => h.chunk.documentId));
+            const n = docsInScope(c.kind);
+            const gotChunks = hits.map((h) => h.chunk.id).slice(0, spec.k);
+            const chunkRecall = c.expectChunks
+              ? recallAtK(gotChunks, c.expectChunks, spec.k)
+              : undefined;
+            const chunkRr = c.expectChunks ? reciprocalRank(gotChunks, c.expectChunks) : undefined;
             rows.push({
               embedder: embedder.ref,
               store: store.name,
@@ -191,6 +224,15 @@ async function main(): Promise<number> {
               got,
               ...(recall === undefined ? {} : { recall }),
               ...(rr === undefined ? {} : { rr }),
+              ...(expect.length > 0
+                ? {
+                    baselineRecall: randomRecallAtK(n, spec.k),
+                    baselineRr: randomReciprocalRank(n, expect.length),
+                  }
+                : {}),
+              ...(c.expectChunks ? { expectChunks: c.expectChunks, gotChunks } : {}),
+              ...(chunkRecall === undefined ? {} : { chunkRecall }),
+              ...(chunkRr === undefined ? {} : { chunkRr }),
               ...(c.expect?.length === 0 ? { emptyOk: got.length === 0 } : {}),
               ...(c.forbid ? { leaked: c.forbid.some((f) => all.includes(f)) } : {}),
               searchMs,
@@ -225,13 +267,15 @@ async function main(): Promise<number> {
                 ? handles.length === 0
                 : s.expect.every((h) => handles.includes(h));
             const mustNotOk = (s.mustNot ?? []).every((h) => !handles.includes(h));
-            const pass = citationsReal && speakersReal && expectedOk && mustNotOk;
+            const cited = r.suggestions.flatMap((x) => x.citations.map((c) => c.id));
+            const citeOk = !s.citeChunks || s.citeChunks.some((id) => cited.includes(id));
+            const pass = citationsReal && speakersReal && expectedOk && mustNotOk && citeOk;
             speakerLines.push(
-              `| ${s.id} | ${s.topic} | ${handles.join(', ') || '(none)'} | ${citationsReal ? 'yes' : 'NO'} | ${speakersReal ? 'yes' : 'NO'} | ${pass ? 'PASS' : 'FAIL'} |`,
+              `| ${s.id} | ${s.topic} | ${handles.join(', ') || '(none)'} | ${cited.join('<br>') || '(none)'} | ${s.citeChunks ? (citeOk ? 'yes' : 'NO') : '-'} | ${citationsReal ? 'yes' : 'NO'} | ${speakersReal ? 'yes' : 'NO'} | ${pass ? 'PASS' : 'FAIL'} |`,
             );
           } catch (err) {
             speakerLines.push(
-              `| ${s.id} | ${s.topic} | error: ${err instanceof Error ? err.name : 'unknown'} | - | - | FAIL |`,
+              `| ${s.id} | ${s.topic} | error: ${err instanceof Error ? err.name : 'unknown'} | - | - | - | - | FAIL |`,
             );
           }
         }
@@ -251,6 +295,14 @@ async function main(): Promise<number> {
     '',
   );
   lines.push(
+    '## Scope and random baseline',
+    '',
+    ...scopeLines,
+    '',
+    'The baseline columns are what a ranker that orders the documents in scope at random would score on the same cases (recall@k = k/N per expected document, capped at 1; MRR = the expected 1/rank of the first expected document). A ranking difference between arms that is smaller than one case is not a measurement.',
+    '',
+  );
+  lines.push(
     '## Corpus size',
     '',
     '| Embedder | Documents | Chunks | Tokens embedded | Model | Dim |',
@@ -263,19 +315,24 @@ async function main(): Promise<number> {
   lines.push(
     '## Summary per arm',
     '',
-    '| Embedder | Store | Strategy | mean recall@k | MRR | no-answer cases correct | forbidden documents returned | median search | p95 search |',
-    '|---|---|---|---|---|---|---|---|---|',
+    '| Embedder | Store | Strategy | mean recall@k | random baseline recall@k | MRR | random baseline MRR | chunk recall@k (split cases) | chunk MRR (split cases) | no-answer cases correct | forbidden documents returned | median search | p95 search |',
+    '|---|---|---|---|---|---|---|---|---|---|---|---|---|',
   );
   for (const arm of arms) {
     const [embedder, store, strategy] = arm.split('|');
     const mine = rows.filter((r) => `${r.embedder}|${r.store}|${r.strategy}` === arm);
     const recalls = mine.flatMap((r) => (r.recall === undefined ? [] : [r.recall]));
     const rrs = mine.flatMap((r) => (r.rr === undefined ? [] : [r.rr]));
+    const pick = (f: (r: Row) => number | undefined): number[] =>
+      mine.flatMap((r) => {
+        const v = f(r);
+        return v === undefined ? [] : [v];
+      });
     const empties = mine.filter((r) => r.emptyOk !== undefined);
     const ms = mine.map((r) => r.searchMs);
     const leaks = mine.filter((r) => r.leaked === true).length;
     lines.push(
-      `| \`${embedder ?? ''}\` | ${store ?? ''} | ${strategy ?? ''} | ${fmt(mean(recalls))} | ${fmt(mean(rrs))} | ${String(empties.filter((r) => r.emptyOk).length)}/${String(empties.length)} | ${String(leaks)} | ${fmt(percentile(ms, 50), 1)} ms | ${fmt(percentile(ms, 95), 1)} ms |`,
+      `| \`${embedder ?? ''}\` | ${store ?? ''} | ${strategy ?? ''} | ${fmt(mean(recalls))} | ${fmt(mean(pick((r) => r.baselineRecall)))} | ${fmt(mean(rrs))} | ${fmt(mean(pick((r) => r.baselineRr)))} | ${fmt(mean(pick((r) => r.chunkRecall)))} | ${fmt(mean(pick((r) => r.chunkRr)))} | ${String(empties.filter((r) => r.emptyOk).length)}/${String(empties.length)} | ${String(leaks)} | ${fmt(percentile(ms, 50), 1)} ms | ${fmt(percentile(ms, 95), 1)} ms |`,
     );
   }
   lines.push(
@@ -297,12 +354,26 @@ async function main(): Promise<number> {
       `| ${r.caseId} | ${r.store} | ${r.strategy} | ${r.expect.join('<br>') || '(nothing)'} | ${r.got.join('<br>') || '(nothing)'}${verdict} | ${fmt(r.recall)} | ${fmt(r.rr)} |`,
     );
   }
+  const splitRows = rows.filter((r) => r.expectChunks);
+  if (splitRows.length > 0) {
+    lines.push(
+      '',
+      '## Split documents: answers in a non-first chunk',
+      '',
+      '| Case | Store | Strategy | Expected chunk | Got (top k chunks) | chunk recall@k | chunk RR |',
+      '|---|---|---|---|---|---|---|',
+      ...splitRows.map(
+        (r) =>
+          `| ${r.caseId} | ${r.store} | ${r.strategy} | ${(r.expectChunks ?? []).join('<br>')} | ${(r.gotChunks ?? []).join('<br>') || '(nothing)'} | ${fmt(r.chunkRecall)} | ${fmt(r.chunkRr)} |`,
+      ),
+    );
+  }
   lines.push('', '## suggestSpeakers grounding (real model)', '');
   if (speakerLines.length === 0) lines.push('Not run: OLLAMA_API_KEY is not set.');
   else
     lines.push(
-      '| Case | Topic | Suggested | Citations real | Speakers real | Result |',
-      '|---|---|---|---|---|---|',
+      '| Case | Topic | Suggested | Cited chunks | Expected chunk cited | Citations real | Speakers real | Result |',
+      '|---|---|---|---|---|---|---|---|',
       ...speakerLines,
     );
   lines.push('');

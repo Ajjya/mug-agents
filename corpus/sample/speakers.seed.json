@@ -3,50 +3,42 @@
     {
       "handle": "zara-quillfeather",
       "name": "Zara Quillfeather",
-      "topics": [
-        "change streams",
-        "event-driven architecture"
-      ],
+      "topics": ["change streams", "event-driven architecture"],
       "links": {},
       "perEvent": []
     },
     {
       "handle": "otto-brambleworth",
       "name": "Otto Brambleworth",
-      "topics": [
-        "sharding",
-        "scaling"
-      ],
+      "topics": ["sharding", "scaling"],
       "links": {},
       "perEvent": []
     },
     {
       "handle": "mira-vantablack",
       "name": "Mira Vantablack",
-      "topics": [
-        "vector search",
-        "embeddings"
-      ],
+      "topics": ["vector search", "embeddings"],
       "links": {},
       "perEvent": []
     },
     {
       "handle": "ignatius-fogwhistle",
       "name": "Ignatius Fogwhistle",
-      "topics": [
-        "data modelling",
-        "schema patterns"
-      ],
+      "topics": ["data modelling", "schema patterns"],
       "links": {},
       "perEvent": []
     },
     {
       "handle": "pip-lanternfield",
       "name": "Pip Lanternfield",
-      "topics": [
-        "time series",
-        "IoT"
-      ],
+      "topics": ["time series", "IoT"],
+      "links": {},
+      "perEvent": []
+    },
+    {
+      "handle": "wendeline-gooseberry",
+      "name": "Wendeline Gooseberry",
+      "topics": ["schema validation", "data quality"],
       "links": {},
       "perEvent": []
     }

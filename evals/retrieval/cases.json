@@ -85,6 +85,42 @@
       "type": "exact phrase",
       "query": "embed or reference",
       "expect": ["abstracts/modelling-for-reads"]
+    },
+    {
+      "id": "15-split-keynote",
+      "type": "answer in a non-first chunk of a split document",
+      "query": "start the validator in warn mode before switching it to error",
+      "expect": ["events/2026-10-autumn-summit"],
+      "expectChunks": ["events/2026-10-autumn-summit#1"]
+    },
+    {
+      "id": "16-split-av",
+      "type": "answer in a non-first chunk of a split document",
+      "query": "which video connector does the Kettle Room projector take",
+      "expect": ["notes/host-cogwheel-and-marmalade"],
+      "expectChunks": ["notes/host-cogwheel-and-marmalade#3"]
+    },
+    {
+      "id": "17-split-catering",
+      "type": "answer in a non-first chunk of a split document",
+      "query": "how long before the event must the catering numbers be confirmed",
+      "expect": ["notes/host-cogwheel-and-marmalade"],
+      "expectChunks": ["notes/host-cogwheel-and-marmalade#4"]
+    },
+    {
+      "id": "18-split-access",
+      "type": "answer in a non-first chunk of a split document",
+      "query": "step-free entrance, a quiet room and live captions",
+      "expect": ["events/2026-10-autumn-summit"],
+      "expectChunks": ["events/2026-10-autumn-summit#3"]
+    },
+    {
+      "id": "19-split-parking",
+      "type": "answer in a non-first chunk, kind filter",
+      "query": "where can attendees leave a car",
+      "kind": "host_note",
+      "expect": ["notes/host-cogwheel-and-marmalade"],
+      "expectChunks": ["notes/host-cogwheel-and-marmalade#2"]
     }
   ],
   "speakers": [
@@ -102,6 +138,12 @@
       "id": "S3-no-answer",
       "topic": "kubernetes operator for postgres",
       "expect": []
+    },
+    {
+      "id": "S5-split-citation",
+      "topic": "schema validation rules on a collection",
+      "expect": ["wendeline-gooseberry"],
+      "citeChunks": ["events/2026-10-autumn-summit#1"]
     },
     {
       "id": "S4-injection",

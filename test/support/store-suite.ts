@@ -63,6 +63,21 @@ export function storeSuite(
       },
     );
 
+    it.each(STRATEGIES)(
+      'a %s search cites the non-first chunk of a split document that holds the answer',
+      async (strategy) => {
+        const hits = await retrieval.search('DisplayPort adapters projector hearing loop', {
+          strategy,
+        });
+        expect(hits[0]?.chunk).toMatchObject({
+          id: 'notes/host-cogwheel-and-marmalade#3',
+          documentId: 'notes/host-cogwheel-and-marmalade',
+          index: 3,
+          heading: 'Audio-visual',
+        });
+      },
+    );
+
     it('filters by kind inside the query', async () => {
       const hits = await retrieval.search('host needed projector adapter attendee list', {
         kind: 'host_note',

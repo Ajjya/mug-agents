@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -31,7 +31,7 @@ describe('loadCorpus (manifest validation)', () => {
   it('loads the committed sample corpus', async () => {
     const { documents } = await loadCorpus('corpus/sample');
     expect(documents.length).toBeGreaterThanOrEqual(6);
-    expect(documents.length).toBeLessThanOrEqual(10);
+    expect(documents.length).toBeLessThanOrEqual(12);
     expect(documents.some((d) => d.classification === 'personal')).toBe(true);
     expect(documents.find((d) => d.documentId === 'posts/community-update')?.text).toContain(
       'IGNORE ALL PREVIOUS INSTRUCTIONS',
@@ -115,6 +115,37 @@ describe('chunkDocument', () => {
     for (const d of documents) {
       for (const c of chunkDocument(d))
         expect(c.estimatedTokens).toBeLessThanOrEqual(MAX_CHUNK_TOKENS);
+    }
+  });
+
+  it('the two long sample documents split into 3+ chunks at their headings', async () => {
+    const { documents } = await loadCorpus('corpus/sample');
+    for (const id of ['events/2026-10-autumn-summit', 'notes/host-cogwheel-and-marmalade']) {
+      const doc = documents.find((d) => d.documentId === id);
+      expect(doc, id).toBeDefined();
+      const chunks = chunkDocument(doc ?? { documentId: id, text: '' });
+      expect(chunks.length, id).toBeGreaterThanOrEqual(3);
+      // Later chunks carry the document title, so each still says what it is about.
+      for (const c of chunks.slice(1))
+        expect(c.text.startsWith(chunks[0]?.heading ?? '?')).toBe(true);
+    }
+  });
+
+  it('every chunk an eval case expects exists in the sample and lies past the first chunk', async () => {
+    const { documents } = await loadCorpus('corpus/sample');
+    const ids = new Set(documents.flatMap((d) => chunkDocument(d).map((c) => c.id)));
+    const spec = JSON.parse(await readFile('evals/retrieval/cases.json', 'utf8')) as {
+      cases: { id: string; expectChunks?: string[] }[];
+      speakers: { id: string; citeChunks?: string[] }[];
+    };
+    const expected = [
+      ...spec.cases.flatMap((c) => c.expectChunks ?? []),
+      ...spec.speakers.flatMap((s) => s.citeChunks ?? []),
+    ];
+    expect(expected.length).toBeGreaterThanOrEqual(4);
+    for (const id of expected) {
+      expect(ids.has(id), id).toBe(true);
+      expect(id.endsWith('#0'), `${id} should test a chunk boundary`).toBe(false);
     }
   });
 });

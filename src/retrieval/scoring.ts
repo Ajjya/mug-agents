@@ -104,5 +104,31 @@ export function reciprocalRank(
   return i === -1 ? 0 : 1 / (i + 1);
 }
 
+/**
+ * Expected recall@k of a ranker that orders the n candidates at random: each expected id lands in the
+ * top k with probability k/n. The floor every recall number must be read against.
+ */
+export function randomRecallAtK(n: number, k: number): number {
+  return n <= 0 ? 0 : Math.min(1, k / n);
+}
+
+/**
+ * Expected reciprocal rank of the first of m expected ids when n candidates are ordered at random:
+ * sum over r of (1/r) * P(the best-placed expected id is at rank r).
+ */
+export function randomReciprocalRank(n: number, m: number): number {
+  if (n <= 0 || m <= 0) return 0;
+  const hits = Math.min(m, n);
+  let expected = 0;
+  // P(min rank = r) = C(n - r, hits - 1) / C(n, hits)
+  let pNoneBefore = 1; // P(no expected id in ranks 1..r-1)
+  for (let r = 1; r <= n - hits + 1; r++) {
+    const pHere = hits / (n - r + 1); // P(rank r is expected | none before)
+    expected += (pNoneBefore * pHere) / r;
+    pNoneBefore *= 1 - pHere;
+  }
+  return expected;
+}
+
 /** Distinct values in first-seen order (chunk hits -> document ranking). */
 export const distinctInOrder = (values: readonly string[]): string[] => [...new Set(values)];

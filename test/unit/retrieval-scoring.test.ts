@@ -6,7 +6,15 @@ import {
   assertCompatible,
   normalize,
 } from '../../src/retrieval/embedder.js';
-import { bm25, recallAtK, reciprocalRank, rrf, terms } from '../../src/retrieval/scoring.js';
+import {
+  bm25,
+  randomReciprocalRank,
+  randomRecallAtK,
+  recallAtK,
+  reciprocalRank,
+  rrf,
+  terms,
+} from '../../src/retrieval/scoring.js';
 
 describe('terms and bm25', () => {
   it('drops stopwords and question phrasing, keeps the content words', () => {
@@ -128,5 +136,32 @@ describe('embedder', () => {
     );
     await expect(missing.embedQuery('x')).rejects.toBeInstanceOf(EmbeddingUnavailableError);
     await expect(missing.embedQuery('x')).rejects.toThrow(/ollama pull nope/);
+  });
+});
+
+describe('random baselines', () => {
+  it('recall@k of a random ranking is k/n, capped at 1', () => {
+    expect(randomRecallAtK(9, 5)).toBeCloseTo(5 / 9);
+    expect(randomRecallAtK(1, 5)).toBe(1);
+    expect(randomRecallAtK(0, 5)).toBe(0);
+  });
+
+  it('reciprocal rank of a random ranking matches enumeration', () => {
+    // One target among 9: (1/9) * H9.
+    let h9 = 0;
+    for (let i = 1; i <= 9; i++) h9 += 1 / i;
+    expect(randomReciprocalRank(9, 1)).toBeCloseTo(h9 / 9, 10);
+    // Two targets among 9, by brute force over all placements.
+    let sum = 0;
+    let count = 0;
+    for (let a = 1; a <= 9; a++)
+      for (let b = 1; b <= 9; b++)
+        if (a !== b) {
+          sum += 1 / Math.min(a, b);
+          count++;
+        }
+    expect(randomReciprocalRank(9, 2)).toBeCloseTo(sum / count, 10);
+    expect(randomReciprocalRank(1, 1)).toBe(1);
+    expect(randomReciprocalRank(3, 3)).toBe(1);
   });
 });
