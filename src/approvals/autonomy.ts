@@ -12,6 +12,10 @@ export const AUTONOMY_ACTIONS = [
   'plan_review',
   'send_external_message',
   'delete_anything',
+  'draft_speaker_message',
+  'first_contact_message',
+  'chase_in_existing_thread',
+  'thank_you_message',
 ] as const;
 export type AutonomyAction = (typeof AUTONOMY_ACTIONS)[number];
 
@@ -29,6 +33,16 @@ export const AUTONOMY_POLICY: Readonly<Record<AutonomyAction, AutonomyLevel>> = 
   // Nothing sends yet: the entry exists so M4/M5 inherit the rule instead of inventing one.
   send_external_message: 'approve',
   delete_anything: 'never',
+  // Speakers agent (M3b). Nothing is sent by the system yet, so `approve` buys a work queue:
+  // an approved draft means "send this now". M4 can consume `approved` without a redesign.
+  draft_speaker_message: 'auto',
+  // The speaker has no message marked sent for any event: a stranger gets nothing unreviewed.
+  first_contact_message: 'approve',
+  // A sent message exists and the chase limit is not reached (decideActions enforces the limit).
+  chase_in_existing_thread: 'auto',
+  // Settled before coding: auto. It goes to someone already in a sent thread, its facts come from
+  // the event record, and it is read when it is copied out. The row exists so M4 can tighten it.
+  thank_you_message: 'auto',
 } satisfies Record<AutonomyAction, AutonomyLevel>);
 
 export class AutonomyViolationError extends Error {
