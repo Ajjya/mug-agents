@@ -36,7 +36,17 @@ import {
   approvalRequestInput,
   planReviewPayload,
 } from './approval-fixtures.js';
-import { ID_A, ID_B, eventInput, organisationInput, speakerInput, taskInput } from './fixtures.js';
+import {
+  ID_A,
+  ID_B,
+  eventInput,
+  messageInput,
+  organisationInput,
+  speakerInput,
+  taskInput,
+} from './fixtures.js';
+import type { Message, MessageInput, MessagePatch } from '../../src/domain/message.schema.js';
+import type { MessagesRepository } from '../../src/repositories/messages.repository.js';
 
 type Base = { _id: EntityId; version: number; createdAt: string; updatedAt: string };
 type Factory<R> = () => R | Promise<R>;
@@ -633,3 +643,50 @@ export function approvalDecisionsContract(create: Factory<ApprovalDecisionsRepos
     });
   });
 }
+
+export function messagesContract(create: Factory<MessagesRepository>): void {
+  describe('messages repository contract', () => {
+    baseContract<MessageInput, Message, MessagePatch, MessagesRepository>({
+      create,
+      input: (n) => messageInput({ round: n + 1 }),
+      patch: { status: 'approved' },
+      patched: ['status', 'approved'],
+      unknownFieldInput: { ...messageInput(), surprise: 1 },
+      // What was written is immutable: only the lifecycle fields can be patched.
+      invalidPatch: { body: 'rewritten' },
+    });
+
+    describe('finders and uniqueness', () => {
+      let repo: MessagesRepository;
+      beforeEach(async () => {
+        repo = await create();
+      });
+
+      it('a second draft for the same natural key is a DuplicateKeyError', async () => {
+        await repo.insert(messageInput());
+        await expect(repo.insert(messageInput({ subject: 'Other' }))).rejects.toBeInstanceOf(
+          DuplicateKeyError,
+        );
+        expect(await repo.count()).toBe(1);
+      });
+
+      it('findByIdempotencyKey, findByEventId and findBySpeakerAndStatus', async () => {
+        const other = newEntityId();
+        const a = await repo.insert(messageInput());
+        await repo.insert(messageInput({ round: 2, status: 'sent', sentAt: ISO_SENT }));
+        await repo.insert(messageInput({ eventId: other, status: 'sent', sentAt: ISO_SENT }));
+        expect((await repo.findByIdempotencyKey(a.idempotencyKey))?._id).toBe(a._id);
+        expect(await repo.findByIdempotencyKey('nope')).toBeNull();
+        expect((await repo.findByEventId(ID_A)).items.map((m) => m.round)).toEqual([1, 2]);
+        expect((await repo.findBySpeakerAndStatus(ID_B, 'sent')).items).toHaveLength(2);
+        expect((await repo.findBySpeakerAndStatus(ID_A, 'sent')).items).toEqual([]);
+        await expect(repo.findByEventId('not-an-id')).rejects.toBeInstanceOf(z.ZodError);
+        await expect(
+          repo.findBySpeakerAndStatus(ID_B, { $ne: 'x' } as never),
+        ).rejects.toBeInstanceOf(z.ZodError);
+      });
+    });
+  });
+}
+
+const ISO_SENT = '2026-09-01T10:00:00.000Z';

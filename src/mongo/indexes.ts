@@ -6,6 +6,7 @@ export const COLLECTIONS = {
   speakers: 'speakers',
   organisations: 'organisations',
   tasks: 'tasks',
+  messages: 'messages',
   approvalRequests: 'approval_requests',
   approvalDecisions: 'approval_decisions',
   // Operational data owned by the LangGraph MongoDB checkpointer (see src/graph).
@@ -29,6 +30,12 @@ export const INDEXES: Record<CollectionName, IndexDescription[]> = {
   tasks: [
     { key: { status: 1, dueAt: 1 }, name: 'tasks_status_dueAt' },
     { key: { relatedEventId: 1 }, name: 'tasks_relatedEventId' },
+  ],
+  // A second draft for the same (eventId, speakerId, kind, round) is a no-op, not a duplicate.
+  messages: [
+    { key: { idempotencyKey: 1 }, name: 'messages_idempotencyKey_unique', unique: true },
+    { key: { eventId: 1, speakerId: 1 }, name: 'messages_eventId_speakerId' },
+    { key: { speakerId: 1, status: 1 }, name: 'messages_speakerId_status' },
   ],
   // At most one request per (thread, run, node): a re-run node can never create a second one.
   approval_requests: [

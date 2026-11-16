@@ -5,6 +5,7 @@ import {
   InMemoryOrganisationsRepository,
   InMemorySpeakersRepository,
   InMemoryTasksRepository,
+  InMemoryMessagesRepository,
 } from '../support/in-memory.repositories.js';
 import {
   approvalDecisionsContract,
@@ -13,6 +14,7 @@ import {
   organisationsContract,
   speakersContract,
   tasksContract,
+  messagesContract,
 } from '../support/repository-contract.js';
 
 // The same contract suite runs against the Mongo repositories in test/integration.
@@ -22,3 +24,4 @@ organisationsContract(() => new InMemoryOrganisationsRepository());
 tasksContract(() => new InMemoryTasksRepository());
 approvalRequestsContract(() => new InMemoryApprovalRequestsRepository());
 approvalDecisionsContract(() => new InMemoryApprovalDecisionsRepository());
+messagesContract(() => new InMemoryMessagesRepository());

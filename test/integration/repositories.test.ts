@@ -11,6 +11,7 @@ import { MongoEventsRepository } from '../../src/repositories/events.repository.
 import { MongoOrganisationsRepository } from '../../src/repositories/organisations.repository.js';
 import { MongoSpeakersRepository } from '../../src/repositories/speakers.repository.js';
 import { MongoTasksRepository } from '../../src/repositories/tasks.repository.js';
+import { MongoMessagesRepository } from '../../src/repositories/messages.repository.js';
 import { eventInput, speakerInput, taskInput } from '../support/fixtures.js';
 import { openTestMongo, type TestMongo } from '../support/mongo-test.js';
 import {
@@ -20,6 +21,7 @@ import {
   organisationsContract,
   speakersContract,
   tasksContract,
+  messagesContract,
 } from '../support/repository-contract.js';
 
 let mongo: TestMongo;
@@ -59,6 +61,10 @@ tasksContract(async () => {
 approvalRequestsContract(async () => {
   await fresh(mongo.db, 'approval_requests');
   return new MongoApprovalRequestsRepository(mongo.db);
+});
+messagesContract(async () => {
+  await fresh(mongo.db, 'messages');
+  return new MongoMessagesRepository(mongo.db);
 });
 approvalDecisionsContract(async () => {
   await fresh(mongo.db, 'approval_decisions');

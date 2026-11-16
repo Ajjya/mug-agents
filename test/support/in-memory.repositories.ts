@@ -72,6 +72,14 @@ import {
   type SpeakersRepository,
 } from '../../src/repositories/speakers.repository.js';
 import type { TasksRepository } from '../../src/repositories/tasks.repository.js';
+import type { MessagesRepository } from '../../src/repositories/messages.repository.js';
+import {
+  MessageInputSchema,
+  MessagePatchSchema,
+  MessageSchema,
+  type Message,
+  type MessageStatus,
+} from '../../src/domain/message.schema.js';
 
 type AnyObjectSchema = z.ZodObject;
 type Doc = { _id: EntityId; version: number; createdAt: string; updatedAt: string };
@@ -391,6 +399,47 @@ export class InMemoryApprovalDecisionsRepository
     toStorage(entityId, requestId);
     return (
       this.where((d) => d.requestId === requestId.toLowerCase(), { limit: 1 }).items[0] ?? null
+    );
+  }
+}
+
+export class InMemoryMessagesRepository
+  extends InMemoryRepository<
+    typeof MessageInputSchema,
+    typeof MessageSchema,
+    typeof MessagePatchSchema
+  >
+  implements MessagesRepository
+{
+  constructor() {
+    super({ input: MessageInputSchema, doc: MessageSchema, patch: MessagePatchSchema });
+  }
+  /** Same rule as the unique index on idempotencyKey. */
+  protected override beforeWrite(next: Message, previous: Message | undefined): void {
+    if (
+      this.all().some((d) => d._id !== previous?._id && d.idempotencyKey === next.idempotencyKey)
+    ) {
+      throw new DuplicateKeyError('messages', { idempotencyKey: 1 });
+    }
+  }
+  async findByIdempotencyKey(key: string): Promise<Message | null> {
+    z.string().min(1).parse(key);
+    return this.where((d) => d.idempotencyKey === key, { limit: 1 }).items[0] ?? null;
+  }
+  async findByEventId(eventId: EntityId, options?: FindManyOptions): Promise<Page<Message>> {
+    toStorage(entityId, eventId);
+    return this.where((d) => d.eventId === eventId.toLowerCase(), options);
+  }
+  async findBySpeakerAndStatus(
+    speakerId: EntityId,
+    status: MessageStatus,
+    options?: FindManyOptions,
+  ): Promise<Page<Message>> {
+    toStorage(entityId, speakerId);
+    const valid = MessageInputSchema.shape.status.parse(status);
+    return this.where(
+      (d) => d.speakerId === speakerId.toLowerCase() && d.status === valid,
+      options,
     );
   }
 }
