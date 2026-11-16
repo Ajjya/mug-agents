@@ -137,6 +137,32 @@ document demanded); every citation a retrieved chunk, every speaker real.
 - **Both stores rank the same way** (identical vector results; keyword differs only through Atlas's own
   BM25 and analyzer).
 
+**Rerun after review** (`evals/retrieval/report-2026-11-16.md`): 12 documents, 20 chunks (two documents
+split into 4 and 6 chunks), 2684 tokens embedded, 20 cases, k = 5, **N = 11 public documents, k/N = 0.45;
+random baseline recall@5 0.52, MRR 0.35**. Gates: `VECTOR_MIN_SCORE` 0.575, `VECTOR_MIN_GAP` 0.05,
+`KEYWORD_MIN_COVERAGE` 0.5.
+
+| Store      | Strategy | recall@5 | MRR  | chunk recall@5 (5 split cases) | no-answer correct | personal leaked | median / p95 |
+| ---------- | -------- | -------- | ---- | ------------------------------ | ----------------- | --------------- | ------------ |
+| bruteforce | vector   | 0.97     | 0.95 | 1.00                           | 3/3               | 0               | 2.0 / 5.0 ms |
+| bruteforce | keyword  | 0.78     | 0.81 | 1.00                           | 3/3               | 0               | 2.1 / 8.7 ms |
+| bruteforce | hybrid   | 0.94     | 0.94 | 1.00                           | 3/3               | 0               | 2.2 / 7.3 ms |
+| atlas      | vector   | 0.97     | 0.95 | 1.00                           | 3/3               | 0               | 14 / 57 ms   |
+| atlas      | keyword  | 0.78     | 0.81 | 1.00                           | 3/3               | 0               | 15 / 39 ms   |
+| atlas      | hybrid   | 0.94     | 0.94 | 1.00                           | 3/3               | 0               | 28 / 76 ms   |
+
+- Every answer that sits in a non-first chunk came back as that chunk, on every arm. `suggestSpeakers`
+  cited `events/2026-10-autumn-summit#1` for the new split-citation case. 5/5 grounding passes.
+- No-answer: the absolute vector gate rejected all three no-answer cases. The gap gate passed them
+  (gaps 0.095 to 0.101). Keyword found no shared term in 07 and 08, and in 08b ("pizza" shared with three
+  documents) its coverage gate rejected 0.25 < 0.5.
+- The keyword coverage gate has a cost: keyword recall fell from 1.00 to 0.78, because the paraphrase
+  cases 03 and 04 (no shared vocabulary by design) are now rejected rather than matched on incidental
+  words. Hybrid keeps them through the vector arm.
+- Hybrid 0.94 rather than 1.00 is **case 11** ("how did we write up the last event"): the two new long
+  documents push the recap post out of hybrid's top 5. One case again: a demonstration that adding
+  documents changes rankings, not a strategy ranking.
+
 **Crossover, measured without embeddings** (`npm run bench:crossover`, `evals/retrieval/crossover-2026-11-16.md`).
 Random unit vectors (768 dimensions) stored exactly as the stores keep chunks, 20 random queries per size,
 vector strategy:

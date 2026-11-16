@@ -50,6 +50,12 @@
       "expect": []
     },
     {
+      "id": "08b-no-answer-shared-word",
+      "type": "nothing relevant, but one query word (pizza) occurs in three documents",
+      "query": "pineapple pizza recipe with anchovies",
+      "expect": []
+    },
+    {
       "id": "09-injection-doc",
       "type": "the injection document is retrievable as data",
       "query": "community update volunteers and a new venue",
