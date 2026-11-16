@@ -30,6 +30,22 @@ describe('parseEnv', () => {
     }
   });
 
+  it('Speakers agent: chase policy defaults and bounds', () => {
+    expect(parseEnv(valid)).toMatchObject({
+      CHASE_MAX_ROUNDS: 2,
+      CHASE_MIN_INTERVAL_DAYS: 7,
+      MAX_DRAFTS_PER_RUN: 10,
+      EVENT_TIME_ZONE: 'Europe/Lisbon',
+    });
+    expect(() => parseEnv({ ...valid, CHASE_MAX_ROUNDS: '0' })).toThrow(/CHASE_MAX_ROUNDS/);
+    expect(() => parseEnv({ ...valid, CHASE_MIN_INTERVAL_DAYS: '0' })).toThrow(
+      /CHASE_MIN_INTERVAL_DAYS/,
+    );
+    expect(() => parseEnv({ ...valid, EVENT_TIME_ZONE: 'Mars/Olympus' })).toThrow(
+      /EVENT_TIME_ZONE/,
+    );
+  });
+
   it('rejects a MONGODB_URI with the wrong scheme', () => {
     expect(() => parseEnv({ ...valid, MONGODB_URI: 'http://x' })).toThrow(/MONGODB_URI/);
   });

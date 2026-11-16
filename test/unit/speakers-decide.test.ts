@@ -1,0 +1,446 @@
+import { describe, expect, it } from 'vitest';
+import {
+  type ChasePolicy,
+  type Decision,
+  type PipelineMessage,
+  type PipelineSpeaker,
+  decideActions,
+} from '../../src/agents/speakers/decide.js';
+import type { MessageKind, MessageStatus } from '../../src/domain/message.schema.js';
+import type { SpeakerStatus } from '../../src/domain/speaker.schema.js';
+
+/** Event day: Saturday 12 December 2026. T-6w = 31 Oct, T-4w = 14 Nov, T-3w = 21 Nov, T-1w = 5 Dec. */
+const EVENT = '2026-12-12T00:00:00.000Z';
+const POLICY: ChasePolicy = { chaseMaxRounds: 2, chaseMinIntervalDays: 7, maxDraftsPerRun: 10 };
+const S = 's'.repeat(24);
+
+const at = (day: string): Date => new Date(`${day}T09:30:00.000Z`);
+
+const speaker = (status: SpeakerStatus, over: Partial<PipelineSpeaker> = {}): PipelineSpeaker => ({
+  id: S,
+  name: 'Wendeline Gooseberry',
+  status,
+  hasBio: true,
+  hasPhoto: true,
+  ...over,
+});
+
+let n = 0;
+const msg = (
+  kind: MessageKind,
+  status: MessageStatus,
+  sentDay?: string,
+  round = 1,
+): PipelineMessage => ({
+  id: `m${String(++n)}`,
+  speakerId: S,
+  kind,
+  round,
+  status,
+  ...(sentDay ? { sentAt: `${sentDay}T16:00:00.000Z` } : {}),
+});
+
+function decide(
+  day: string,
+  s: PipelineSpeaker,
+  messages: PipelineMessage[] = [],
+  policy: ChasePolicy = POLICY,
+): Decision {
+  return decideActions({ now: at(day), eventDate: EVENT, speakers: [s], messages, policy });
+}
+
+const planned = (d: Decision) => d.actions.map((a) => `${a.kind}#${String(a.round)}`);
+
+interface Row {
+  name: string;
+  day: string;
+  speaker: PipelineSpeaker;
+  messages?: PipelineMessage[];
+  actions: string[];
+  blocked?: string[];
+  supersede?: number;
+}
+
+// Every row of the decision table, with the day before and the day of each boundary.
+const ROWS: Row[] = [
+  // ---- idea -> invitation at T-6w ----
+  { name: 'idea, T-6w minus 1 day', day: '2026-10-30', speaker: speaker('idea'), actions: [] },
+  { name: 'idea, T-6w', day: '2026-10-31', speaker: speaker('idea'), actions: ['invitation#1'] },
+  {
+    name: 'idea, the day before',
+    day: '2026-12-11',
+    speaker: speaker('idea'),
+    actions: ['invitation#1'],
+  },
+  { name: 'idea, event day', day: '2026-12-12', speaker: speaker('idea'), actions: [] },
+  {
+    name: 'idea, invitation drafted, not sent',
+    day: '2026-11-01',
+    speaker: speaker('idea'),
+    messages: [msg('invitation', 'draft')],
+    actions: [],
+  },
+  {
+    name: 'idea again (parked) after an invitation was sent',
+    day: '2026-11-20',
+    speaker: speaker('idea'),
+    messages: [msg('invitation', 'sent', '2026-11-01')],
+    actions: [],
+  },
+  {
+    name: 'idea, invitation rejected at review',
+    day: '2026-11-20',
+    speaker: speaker('idea'),
+    messages: [msg('invitation', 'rejected')],
+    actions: [],
+  },
+  // ---- invited -> chase_reply, 7 days after the last sent message ----
+  {
+    name: 'invited, invitation never marked sent',
+    day: '2026-11-20',
+    speaker: speaker('invited'),
+    actions: [],
+  },
+  {
+    name: 'invited, invitation sent 6 days ago',
+    day: '2026-11-07',
+    speaker: speaker('invited'),
+    messages: [msg('invitation', 'sent', '2026-11-01')],
+    actions: [],
+  },
+  {
+    name: 'invited, invitation sent 7 days ago',
+    day: '2026-11-08',
+    speaker: speaker('invited'),
+    messages: [msg('invitation', 'sent', '2026-11-01')],
+    actions: ['chase_reply#1'],
+  },
+  {
+    name: 'invited, chase 1 drafted, not sent: no second chase',
+    day: '2026-11-20',
+    speaker: speaker('invited'),
+    messages: [msg('invitation', 'sent', '2026-11-01'), msg('chase_reply', 'draft')],
+    actions: [],
+  },
+  {
+    name: 'invited, chase 1 sent 6 days ago',
+    day: '2026-11-14',
+    speaker: speaker('invited'),
+    messages: [msg('invitation', 'sent', '2026-11-01'), msg('chase_reply', 'sent', '2026-11-08')],
+    actions: [],
+  },
+  {
+    name: 'invited, chase 1 sent 7 days ago',
+    day: '2026-11-15',
+    speaker: speaker('invited'),
+    messages: [msg('invitation', 'sent', '2026-11-01'), msg('chase_reply', 'sent', '2026-11-08')],
+    actions: ['chase_reply#2'],
+  },
+  {
+    name: 'invited, 2 chases sent, last 6 days ago: limit, waiting out the interval',
+    day: '2026-11-21',
+    speaker: speaker('invited'),
+    messages: [
+      msg('invitation', 'sent', '2026-11-01'),
+      msg('chase_reply', 'sent', '2026-11-08', 1),
+      msg('chase_reply', 'sent', '2026-11-15', 2),
+    ],
+    actions: [],
+  },
+  {
+    name: 'invited, 2 chases sent, last 7 days ago: blocked, a task',
+    day: '2026-11-22',
+    speaker: speaker('invited'),
+    messages: [
+      msg('invitation', 'sent', '2026-11-01'),
+      msg('chase_reply', 'sent', '2026-11-08', 1),
+      msg('chase_reply', 'sent', '2026-11-15', 2),
+    ],
+    actions: [],
+    blocked: ['chase_reply'],
+  },
+  {
+    name: 'invited, event day: no more chases',
+    day: '2026-12-12',
+    speaker: speaker('invited'),
+    messages: [msg('invitation', 'sent', '2026-11-01')],
+    actions: [],
+  },
+  // ---- confirmed -> abstract at T-4w, bio/photo at T-3w ----
+  {
+    name: 'confirmed, T-4w minus 1',
+    day: '2026-11-13',
+    speaker: speaker('confirmed'),
+    actions: [],
+  },
+  {
+    name: 'confirmed, T-4w',
+    day: '2026-11-14',
+    speaker: speaker('confirmed'),
+    actions: ['chase_abstract#1'],
+  },
+  {
+    name: 'confirmed, abstract chase sent 6 days ago',
+    day: '2026-11-20',
+    speaker: speaker('confirmed'),
+    messages: [msg('chase_abstract', 'sent', '2026-11-14')],
+    actions: [],
+  },
+  {
+    name: 'confirmed, abstract chase sent 7 days ago',
+    day: '2026-11-21',
+    speaker: speaker('confirmed'),
+    messages: [msg('chase_abstract', 'sent', '2026-11-14')],
+    actions: ['chase_abstract#2'],
+  },
+  {
+    name: 'confirmed, bio and photo missing, T-3w minus 1',
+    day: '2026-11-20',
+    speaker: speaker('confirmed', { hasBio: false, hasPhoto: false }),
+    messages: [msg('chase_abstract', 'sent', '2026-11-14')],
+    actions: [],
+  },
+  {
+    name: 'confirmed, bio and photo missing, T-3w',
+    day: '2026-11-21',
+    speaker: speaker('confirmed', { hasBio: false, hasPhoto: false }),
+    messages: [msg('chase_abstract', 'sent', '2026-11-14')],
+    actions: ['chase_abstract#2', 'chase_bio#1', 'chase_photo#1'],
+  },
+  {
+    name: 'confirmed, only the photo missing, T-3w',
+    day: '2026-11-21',
+    speaker: speaker('confirmed', { hasPhoto: false }),
+    messages: [msg('chase_abstract', 'draft')],
+    actions: ['chase_photo#1'],
+  },
+  // ---- abstract_received -> slides at T-1w (spec: T-2d), bio/photo still chased ----
+  {
+    name: 'abstract received, T-1w minus 1',
+    day: '2026-12-04',
+    speaker: speaker('abstract_received'),
+    actions: [],
+  },
+  {
+    name: 'abstract received, T-1w',
+    day: '2026-12-05',
+    speaker: speaker('abstract_received'),
+    actions: ['chase_slides#1'],
+  },
+  {
+    name: 'abstract received, bio missing at T-3w',
+    day: '2026-11-21',
+    speaker: speaker('abstract_received', { hasBio: false }),
+    actions: ['chase_bio#1'],
+  },
+  {
+    name: 'abstract received: an unsent abstract chase is superseded',
+    day: '2026-11-21',
+    speaker: speaker('abstract_received'),
+    messages: [msg('chase_abstract', 'approved')],
+    actions: [],
+    supersede: 1,
+  },
+  // ---- slides_received -> thank_you at T+1d ----
+  {
+    name: 'slides received, event day',
+    day: '2026-12-12',
+    speaker: speaker('slides_received'),
+    actions: [],
+  },
+  {
+    name: 'slides received, T+1d',
+    day: '2026-12-13',
+    speaker: speaker('slides_received'),
+    actions: ['thank_you#1'],
+  },
+  {
+    name: 'slides received, thank-you already sent',
+    day: '2026-12-20',
+    speaker: speaker('slides_received'),
+    messages: [msg('thank_you', 'sent', '2026-12-13')],
+    actions: [],
+  },
+  // ---- terminal-ish statuses ----
+  {
+    name: 'declined: nothing, and pending drafts are superseded',
+    day: '2026-11-21',
+    speaker: speaker('declined', { hasBio: false }),
+    messages: [msg('invitation', 'sent', '2026-11-01'), msg('chase_reply', 'draft')],
+    actions: [],
+    supersede: 1,
+  },
+  { name: 'thanked: nothing', day: '2026-12-20', speaker: speaker('thanked'), actions: [] },
+];
+
+describe('decideActions: the decision table', () => {
+  it.each(ROWS.map((r) => [r.name, r] as const))('%s', (_name, row) => {
+    const d = decide(row.day, row.speaker, row.messages);
+    expect(planned(d)).toEqual(row.actions);
+    expect(d.blocked.map((b) => b.kind)).toEqual(row.blocked ?? []);
+    expect(d.supersede).toHaveLength(row.supersede ?? 0);
+  });
+
+  it('every planned action carries a reason and the day it became due', () => {
+    const d = decide('2026-11-21', speaker('confirmed', { hasBio: false }), [
+      msg('chase_abstract', 'sent', '2026-11-14'),
+    ]);
+    expect(d.actions.map((a) => [a.kind, a.dueOn])).toEqual([
+      ['chase_abstract', '2026-11-21'],
+      ['chase_bio', '2026-11-21'],
+    ]);
+    expect(d.actions[0]?.reason).toMatch(/chase 2 of 2/);
+    expect(d.actions[0]?.reason).toMatch(/7 days ago/);
+  });
+
+  it('a filled-in bio supersedes the unsent bio chase', () => {
+    const d = decide('2026-11-22', speaker('confirmed'), [msg('chase_bio', 'draft')]);
+    expect(d.supersede[0]?.reason).toMatch(/bio is now on file/);
+  });
+
+  it('says why a kind is waiting, with the day it becomes due', () => {
+    const d = decide('2026-10-01', speaker('idea'));
+    expect(d.waiting).toEqual([
+      { speakerId: S, kind: 'invitation', dueOn: '2026-10-31', why: 'not before T-6w' },
+    ]);
+  });
+});
+
+describe('decideActions: chase policy', () => {
+  it('CHASE_MAX_ROUNDS: a third chase is never planned; the limit produces a task', () => {
+    const sent = [
+      msg('invitation', 'sent', '2026-10-31'),
+      msg('chase_reply', 'sent', '2026-11-07', 1),
+      msg('chase_reply', 'sent', '2026-11-14', 2),
+    ];
+    for (const day of ['2026-11-21', '2026-11-28', '2026-12-05']) {
+      const d = decide(day, speaker('invited'), sent);
+      expect(planned(d)).toEqual([]);
+      expect(d.blocked).toHaveLength(1);
+      expect(d.blocked[0]?.roundsSent).toBe(2);
+    }
+    // A limit of 3 lets the third through.
+    expect(
+      planned(decide('2026-11-21', speaker('invited'), sent, { ...POLICY, chaseMaxRounds: 3 })),
+    ).toEqual(['chase_reply#3']);
+  });
+
+  it('CHASE_MIN_INTERVAL_DAYS: measured from the last SENT message, in calendar days', () => {
+    const sent = [msg('invitation', 'sent', '2026-11-01')];
+    const p = { ...POLICY, chaseMinIntervalDays: 10 };
+    expect(planned(decide('2026-11-10', speaker('invited'), sent, p))).toEqual([]);
+    expect(planned(decide('2026-11-11', speaker('invited'), sent, p))).toEqual(['chase_reply#1']);
+  });
+
+  it('a chase is never scheduled for a message that was never marked sent', () => {
+    for (const status of ['draft', 'approved', 'rejected', 'superseded'] as const) {
+      const d = decide('2026-12-01', speaker('invited'), [msg('invitation', status)]);
+      expect(planned(d)).toEqual([]);
+      expect(d.blocked).toEqual([]);
+    }
+  });
+
+  it('MAX_DRAFTS_PER_RUN: a backlog is cut, oldest due first, and the rest deferred', () => {
+    const speakers = Array.from({ length: 13 }, (_, i) =>
+      speaker('idea', { id: String(i).padStart(24, '0') }),
+    );
+    const d = decideActions({
+      now: at('2026-11-20'),
+      eventDate: EVENT,
+      speakers,
+      messages: [],
+      policy: POLICY,
+    });
+    expect(d.actions).toHaveLength(10);
+    expect(d.deferred).toHaveLength(3);
+    expect(d.notes.join(' ')).toMatch(/13 messages are due/);
+    expect(
+      decideActions({
+        now: at('2026-11-20'),
+        eventDate: EVENT,
+        speakers,
+        messages: [],
+        policy: { ...POLICY, maxDraftsPerRun: 0 },
+      }).actions,
+    ).toEqual([]);
+  });
+
+  it('a rejected chase is final for that kind', () => {
+    const d = decide('2026-11-30', speaker('confirmed'), [msg('chase_abstract', 'rejected')]);
+    expect(planned(d)).toEqual([]);
+    expect(d.waiting[0]?.why).toMatch(/rejected at review/);
+  });
+
+  it('the next round number follows the highest existing round, whatever its status', () => {
+    const d = decide('2026-11-30', speaker('confirmed'), [
+      msg('chase_abstract', 'superseded', undefined, 1),
+      msg('chase_abstract', 'sent', '2026-11-20', 2),
+    ]);
+    expect(planned(d)).toEqual(['chase_abstract#3']);
+  });
+
+  it('refuses a nonsensical policy', () => {
+    expect(() =>
+      decide('2026-11-01', speaker('idea'), [], { ...POLICY, chaseMaxRounds: 0 }),
+    ).toThrow(RangeError);
+    expect(() =>
+      decide('2026-11-01', speaker('idea'), [], { ...POLICY, chaseMinIntervalDays: 0 }),
+    ).toThrow(RangeError);
+  });
+});
+
+describe('decideActions: the event', () => {
+  it('no date: nothing scheduled, and says so', () => {
+    const d = decideActions({
+      now: at('2026-11-20'),
+      eventDate: undefined,
+      speakers: [speaker('idea')],
+      messages: [],
+      policy: POLICY,
+    });
+    expect(d.actions).toEqual([]);
+    expect(d.notes[0]).toMatch(/no date/);
+  });
+
+  it('is pure: same input, same output, input untouched', () => {
+    const messages = Object.freeze([Object.freeze(msg('invitation', 'sent', '2026-11-01'))]);
+    const input = {
+      now: at('2026-11-08'),
+      eventDate: EVENT,
+      speakers: [speaker('invited')],
+      messages,
+      policy: POLICY,
+    };
+    expect(decideActions(input)).toEqual(decideActions(input));
+  });
+
+  it('the event moving closer brings actions forward, and never repeats one already drafted', () => {
+    const s = speaker('confirmed');
+    const later = '2026-12-19T00:00:00.000Z';
+    expect(
+      decideActions({
+        now: at('2026-11-14'),
+        eventDate: later,
+        speakers: [s],
+        messages: [],
+        policy: POLICY,
+      }).actions,
+    ).toEqual([]);
+    const moved = decideActions({
+      now: at('2026-11-14'),
+      eventDate: EVENT,
+      speakers: [s],
+      messages: [],
+      policy: POLICY,
+    });
+    expect(planned(moved)).toEqual(['chase_abstract#1']);
+    const again = decideActions({
+      now: at('2026-11-14'),
+      eventDate: EVENT,
+      speakers: [s],
+      messages: [msg('chase_abstract', 'draft')],
+      policy: POLICY,
+    });
+    expect(planned(again)).toEqual([]);
+  });
+});

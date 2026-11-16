@@ -193,6 +193,24 @@ const baseEnvSchema = z.object({
    * are not comparable across queries, so the gate is on coverage, not on the score.
    */
   KEYWORD_MIN_COVERAGE: z.coerce.number().min(0).max(1).default(0.5),
+  /** Sent chases of one kind per speaker per event before the Speakers agent stops and creates a task. */
+  CHASE_MAX_ROUNDS: z.coerce.number().int().min(1).max(10).default(2),
+  /** Days since the last SENT message of a thread before the next chase is due. */
+  CHASE_MIN_INTERVAL_DAYS: z.coerce.number().int().min(1).max(60).default(7),
+  /** Drafts one Speakers run may produce, so a wrong clock or a stale event cannot make a pile. */
+  MAX_DRAFTS_PER_RUN: z.coerce.number().int().min(0).max(100).default(10),
+  /** Time zone event times are written in, in drafts (IANA name). */
+  EVENT_TIME_ZONE: z
+    .string()
+    .refine((tz) => {
+      try {
+        new Intl.DateTimeFormat('en-GB', { timeZone: tz });
+        return true;
+      } catch {
+        return false;
+      }
+    }, 'must be an IANA time zone, e.g. Europe/Lisbon')
+    .default('Europe/Lisbon'),
   /** Who approvals are recorded as when the CLI is not given --by. No auth yet: recorded as-is. */
   APPROVER_NAME: z.string().trim().min(1).optional(),
   /**
