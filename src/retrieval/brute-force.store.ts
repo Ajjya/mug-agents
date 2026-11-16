@@ -4,11 +4,13 @@ import { bm25 } from './scoring.js';
 import {
   type Chunk,
   type Hit,
+  type SearchOutcome,
   type SearchQuery,
   type StoreStats,
   type VectorStore,
+  candidateLimit,
   collectionFor,
-  fuseHybrid,
+  decide,
   stripVector,
   validateQuery,
 } from './vector-store.js';
@@ -70,6 +72,10 @@ export class BruteForceStore implements VectorStore {
   }
 
   async search(q: SearchQuery): Promise<Hit[]> {
+    return (await this.explain(q)).hits;
+  }
+
+  async explain(q: SearchQuery): Promise<SearchOutcome> {
     validateQuery(q);
     const filter: Filter<StoredChunk> = {
       retired: false,
@@ -77,28 +83,23 @@ export class BruteForceStore implements VectorStore {
       ...(q.kind ? { kind: q.kind } : {}),
     };
     const candidates = (await this.col.find(filter).toArray()).map(toChunk);
+    const n = candidateLimit(q.limit);
     const vector = (): Hit[] => {
-      if (candidates.length === 0) return [];
       const first = candidates[0];
       if (first && q.queryModel) assertCompatible(first, q.queryModel);
       const v = q.vector ?? [];
       return candidates
         .map((c) => ({ chunk: stripVector(c), score: dot(c.vector, v) }))
-        .filter((h) => h.score >= q.minScore)
-        .sort((a, b) => b.score - a.score);
+        .sort((a, b) => b.score - a.score)
+        .slice(0, n);
     };
     const keyword = (): Hit[] =>
-      bm25(q.text, candidates, (c) => `${c.heading}\n${c.text}`).map((s) => ({
-        chunk: stripVector(s.item),
-        score: s.score,
-      }));
-    switch (q.strategy) {
-      case 'vector':
-        return vector().slice(0, q.limit);
-      case 'keyword':
-        return keyword().slice(0, q.limit);
-      case 'hybrid':
-        return fuseHybrid(vector(), keyword(), q.limit);
-    }
+      bm25(q.text, candidates, (c) => `${c.heading}\n${c.text}`)
+        .slice(0, n)
+        .map((s) => ({ chunk: stripVector(s.item), score: s.score }));
+    return decide(q, {
+      ...(q.strategy === 'keyword' ? {} : { vector: vector() }),
+      ...(q.strategy === 'vector' ? {} : { keyword: keyword() }),
+    });
   }
 }

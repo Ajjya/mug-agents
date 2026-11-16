@@ -80,6 +80,20 @@ numDimensions, similarity, quantization }, { type: 'filter', path }] } })`; beco
   handle; ingestion resolves handles to ids read-only and fails if one is missing ("seed first").
 - **Chunks are never deleted.** Re-ingest upserts by chunk id (`<documentId>#<n>`); chunks a document no
   longer produces are flagged `retired` and excluded from every search. One collection per embedder.
+- **No-answer is decided per strategy, before fusion** (added after review). Until then only the
+  vector arm had a threshold. **Keyword had none of its own**: any chunk sharing one non-stopword with
+  the query was a hit, and hybrid fused that ungated keyword list, so hybrid's no-answer rested on the
+  keyword arm happening to find no shared word. Both no-answer cases in the first eval passed only
+  because their words occur nowhere in the corpus. Now:
+  - vector: per-hit cosine >= `VECTOR_MIN_SCORE`;
+  - keyword: per-chunk coverage of the query's distinct terms >= `KEYWORD_MIN_COVERAGE` (0.5), computed
+    in Node identically on both stores (BM25 and `$search` scores are not comparable across queries);
+  - hybrid: no threshold; it fuses only hits that passed their own arm. An RRF score is a rank
+    statistic, so no cosine threshold can apply to it.
+
+  The shared `decide()` applies the gates for both stores; a store only retrieves candidates. Tested per
+  strategy on both stores with a query whose one shared word ("pizza") occurs in three documents.
+
 - **Relevance threshold** `VECTOR_MIN_SCORE = 0.56`, calibrated on the sample: with this model unrelated
   queries top out around 0.48 to 0.54, paraphrases score about 0.58, direct matches 0.74+. The band is
   narrow; re-measure on the real corpus.

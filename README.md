@@ -47,6 +47,7 @@ with a list of every problem.
 | `RETRIEVAL_STORE`        | no                  | `bruteforce`                                                  | `bruteforce` or `atlas`                                                                                      |
 | `ATLAS_LOCAL_URI`        | no                  | –                                                             | mongodb-atlas-local, for the Atlas arm of tests and eval                                                     |
 | `VECTOR_MIN_SCORE`       | no                  | `0.56`                                                        | Cosine below this is not relevant (calibrated on the sample)                                                 |
+| `KEYWORD_MIN_COVERAGE`   | no                  | `0.5`                                                         | Keyword arm: share of the query's distinct terms a chunk must contain                                        |
 | `LLM_MAX_ATTEMPTS`       | no                  | 2 × ladder length                                             | Total provider calls per structured call; must let every rung be reached (3 rungs need ≥ 5), else boot fails |
 
 `process.env` is read only in `src/config/config.module.ts`.
@@ -311,7 +312,19 @@ npm run suggest-speakers -- "change streams"
 - Strategies: `keyword` (BM25 in Node / MongoDB Search text on Atlas), `vector` (cosine), `hybrid`
   (reciprocal rank fusion of both; the default).
 - Every search has an explicit classification scope; the default is `public`.
-- Nothing relevant means **nothing returned**, never the least-bad hit (`VECTOR_MIN_SCORE`, default 0.56).
+- Nothing relevant means **nothing returned**, never the least-bad hit. Each strategy has its own gate,
+  applied before anything is fused:
+  - **vector**: a hit's cosine must reach `VECTOR_MIN_SCORE` (default 0.56, calibrated for
+    `nomic-embed-text`);
+  - **keyword**: a chunk must contain at least `KEYWORD_MIN_COVERAGE` (default 0.5) of the query's
+    distinct terms. BM25 scores are not comparable across queries, so the gate is on coverage, not on
+    the score;
+  - **hybrid**: no threshold of its own. It fuses (reciprocal rank fusion) only the hits that passed
+    their own arm's gate. The RRF score is a rank statistic, not a cosine, so `VECTOR_MIN_SCORE` cannot
+    apply to it.
+
+  `RetrievalService.explain()` returns each arm's gate statistics alongside the hits.
+
 - `suggest-speakers` only names speakers who exist and who have their own chunk among the retrieved
   evidence; every suggestion cites chunk ids. Retrieved text is fenced as untrusted data, and the model
   call has no tools.

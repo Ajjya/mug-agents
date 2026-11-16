@@ -4,9 +4,11 @@ import { assertCompatible } from './embedder.js';
 import {
   type ChunkView,
   type Hit,
+  type SearchOutcome,
   type SearchQuery,
+  candidateLimit,
   collectionFor,
-  fuseHybrid,
+  decide,
   validateQuery,
 } from './vector-store.js';
 
@@ -100,8 +102,9 @@ export class AtlasVectorStore extends BruteForceStore {
     }
   }
 
-  override async search(q: SearchQuery): Promise<Hit[]> {
+  override async explain(q: SearchQuery): Promise<SearchOutcome> {
     validateQuery(q);
+    const n = candidateLimit(q.limit);
     const view = (d: Document): ChunkView => {
       const { _id, vector: _v, score: _s, retired: _r, ingestedAt: _i, ...rest } = d;
       return { id: _id as string, ...(rest as Omit<ChunkView, 'id'>) };
@@ -112,7 +115,6 @@ export class AtlasVectorStore extends BruteForceStore {
       const stats = await this.stats();
       if (stats.chunks === 0) return [];
       if (q.queryModel) assertCompatible(stats, q.queryModel);
-      const candidateLimit = Math.max(q.limit, 50);
       const docs = await this.raw
         .aggregate([
           {
@@ -120,8 +122,8 @@ export class AtlasVectorStore extends BruteForceStore {
               index: VECTOR_INDEX,
               path: 'vector',
               queryVector: q.vector,
-              numCandidates: Math.min(10_000, candidateLimit * 20),
-              limit: candidateLimit,
+              numCandidates: Math.min(10_000, n * 20),
+              limit: n,
               filter: {
                 $and: [
                   { classification: { $in: scope } },
@@ -135,9 +137,7 @@ export class AtlasVectorStore extends BruteForceStore {
           { $addFields: { score: { $meta: 'vectorSearchScore' } } },
         ])
         .toArray();
-      return docs
-        .map((d) => ({ chunk: view(d), score: 2 * (d['score'] as number) - 1 }))
-        .filter((h) => h.score >= q.minScore);
+      return docs.map((d) => ({ chunk: view(d), score: 2 * (d['score'] as number) - 1 }));
     };
 
     const keyword = async (): Promise<Hit[]> => {
@@ -156,7 +156,7 @@ export class AtlasVectorStore extends BruteForceStore {
               },
             },
           },
-          { $limit: 50 },
+          { $limit: n },
           { $project: { vector: 0 } },
           { $addFields: { score: { $meta: 'searchScore' } } },
         ])
@@ -164,13 +164,9 @@ export class AtlasVectorStore extends BruteForceStore {
       return docs.map((d) => ({ chunk: view(d), score: d['score'] as number }));
     };
 
-    switch (q.strategy) {
-      case 'vector':
-        return (await vector()).slice(0, q.limit);
-      case 'keyword':
-        return (await keyword()).slice(0, q.limit);
-      case 'hybrid':
-        return fuseHybrid(await vector(), await keyword(), q.limit);
-    }
+    return decide(q, {
+      ...(q.strategy === 'keyword' ? {} : { vector: await vector() }),
+      ...(q.strategy === 'vector' ? {} : { keyword: await keyword() }),
+    });
   }
 }

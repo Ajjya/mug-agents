@@ -43,7 +43,10 @@ export const VECTOR_STORE = Symbol('VECTOR_STORE');
       provide: RetrievalService,
       inject: [EMBEDDER, VECTOR_STORE, APP_CONFIG],
       useFactory: (e: Embedder, s: VectorStore, c: AppConfig) =>
-        new RetrievalService(e, s, c.VECTOR_MIN_SCORE),
+        new RetrievalService(e, s, {
+          minScore: c.VECTOR_MIN_SCORE,
+          minCoverage: c.KEYWORD_MIN_COVERAGE,
+        }),
     },
     {
       provide: SpeakerSuggester,

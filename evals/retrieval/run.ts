@@ -25,7 +25,13 @@ import {
 } from '../../src/retrieval/scoring.js';
 import { seedSpeakers } from '../../src/retrieval/seed-speakers.js';
 import { SpeakerSuggester } from '../../src/retrieval/suggest-speakers.js';
-import { STRATEGIES, type Strategy, type VectorStore } from '../../src/retrieval/vector-store.js';
+import {
+  OPEN_GATES,
+  type RelevanceGates,
+  STRATEGIES,
+  type Strategy,
+  type VectorStore,
+} from '../../src/retrieval/vector-store.js';
 import { percentile } from '../../src/llm/usage.js';
 
 const CasesSchema = z.object({
@@ -121,6 +127,10 @@ async function main(): Promise<number> {
   const spec = CasesSchema.parse(
     JSON.parse(await readFile(new URL('evals/retrieval/cases.json', repoRoot), 'utf8')),
   );
+  const gates: RelevanceGates = {
+    minScore: config.VECTOR_MIN_SCORE,
+    minCoverage: config.KEYWORD_MIN_COVERAGE,
+  };
   const embedderRefs = config.EVAL_EMBEDDERS ?? [
     { provider: 'ollama-local' as const, model: config.EMBEDDING_MODEL },
   ];
@@ -165,7 +175,7 @@ async function main(): Promise<number> {
             classification: ['public'],
             limit: 1,
             strategy: 'keyword',
-            minScore: 0,
+            gates: OPEN_GATES,
           });
           if (probe.length > 0) break;
           await new Promise((r) => setTimeout(r, 500));
@@ -197,7 +207,7 @@ async function main(): Promise<number> {
               classification: ['public'],
               limit: spec.k * 3,
               strategy,
-              minScore: config.VECTOR_MIN_SCORE,
+              gates,
               ...(strategy === 'keyword'
                 ? {}
                 : { vector, queryModel: { model: q.model, dim: q.dim } }),
@@ -246,7 +256,7 @@ async function main(): Promise<number> {
         const logger = new AppLogger({ ...config, LOG_LEVEL: 'warn' });
         const call = buildStructuredCall(config, buildProviders(config), logger);
         const suggester = new SpeakerSuggester(
-          new RetrievalService(embedder, stores[0] as VectorStore, config.VECTOR_MIN_SCORE),
+          new RetrievalService(embedder, stores[0] as VectorStore, gates),
           bfSpeakers,
           call,
         );

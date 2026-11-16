@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect } from 'vitest';
 import { INDEXES } from '../../src/mongo/indexes.js';
 import { MongoSpeakersRepository } from '../../src/repositories/speakers.repository.js';
 import { AtlasVectorStore } from '../../src/retrieval/atlas-vector.store.js';
+import { OPEN_GATES } from '../../src/retrieval/vector-store.js';
 import { storeSuite } from '../support/store-suite.js';
 import { StubEmbedder } from '../support/stub-embedder.js';
 
@@ -54,7 +55,7 @@ describe.skipIf(!uri)('AtlasVectorStore on mongodb-atlas-local', () => {
             classification: ['public'],
             limit: 1,
             strategy: 'keyword',
-            minScore: 0,
+            gates: OPEN_GATES,
           });
           if (hits.length > 0 || Date.now() > deadline) break;
           await new Promise((r) => setTimeout(r, 500));

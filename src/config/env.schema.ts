@@ -178,6 +178,12 @@ const baseEnvSchema = z.object({
    * paraphrases score about 0.58, direct matches 0.74+). Re-measure on the real corpus.
    */
   VECTOR_MIN_SCORE: z.coerce.number().min(-1).max(1).default(0.56),
+  /**
+   * The keyword arm's own no-answer gate: the share of the query's distinct terms (stopwords removed)
+   * a chunk must contain. Without it any single shared word made a chunk a keyword hit. BM25 scores
+   * are not comparable across queries, so the gate is on coverage, not on the score.
+   */
+  KEYWORD_MIN_COVERAGE: z.coerce.number().min(0).max(1).default(0.5),
   /** Who approvals are recorded as when the CLI is not given --by. No auth yet: recorded as-is. */
   APPROVER_NAME: z.string().trim().min(1).optional(),
   /**

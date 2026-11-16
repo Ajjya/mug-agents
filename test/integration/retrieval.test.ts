@@ -13,7 +13,7 @@ import { RetrievalService } from '../../src/retrieval/retrieval.service.js';
 import { seedSpeakers } from '../../src/retrieval/seed-speakers.js';
 import { SpeakerSuggester, suggestPrompt } from '../../src/retrieval/suggest-speakers.js';
 import { openTestMongo, type TestMongo } from '../support/mongo-test.js';
-import { SAMPLE, STUB_MIN_SCORE, storeSuite } from '../support/store-suite.js';
+import { SAMPLE, STUB_GATES, storeSuite } from '../support/store-suite.js';
 import { StubEmbedder } from '../support/stub-embedder.js';
 import type { LlmProvider } from '../../src/llm/model.types.js';
 import { silentLogger } from '../support/stub-provider.js';
@@ -95,7 +95,7 @@ describe('suggestSpeakers (grounded)', () => {
     await seedSpeakers(SAMPLE, speakers);
     const store = new BruteForceStore(mongo.db, embedder.ref);
     await ingestCorpus(SAMPLE, { embedder, stores: [store], speakers });
-    retrieval = new RetrievalService(embedder, store, STUB_MIN_SCORE);
+    retrieval = new RetrievalService(embedder, store, STUB_GATES);
     ids = Object.fromEntries(
       (await speakers.findMany({ limit: 50 })).items.map((s) => [s.handle ?? s.name, s._id]),
     );

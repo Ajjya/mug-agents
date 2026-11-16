@@ -4,12 +4,17 @@ import { EmbeddingMismatchError } from '../../src/retrieval/embedder.js';
 import { ingestCorpus } from '../../src/retrieval/ingest.js';
 import { RetrievalService } from '../../src/retrieval/retrieval.service.js';
 import { seedSpeakers } from '../../src/retrieval/seed-speakers.js';
-import { STRATEGIES, type VectorStore } from '../../src/retrieval/vector-store.js';
+import {
+  OPEN_GATES,
+  type RelevanceGates,
+  STRATEGIES,
+  type VectorStore,
+} from '../../src/retrieval/vector-store.js';
 import { StubEmbedder } from './stub-embedder.js';
 
 export const SAMPLE = 'corpus/sample';
 /** The stub embedder's bag-of-words cosines are lower than a real model's. */
-export const STUB_MIN_SCORE = 0.25;
+export const STUB_GATES: RelevanceGates = { minScore: 0.25, minCoverage: 0.5 };
 
 /**
  * Behaviour every VectorStore must have, run against BruteForceStore (default suite, memory server)
@@ -34,7 +39,7 @@ export function storeSuite(
       await seedSpeakers(SAMPLE, s.speakers);
       const r = await ingestCorpus(SAMPLE, { embedder, stores: [store], speakers: s.speakers });
       await s.prepare?.(r.dim);
-      retrieval = new RetrievalService(embedder, store, STUB_MIN_SCORE);
+      retrieval = new RetrievalService(embedder, store, STUB_GATES);
     }, 180_000);
 
     it('records model and dimension; returns hits with document ids, kinds and scores', async () => {
@@ -94,16 +99,32 @@ export function storeSuite(
       }
     });
 
+    it.each(STRATEGIES)(
+      "no-answer on %s is decided by that strategy's own gate, even when a query word matches",
+      async (strategy) => {
+        // "pizza" occurs in three public documents; nothing in the corpus answers this query.
+        const q = 'pineapple pizza recipe with anchovies';
+        const out = await retrieval.explain(q, { strategy });
+        expect(out.hits).toEqual([]);
+        if (strategy !== 'keyword') {
+          expect(out.vector?.candidates).toBeGreaterThan(0);
+          expect(out.vector?.aboveMinScore).toBe(0);
+        }
+        if (strategy !== 'vector') {
+          // The keyword arm saw term matches and rejected them itself (coverage 1/4 < 0.5).
+          expect(out.keyword?.candidates).toBeGreaterThan(0);
+          expect(out.keyword?.topCoverage).toBe(0.25);
+          expect(out.keyword?.aboveMinCoverage).toBe(0);
+        }
+      },
+    );
+
     it('refuses a query embedded with a different model or dimension', async () => {
-      const other = new RetrievalService(
-        new StubEmbedder('other-model', 256),
-        store,
-        STUB_MIN_SCORE,
-      );
+      const other = new RetrievalService(new StubEmbedder('other-model', 256), store, STUB_GATES);
       await expect(other.search('sharding', { strategy: 'vector' })).rejects.toBeInstanceOf(
         EmbeddingMismatchError,
       );
-      const wider = new RetrievalService(new StubEmbedder('stub-embed', 32), store, STUB_MIN_SCORE);
+      const wider = new RetrievalService(new StubEmbedder('stub-embed', 32), store, STUB_GATES);
       await expect(wider.search('sharding', { strategy: 'vector' })).rejects.toBeInstanceOf(
         EmbeddingMismatchError,
       );
@@ -116,7 +137,7 @@ export function storeSuite(
           classification: [] as never,
           limit: 5,
           strategy: 'keyword',
-          minScore: 0,
+          gates: OPEN_GATES,
         }),
       ).rejects.toThrow(/classification scope/);
     });

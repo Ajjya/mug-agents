@@ -1,6 +1,14 @@
 import type { Classification, CorpusKind } from './corpus.js';
 import type { Embedder } from './embedder.js';
-import type { ClassificationScope, Hit, Strategy, VectorStore } from './vector-store.js';
+import type {
+  ClassificationScope,
+  Hit,
+  RelevanceGates,
+  SearchOutcome,
+  SearchQuery,
+  Strategy,
+  VectorStore,
+} from './vector-store.js';
 
 export interface SearchOptions {
   kind?: CorpusKind;
@@ -17,23 +25,32 @@ export class RetrievalService {
   constructor(
     readonly embedder: Embedder,
     readonly store: VectorStore,
-    private readonly minScore: number,
+    readonly gates: RelevanceGates,
   ) {}
 
   async search(text: string, options: SearchOptions = {}): Promise<Hit[]> {
+    return await this.store.search(await this.query(text, options));
+  }
+
+  /** The same search, with each arm's gate statistics (for the eval and for diagnosing a miss). */
+  async explain(text: string, options: SearchOptions = {}): Promise<SearchOutcome> {
+    return await this.store.explain(await this.query(text, options));
+  }
+
+  private async query(text: string, options: SearchOptions): Promise<SearchQuery> {
     const strategy = options.strategy ?? 'hybrid';
-    const base = {
+    const base: SearchQuery = {
       text,
       classification: options.classification ?? DEFAULT_SCOPE,
       limit: options.limit ?? 5,
       strategy,
-      minScore: this.minScore,
+      gates: this.gates,
       ...(options.kind ? { kind: options.kind } : {}),
     };
-    if (strategy === 'keyword') return await this.store.search(base);
+    if (strategy === 'keyword') return base;
     const e = await this.embedder.embedQuery(text);
     const vector = e.vectors[0];
     if (!vector) throw new Error('the embedder returned no vector for the query');
-    return await this.store.search({ ...base, vector, queryModel: { model: e.model, dim: e.dim } });
+    return { ...base, vector, queryModel: { model: e.model, dim: e.dim } };
   }
 }
