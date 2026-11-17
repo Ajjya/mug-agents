@@ -4,6 +4,7 @@ import type { Event } from '../../src/domain/event.schema.js';
 import type { Speaker } from '../../src/domain/speaker.schema.js';
 import type { RetrievalService, SearchOptions } from '../../src/retrieval/retrieval.service.js';
 import type { ChunkView, Hit } from '../../src/retrieval/vector-store.js';
+import { EmbeddingUnavailableError } from '../../src/retrieval/embedder.js';
 
 const SPEAKER = { _id: 'd'.repeat(24), name: 'W', topics: ['validation'] } as Speaker;
 const VENUE = 'b'.repeat(24);
@@ -49,6 +50,23 @@ function stub() {
 }
 
 describe('RetrievalDraftContext', () => {
+  it('falls back to keyword search when the local embedder is down', async () => {
+    const strategies: (string | undefined)[] = [];
+    const retrieval = {
+      search: (_t: string, o: SearchOptions = {}) => {
+        strategies.push(o.strategy);
+        if (o.strategy !== 'keyword')
+          return Promise.reject(new EmbeddingUnavailableError('local embedder down'));
+        return Promise.resolve([chunk('mine', { speakerId: SPEAKER._id })]);
+      },
+    } as unknown as RetrievalService;
+    const ids = (
+      await new RetrievalDraftContext(retrieval).forDraft(EVENT, SPEAKER, 'chase_bio')
+    ).map((c) => c.id);
+    expect(ids).toEqual(['mine']);
+    expect(strategies).toEqual([undefined, 'keyword']);
+  });
+
   it("an invitation gets the speaker's own abstracts and this venue's host notes, public only", async () => {
     const { asked, ctx } = stub();
     const chunks = await ctx.forDraft(EVENT, SPEAKER, 'invitation');
