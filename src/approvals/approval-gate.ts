@@ -1,6 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import type { ApprovalGate, EnsureRequestInput } from '../agents/planner/planner.graph.js';
 import { DuplicateKeyError } from '../repositories/base.repository.js';
+import { payloadKind } from './approval.schema.js';
 import {
   APPROVAL_REQUESTS_REPOSITORY,
   type ApprovalRequestsRepository,
@@ -27,7 +28,7 @@ export class ApprovalRequestGate implements ApprovalGate {
         runId: input.runId,
         nodeName: input.nodeName,
         eventId: input.eventId,
-        kind: 'plan_review',
+        kind: payloadKind(input.payload),
         payload: input.payload,
         status: 'pending',
       });

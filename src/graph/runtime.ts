@@ -100,6 +100,11 @@ export class GraphRuntime<R = unknown> {
     this.reviewSchema = options.reviewSchema;
   }
 
+  /** The thread's current state values (whatever the graph's state schema holds). */
+  async values(threadId: string): Promise<unknown> {
+    return (await this.graph.getState(cfg(threadId))).values;
+  }
+
   /** Whether a thread id belongs to this runtime. */
   owns(threadId: string): boolean {
     const parsed = parseThreadId(threadId);

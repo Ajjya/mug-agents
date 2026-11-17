@@ -131,7 +131,7 @@ export function formatThreadOutcome(thread: ThreadView): string {
       if (speakers) {
         return thread.outcome === 'rejected'
           ? 'Run ended: drafts rejected at review (kept as "rejected"; nothing is deleted).'
-          : `Run ended: drafts recorded (${String(thread.persisted?.created ?? 0)} approved, ${String(thread.persisted?.skipped ?? 0)} rejected).`;
+          : `Run ended: drafts recorded (${String(thread.persisted?.created ?? 0)} new, ${String(thread.persisted?.skipped ?? 0)} already existed).`;
       }
       return thread.outcome === 'rejected'
         ? 'Run ended: plan rejected, nothing persisted.'

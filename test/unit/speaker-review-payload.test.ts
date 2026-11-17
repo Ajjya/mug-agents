@@ -139,6 +139,6 @@ describe('formatting speaker approvals', () => {
       outcome: 'persisted',
       persisted: { created: 2, skipped: 1 },
     });
-    expect(out).toContain('2 approved, 1 rejected');
+    expect(out).toContain('2 new, 1 already existed');
   });
 });

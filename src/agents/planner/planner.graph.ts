@@ -6,7 +6,11 @@ import {
   StateGraph,
   interrupt,
 } from '@langchain/langgraph';
-import { DecisionValueSchema, isPlanReview } from '../../approvals/approval.schema.js';
+import {
+  type ApprovalPayload,
+  DecisionValueSchema,
+  isPlanReview,
+} from '../../approvals/approval.schema.js';
 import { requireAutonomy } from '../../approvals/autonomy.js';
 import { type PlanReviewPayload, assertEditAllowed } from '../../approvals/plan-review.payload.js';
 import { newEntityId } from '../../domain/common.js';
@@ -145,7 +149,8 @@ export interface EnsureRequestInput {
   runId: string;
   nodeName: string;
   eventId: string;
-  payload: PlanReviewPayload;
+  /** The request's kind is the payload's kind: a plan, or speaker drafts. */
+  payload: ApprovalPayload;
 }
 
 /** Writes the ApprovalRequest. Must be idempotent per (threadId, runId, nodeName). */

@@ -1,0 +1,208 @@
+import type { Message } from '../../domain/message.schema.js';
+import type { SpeakerStatus } from '../../domain/speaker.schema.js';
+import { threadIdFor } from '../../graph/thread.js';
+import { ProviderUnavailableError, StructuredOutputError } from '../../llm/errors.js';
+import type { LlmCallRecord } from '../../llm/model.types.js';
+import type { ApprovalRequestsRepository } from '../../approvals/approvals.repository.js';
+import { type ChasePolicy, type Decision, decideActions, type PlannedAction } from './decide.js';
+import { NODE_REQUEST_APPROVAL, type SpeakersState } from './speakers.graph.js';
+import type { SpeakersRuntime, SpeakersThreadView } from './speakers.runtime.js';
+import type { SpeakerPipelineStore } from './speakers.store.js';
+
+/** A run stopped on a provider or model failure; the thread keeps its progress and is resumable. */
+export class SpeakersRunInterruptedError extends Error {
+  constructor(
+    public readonly threadId: string,
+    public override readonly cause: ProviderUnavailableError | StructuredOutputError,
+  ) {
+    super(
+      `${cause instanceof ProviderUnavailableError ? 'Provider failure' : 'Model failure'} in speakers run ${threadId}: ${cause.message}. ` +
+        `The run is resumable: npm run approvals -- resume ${threadId}`,
+    );
+    this.name = 'SpeakersRunInterruptedError';
+  }
+}
+
+export interface RunResult {
+  status: 'awaiting_approval' | 'completed';
+  threadId: string;
+  /** A run was already waiting for a decision: reported, nothing new started, no model call. */
+  alreadyWaiting: boolean;
+  decision: Decision | null;
+  /** Drafts this run created (a second run for the same day creates none). */
+  created: Message[];
+  existing: number;
+  tasksCreated: number;
+  superseded: number;
+  outcome?: 'persisted' | 'rejected';
+  requestId?: string;
+  calls: LlmCallRecord[];
+}
+
+export interface PipelineRow {
+  speakerId: string;
+  name: string;
+  status: SpeakerStatus;
+  lastSent?: { kind: string; at: string };
+  next: string;
+}
+
+/**
+ * The Speakers agent's entry points. `run` is the only one that can call a model. `sent` and `status`
+ * are how a human tells the agent what happened: nothing reads an inbox before M4, so the pipeline is
+ * only as current as what it has been told.
+ */
+export class SpeakersService {
+  constructor(
+    private readonly store: SpeakerPipelineStore,
+    private readonly runtime: SpeakersRuntime,
+    private readonly requests: ApprovalRequestsRepository,
+    private readonly policy: ChasePolicy,
+  ) {}
+
+  async run(eventId: string, options: { now?: Date } = {}): Promise<RunResult> {
+    const event = await this.store.mustFindEvent(eventId); // before any thread exists
+    const threadId = threadIdFor(event._id, 'speakers');
+    const before = await this.runtime.inspect(threadId);
+    const callsBefore = before.calls.length;
+    if (before.status === 'awaiting_decision') return await this.result(before, 0, true);
+    const view = await this.guard(threadId, () =>
+      before.status === 'resumable'
+        ? this.runtime.continue(threadId)
+        : this.runtime.start(threadId, {
+            eventId: event._id,
+            ...(options.now ? { now: options.now } : {}),
+          }),
+    );
+    return await this.result(view, callsBefore, false);
+  }
+
+  /** The pipeline as a table: who is where, what was last sent, what comes next. No model, no writes. */
+  async list(
+    eventId: string,
+    now: Date = new Date(),
+  ): Promise<{ rows: PipelineRow[]; notes: string[] }> {
+    const p = await this.store.load(eventId);
+    const statusOf = (s: (typeof p.speakers)[number]): SpeakerStatus =>
+      s.perEvent.find((e) => e.eventId.toLowerCase() === p.event._id.toLowerCase())?.status ??
+      'idea';
+    const d = decideActions({
+      now,
+      eventDate: p.event.date,
+      policy: { ...this.policy, maxDraftsPerRun: Number.MAX_SAFE_INTEGER },
+      speakers: p.speakers.map((s) => ({
+        id: s._id,
+        name: s.name,
+        status: statusOf(s),
+        hasBio: Boolean(s.bio?.trim()),
+        hasPhoto: Boolean(s.photoUrl),
+      })),
+      messages: p.messages.map((m) => ({
+        id: m._id,
+        speakerId: m.speakerId,
+        kind: m.kind,
+        round: m.round,
+        status: m.status,
+        ...(m.sentAt ? { sentAt: m.sentAt } : {}),
+      })),
+    });
+    const describe = (a: PlannedAction): string => `${a.kind} #${String(a.round)} due now`;
+    const rows = p.speakers.map((s): PipelineRow => {
+      const sent = p.messages
+        .filter((m) => m.speakerId === s._id && m.status === 'sent' && m.sentAt)
+        .sort((a, b) => (a.sentAt ?? '').localeCompare(b.sentAt ?? ''))
+        .at(-1);
+      const next = [
+        ...d.actions.filter((a) => a.speakerId === s._id).map(describe),
+        ...d.blocked
+          .filter((b) => b.speakerId === s._id)
+          .map((b) => `${b.kind}: chase limit, call them`),
+        ...d.waiting
+          .filter((w) => w.speakerId === s._id)
+          .map((w) => `${w.kind}: ${w.why}${w.dueOn ? ` (${w.dueOn})` : ''}`),
+      ];
+      return {
+        speakerId: s._id,
+        name: s.name,
+        status: statusOf(s),
+        ...(sent?.sentAt ? { lastSent: { kind: sent.kind, at: sent.sentAt } } : {}),
+        next: next.join('; ') || '-',
+      };
+    });
+    return { rows, notes: d.notes };
+  }
+
+  async show(
+    messageId: string,
+  ): Promise<{ message: Message; speakerName: string; email?: string }> {
+    const message = await this.store.findMessage(messageId);
+    const speaker = await this.store.findSpeaker(message.speakerId);
+    return {
+      message,
+      speakerName: speaker?.name ?? message.speakerId,
+      ...(speaker?.email ? { email: speaker.email } : {}),
+    };
+  }
+
+  async sent(messageId: string, by: string, now: Date = new Date()): Promise<Message> {
+    return await this.store.markSent(messageId, by, now);
+  }
+
+  async setStatus(
+    speakerId: string,
+    eventId: string,
+    to: SpeakerStatus,
+    now: Date = new Date(),
+  ): Promise<{ from: SpeakerStatus; to: SpeakerStatus }> {
+    return await this.store.setStatus(speakerId, eventId, to, now);
+  }
+
+  private async guard(
+    threadId: string,
+    run: () => Promise<SpeakersThreadView>,
+  ): Promise<SpeakersThreadView> {
+    try {
+      return await run();
+    } catch (err) {
+      if (err instanceof ProviderUnavailableError || err instanceof StructuredOutputError) {
+        throw new SpeakersRunInterruptedError(threadId, err);
+      }
+      throw err;
+    }
+  }
+
+  private async result(
+    view: SpeakersThreadView,
+    callsBefore: number,
+    alreadyWaiting: boolean,
+  ): Promise<RunResult> {
+    const values = (await this.runtime.values(view.threadId)) as SpeakersState;
+    const createdIds = values.created ?? [];
+    const all = values.eventId ? await this.store.eventMessages(values.eventId) : [];
+    const base = {
+      threadId: view.threadId,
+      alreadyWaiting,
+      decision: values.decision ?? null,
+      created: all.filter((m) => createdIds.includes(m._id)),
+      existing: values.existing?.length ?? 0,
+      tasksCreated: values.tasksCreated ?? 0,
+      superseded: values.superseded?.length ?? 0,
+      calls: view.calls.slice(callsBefore),
+    };
+    if (view.status === 'awaiting_decision') {
+      const request =
+        view.runId === undefined
+          ? null
+          : await this.requests.findByKey(view.threadId, view.runId, NODE_REQUEST_APPROVAL);
+      return {
+        ...base,
+        status: 'awaiting_approval',
+        ...(request ? { requestId: request._id } : {}),
+      };
+    }
+    if (view.status === 'completed') {
+      return { ...base, status: 'completed', ...(view.outcome ? { outcome: view.outcome } : {}) };
+    }
+    throw new Error(`Speakers run ${view.threadId} ended in an unexpected state: ${view.status}`);
+  }
+}
