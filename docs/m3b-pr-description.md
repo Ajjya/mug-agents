@@ -179,6 +179,13 @@ change, not a redesign.
 
 ## Verification
 
-typecheck and lint clean; `npm test`: 47 files, 826 tests; `npm run eval:speakers`: 8/8. Run with the network available (not sandboxed), so "no network" is by design of the tests, not enforced.
+Run on commit `10ad316` (the last code commit of the second review round), on a clean working tree,
+2026-11-17, network available (not sandboxed): `npm run verify` (typecheck, then lint, then `npm test`
+chained with `&&`, so the tests ran only because both passed): **51 test files, 871 tests, all passing**;
+`npm run eval:speakers`: **9/9**. The only commit after `10ad316` changes this paragraph.
+
+What "no network" means for `npm test` is in the README: the integration suite downloads a pinned
+`mongod` on a cold cache and not otherwise (checked with an unreachable mirror and a warm cache, 10 files,
+243 tests); nothing calls Ollama, Docker or a model.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
