@@ -201,7 +201,22 @@ export function buildSpeakersHarness(
     options.retention ??
     new RecordingRetention(saver instanceof MemorySaver ? saver : new MemorySaver());
   const runtime = new SpeakersRuntime(
-    buildSpeakersGraph({ call, gate, store, context, policy, timeZone: 'Europe/Lisbon' }, saver),
+    buildSpeakersGraph(
+      {
+        call,
+        gate,
+        store,
+        context,
+        policy,
+        timeZone: 'Europe/Lisbon',
+        decidedAt: async (id) => {
+          const d = await repos.decisions.findByRequestId(id);
+          if (!d) throw new Error(`no decision for ${id}`);
+          return d.decidedAt;
+        },
+      },
+      saver,
+    ),
     retention,
     options.lock ?? new InMemoryThreadLock(),
   );

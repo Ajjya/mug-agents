@@ -490,19 +490,113 @@ export function speakersWorkflowSuite(
       expect(r.created[0]?.facts.due_date).toBe('Monday 9 November 2026');
     });
 
-    it('reject: all rejected, and a later run does not redraft them', async () => {
+    it('reject: stays on record with the decision time; a plain re-run does not redraft it', async () => {
       const h = await fresh();
       const s = await seed(h.repos, [{ name: 'Wendeline Gooseberry', status: 'idea' }]);
       const r = await h.service.run(s.eventId, { now: day('2026-10-31') });
+      const decidedAt = day('2026-11-02');
       const decided = await h.approvals.decide(
         r.requestId ?? '',
         { decision: 'reject', reason: 'not this season' },
         'vlad',
+        decidedAt,
       );
       expect(decided.thread.outcome).toBe('rejected');
-      expect(await statuses(h, s.eventId)).toEqual(['rejected']);
-      expect((await eventMessages(h, s.eventId))[0]?.rejectionReason).toBe('not this season');
+      const [m] = await eventMessages(h, s.eventId);
+      expect([m?.status, m?.rejectionReason, m?.rejectedAt]).toEqual([
+        'rejected',
+        'not this season',
+        decidedAt.toISOString(),
+      ]);
+      expect(m?.rejectedAt).toBe(decided.decision.decidedAt);
+      // Nothing happens by itself, however much time passes; the listing says how to act.
       expect((await h.service.run(s.eventId, { now: day('2026-11-07') })).created).toEqual([]);
+      const listed = await h.service.list(s.eventId, day('2026-11-07'));
+      expect(listed.rows[0]?.next).toMatch(/rejected at review.*until you act/);
+    });
+
+    it('reject, then a status reset after it: a new round is drafted and reviewed again', async () => {
+      const h = await fresh();
+      const s = await seed(h.repos, [{ name: 'Wendeline Gooseberry', status: 'idea' }]);
+      const sp = s.speakers['Wendeline Gooseberry'] ?? '';
+      const first = await h.service.run(s.eventId, { now: day('2026-10-31') });
+      await h.approvals.decide(
+        first.requestId ?? '',
+        { decision: 'reject', reason: 'redo' },
+        'vlad',
+        day('2026-11-02'),
+      );
+      // The human acts: declined, then back to idea (idea -> idea is not a transition).
+      await h.service.setStatus(sp, s.eventId, 'declined', day('2026-11-03'));
+      await h.service.setStatus(sp, s.eventId, 'idea', day('2026-11-04'));
+      const again = await h.service.run(s.eventId, { now: day('2026-11-05') });
+      expect(again.created.map((m) => [m.kind, m.round, m.status])).toEqual([
+        ['invitation', 2, 'draft'],
+      ]);
+      expect(again.requestId).toBeDefined();
+      expect(again.requestId).not.toBe(first.requestId);
+      const all = await eventMessages(h, s.eventId);
+      expect(all.map((m) => [m.round, m.status])).toEqual([
+        [1, 'rejected'],
+        [2, 'draft'],
+      ]);
+      // The rejected draft is untouched, and the new round is approved like any other.
+      expect(all[0]?.rejectedAt).toBe(day('2026-11-02').toISOString());
+      await h.approvals.decide(
+        again.requestId ?? '',
+        { decision: 'approve' },
+        'vlad',
+        day('2026-11-05'),
+      );
+      expect((await eventMessages(h, s.eventId)).map((m) => m.status)).toEqual([
+        'rejected',
+        'approved',
+      ]);
+    });
+
+    it('reject, then run --redraft for a speaker whose status cannot be reset: a new round', async () => {
+      const h = await fresh();
+      // Confirmed from another channel, never messaged by us: the abstract chase is a first contact.
+      const s = await seed(h.repos, [{ name: 'Wendeline Gooseberry', status: 'confirmed' }]);
+      const sp = s.speakers['Wendeline Gooseberry'] ?? '';
+      const first = await h.service.run(s.eventId, { now: day('2026-11-14') });
+      expect(first.created.map((m) => [m.kind, m.needsApproval])).toEqual([
+        ['chase_abstract', true],
+      ]);
+      await h.approvals.decide(
+        first.requestId ?? '',
+        { decision: 'reject', reason: 'too stiff' },
+        'vlad',
+        day('2026-11-15'),
+      );
+      expect((await h.service.run(s.eventId, { now: day('2026-11-16') })).created).toEqual([]);
+      // confirmed -> confirmed is not a transition, so the human re-drafts explicitly.
+      const redo = await h.service.run(s.eventId, {
+        now: day('2026-11-16'),
+        redraft: [{ speakerId: sp, kind: 'chase_abstract' }],
+      });
+      expect(redo.created.map((m) => [m.kind, m.round])).toEqual([['chase_abstract', 2]]);
+      expect((await eventMessages(h, s.eventId)).map((m) => [m.round, m.status])).toEqual([
+        [1, 'rejected'],
+        [2, 'draft'],
+      ]);
+      // A redraft is one-shot: the next plain run adds nothing.
+      expect((await h.service.run(s.eventId, { now: day('2026-11-17') })).created).toEqual([]);
+    });
+
+    it('--redraft of something that is not rejected is refused with a reason, and drafts nothing', async () => {
+      const h = await fresh();
+      const s = await seed(h.repos, [
+        { name: 'Wendeline Gooseberry', status: 'confirmed', contacted: true },
+      ]);
+      const sp = s.speakers['Wendeline Gooseberry'] ?? '';
+      await h.service.run(s.eventId, { now: day('2026-11-14') }); // chase_abstract#1, a draft
+      const r = await h.service.run(s.eventId, {
+        now: day('2026-11-15'),
+        redraft: [{ speakerId: sp, kind: 'chase_abstract' }],
+      });
+      expect(r.created).toEqual([]);
+      expect(r.decision?.notes.join(' ')).toMatch(/is draft, not rejected: reject it first/);
     });
 
     it('edit: removing a draft approves the rest and rejects it', async () => {
@@ -520,12 +614,14 @@ export function speakersWorkflowSuite(
         r.requestId ?? '',
         { decision: 'edit', editedPayload: { ...payload, drafts: keep } },
         'vlad',
+        day('2026-11-01'),
       );
       const byId = new Map((await eventMessages(h, s.eventId)).map((m) => [m._id, m]));
       expect(byId.get(keep[0]?.messageId ?? '')?.status).toBe('approved');
-      expect(
-        [...byId.values()].filter((m) => m.status === 'rejected').map((m) => m.rejectionReason),
-      ).toEqual(['removed at review']);
+      const removed = [...byId.values()].filter((m) => m.status === 'rejected');
+      expect(removed.map((m) => m.rejectionReason)).toEqual(['removed at review']);
+      // A removed draft is a rejection like any other: dated by the decision.
+      expect(removed[0]?.rejectedAt).toBe(day('2026-11-01').toISOString());
     });
 
     it('a crash after the approval request: resumed by a new runtime, no duplicate draft or request', async () => {

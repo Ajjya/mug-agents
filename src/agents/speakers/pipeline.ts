@@ -1,5 +1,5 @@
 import type { SpeakerStatus } from '../../domain/speaker.schema.js';
-import type { ChasePolicy, PipelineInput } from './decide.js';
+import type { ChasePolicy, PipelineInput, Redraft } from './decide.js';
 import type { LoadedPipeline } from './speakers.store.js';
 
 /** A speaker's status for the event; `idea` if the entry is missing (cannot happen for a loaded one). */
@@ -27,9 +27,15 @@ function sinceOf(
  * The one mapping from stored documents to decideActions' input. `speakers run` (the graph) and
  * `speakers list` both use it, so what the table shows and what a run does cannot drift apart.
  */
-export function pipelineInput(p: LoadedPipeline, now: Date, policy: ChasePolicy): PipelineInput {
+export function pipelineInput(
+  p: LoadedPipeline,
+  now: Date,
+  policy: ChasePolicy,
+  redraft: readonly Redraft[] = [],
+): PipelineInput {
   return {
     now,
+    redraft,
     eventDate: p.event.date,
     policy,
     speakers: p.speakers.map((s) => ({
@@ -47,6 +53,7 @@ export function pipelineInput(p: LoadedPipeline, now: Date, policy: ChasePolicy)
       round: m.round,
       status: m.status,
       ...(m.sentAt ? { sentAt: m.sentAt } : {}),
+      ...(m.rejectedAt ? { rejectedAt: m.rejectedAt } : {}),
     })),
   };
 }

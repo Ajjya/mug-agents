@@ -208,7 +208,8 @@ export class SpeakerPipelineStore {
   async review(
     ids: readonly string[],
     outcome:
-      { status: 'approved'; approvalRequestId: string } | { status: 'rejected'; reason: string },
+      | { status: 'approved'; approvalRequestId: string }
+      | { status: 'rejected'; reason: string; at: string },
   ): Promise<number> {
     let changed = 0;
     for (const id of ids) {
@@ -218,7 +219,7 @@ export class SpeakerPipelineStore {
         if (m.status !== 'draft') return { status: m.status };
         return outcome.status === 'approved'
           ? { status: 'approved', approvalRequestId: outcome.approvalRequestId }
-          : { status: 'rejected', rejectionReason: outcome.reason };
+          : { status: 'rejected', rejectionReason: outcome.reason, rejectedAt: outcome.at };
       });
       if (updated?.status === outcome.status) changed++;
     }

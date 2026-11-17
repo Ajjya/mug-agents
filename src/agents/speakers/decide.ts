@@ -47,6 +47,14 @@ export interface PipelineMessage {
   status: MessageStatus;
   /** Set when a human marked it sent. Chases are measured from here and nowhere else. */
   sentAt?: string;
+  /** When a human rejected it (the approval decision's timestamp). */
+  rejectedAt?: string;
+}
+
+/** A human asked for a new round of a kind whose latest draft was rejected. */
+export interface Redraft {
+  speakerId: string;
+  kind: MessageKind;
 }
 
 export interface PipelineInput {
@@ -56,6 +64,12 @@ export interface PipelineInput {
   speakers: readonly PipelineSpeaker[];
   messages: readonly PipelineMessage[];
   policy: ChasePolicy;
+  /**
+   * Explicit re-draft requests (`speakers run --redraft`). Each goes through the same table and
+   * guards as a scheduled action: it only applies where the kind applies to the speaker's status
+   * today, and it never edits a stored draft; it earns a new round.
+   */
+  redraft?: readonly Redraft[];
 }
 
 export interface PlannedAction {
@@ -163,6 +177,20 @@ function satisfied(speaker: PipelineSpeaker, kind: MessageKind): boolean {
   return false;
 }
 
+function redraftWhy(speaker: PipelineSpeaker, kind: MessageKind, input: PipelineInput): string {
+  if (!kindsFor(speaker.status).includes(kind))
+    return `${kind} does not apply while the speaker is ${speaker.status}.`;
+  if (satisfied(speaker, kind)) return `${kind.replace('chase_', '')} is already on file.`;
+  const latest = input.messages
+    .filter((m) => m.speakerId === speaker.id && m.kind === kind)
+    .sort((a, b) => a.round - b.round)
+    .at(-1);
+  if (latest === undefined) return `there is no ${kind} to redraft yet.`;
+  if (latest.status !== 'rejected')
+    return `the latest ${kind} (round ${String(latest.round)}) is ${latest.status}, not rejected: reject it first (npm run approvals), then redraft.`;
+  return 'it is outside the draft window for this event.';
+}
+
 export function decideActions(input: PipelineInput): Decision {
   const { policy } = input;
   if (!Number.isInteger(policy.chaseMaxRounds) || policy.chaseMaxRounds < 1)
@@ -186,6 +214,8 @@ export function decideActions(input: PipelineInput): Decision {
   if (!hasDate) out.notes.push('The event has no date: nothing is scheduled until it has one.');
 
   const due: PlannedAction[] = [];
+  const redrafts = input.redraft ?? [];
+  const redraftUsed = new Set<Redraft>();
   const speakers = [...input.speakers].sort((a, b) => a.id.localeCompare(b.id));
 
   for (const speaker of speakers) {
@@ -225,8 +255,21 @@ export function decideActions(input: PipelineInput): Decision {
       }
       const latest = [...ofKind].sort((a, b) => a.round - b.round).at(-1);
       if (latest?.status === 'rejected') {
-        wait(`round ${String(latest.round)} was rejected at review; nothing more of this kind`);
-        continue;
+        // A rejection blocks the kind until a human acts, the way a sent invitation does: either a
+        // status change after the rejection (a re-approach), or an explicit --redraft. Either earns
+        // the next round; the rejected draft stays on record untouched.
+        const asked = redrafts.find((r) => r.speakerId === speaker.id && r.kind === kind);
+        const reset =
+          speaker.statusSince !== undefined &&
+          latest.rejectedAt !== undefined &&
+          speaker.statusSince > latest.rejectedAt;
+        if (asked) redraftUsed.add(asked);
+        if (!asked && !reset) {
+          wait(
+            `round ${String(latest.round)} was rejected at review; nothing more of this kind until you act: change the speaker's status, or run with --redraft ${kind} --speaker ${speaker.id}`,
+          );
+          continue;
+        }
       }
       const nextRound = (latest?.round ?? 0) + 1;
       const from = rule.offsetDays === null ? null : eventDay + rule.offsetDays * DAY_MS;
@@ -364,6 +407,17 @@ export function decideActions(input: PipelineInput): Decision {
         ),
       });
     }
+  }
+
+  // A re-draft request that no rule picked up is reported, never silently dropped or forced.
+  for (const r of redrafts) {
+    if (redraftUsed.has(r)) continue;
+    const who = input.speakers.find((x) => x.id === r.speakerId);
+    out.notes.push(
+      who === undefined
+        ? `--redraft ${r.kind}: no speaker ${r.speakerId} in this event's pipeline.`
+        : `--redraft ${r.kind} for ${who.name} ignored: ${redraftWhy(who, r.kind, input)}`,
+    );
   }
 
   due.sort(

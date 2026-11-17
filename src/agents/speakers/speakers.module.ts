@@ -49,6 +49,15 @@ import { SpeakerPipelineStore } from './speakers.store.js';
 export const SPEAKERS_RUNTIME = Symbol('SPEAKERS_RUNTIME');
 export const SPEAKER_PIPELINE_STORE = Symbol('SPEAKER_PIPELINE_STORE');
 
+/** A recorded approval decision's timestamp; a rejection is dated by it. */
+export const decidedAtFrom =
+  (decisions: ApprovalDecisionsRepository) =>
+  async (requestId: string): Promise<string> => {
+    const d = await decisions.findByRequestId(requestId);
+    if (!d) throw new Error(`No decision is recorded for approval request ${requestId}`);
+    return d.decidedAt;
+  };
+
 const policyOf = (c: AppConfig): ChasePolicy => ({
   chaseMaxRounds: c.CHASE_MAX_ROUNDS,
   chaseMinIntervalDays: c.CHASE_MIN_INTERVAL_DAYS,
@@ -102,6 +111,7 @@ const policyOf = (c: AppConfig): ChasePolicy => ({
         CHECKPOINT_RETENTION,
         MONGO_DB,
         APP_CONFIG,
+        APPROVAL_DECISIONS_REPOSITORY,
       ],
       useFactory: (
         call: StructuredCall,
@@ -112,6 +122,7 @@ const policyOf = (c: AppConfig): ChasePolicy => ({
         retention: CheckpointRetention,
         db: Db,
         c: AppConfig,
+        decisions: ApprovalDecisionsRepository,
       ) =>
         new SpeakersRuntime(
           buildSpeakersGraph(
@@ -122,6 +133,7 @@ const policyOf = (c: AppConfig): ChasePolicy => ({
               context: new RetrievalDraftContext(retrieval),
               policy: policyOf(c),
               timeZone: c.EVENT_TIME_ZONE,
+              decidedAt: decidedAtFrom(decisions),
             },
             checkpointer,
           ),

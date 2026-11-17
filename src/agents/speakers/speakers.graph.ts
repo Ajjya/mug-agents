@@ -28,7 +28,7 @@ import type { StructuredCall } from '../../llm/structured.js';
 import type { ChunkView } from '../../retrieval/vector-store.js';
 import type { ApprovalGate } from '../planner/planner.graph.js';
 import { needsApproval } from './autonomy.js';
-import { type ChasePolicy, type Decision, decideActions } from './decide.js';
+import { type ChasePolicy, type Decision, type Redraft, decideActions } from './decide.js';
 import { pipelineInput } from './pipeline.js';
 import { buildFacts, draftPrompt, draftSchema, requiredSlots, substitute } from './drafting.js';
 import type { DraftRecord, LoadedPipeline, SpeakerPipelineStore } from './speakers.store.js';
@@ -56,6 +56,8 @@ export interface SpeakersGraphDeps {
   context: DraftContext;
   policy: ChasePolicy;
   timeZone: string;
+  /** When a recorded approval decision was made: a rejection's `rejectedAt` is this, nothing else. */
+  decidedAt(requestId: string): Promise<string>;
 }
 
 const concat = <T>(a: T[], b: T[]): T[] => a.concat(b);
@@ -64,6 +66,8 @@ export const SpeakersStateSchema = z.object({
   eventId: z.string().optional(),
   /** Injected "today": a frozen clock in tests and evals. */
   nowIso: z.string().nullable().optional(),
+  /** A human asked for a new round of a kind whose draft was rejected (`run --redraft`). */
+  redraft: z.custom<Redraft[]>().nullable().optional(),
   runId: z.string().optional(),
   pipeline: z.custom<LoadedPipeline>().nullable().optional(),
   decision: z.custom<Decision>().nullable().optional(),
@@ -119,7 +123,7 @@ export function decide(deps: SpeakersGraphDeps, state: SpeakersState): Partial<S
   const p = state.pipeline;
   if (!p) throw new Error('decideActions ran before loadPipeline');
   return {
-    decision: decideActions(pipelineInput(p, nowOf(state), deps.policy)),
+    decision: decideActions(pipelineInput(p, nowOf(state), deps.policy, state.redraft ?? [])),
   };
 }
 
@@ -267,7 +271,8 @@ export async function applyDecision(
   const ids = state.payload.drafts.map((d) => d.messageId);
   const requestId = state.approvalRequestId ?? '';
   if (review.decision === 'reject') {
-    await deps.store.review(ids, { status: 'rejected', reason: review.reason });
+    const at = await deps.decidedAt(requestId);
+    await deps.store.review(ids, { status: 'rejected', reason: review.reason, at });
     return { outcome: 'rejected', ...done };
   }
   if (review.decision === 'approve') {
@@ -281,7 +286,10 @@ export async function applyDecision(
   assertSpeakerEditAllowed(state.payload, edited);
   const { kept, removed } = splitEdit(state.payload, edited);
   await deps.store.review(kept, { status: 'approved', approvalRequestId: requestId });
-  await deps.store.review(removed, { status: 'rejected', reason: 'removed at review' });
+  if (removed.length > 0) {
+    const at = await deps.decidedAt(requestId);
+    await deps.store.review(removed, { status: 'rejected', reason: 'removed at review', at });
+  }
   return { outcome: 'persisted', ...done };
 }
 

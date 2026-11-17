@@ -15,6 +15,16 @@ const EVENT = '2026-12-12T00:00:00.000Z';
 const POLICY: ChasePolicy = { chaseMaxRounds: 2, chaseMinIntervalDays: 7, maxDraftsPerRun: 10 };
 const S = 's'.repeat(24);
 
+/** A draft a human rejected at review on `rejectedDay`. */
+const rej = (kind: MessageKind, rejectedDay: string, round = 1): PipelineMessage => ({
+  id: `m${String(++n)}`,
+  speakerId: S,
+  kind,
+  round,
+  status: 'rejected',
+  rejectedAt: `${rejectedDay}T12:00:00.000Z`,
+});
+
 const at = (day: string): Date => new Date(`${day}T09:30:00.000Z`);
 
 const speaker = (status: SpeakerStatus, over: Partial<PipelineSpeaker> = {}): PipelineSpeaker => ({
@@ -562,5 +572,104 @@ describe('blocked task titles', () => {
     ['no_time', 0, 'Call W about the slides — too close to the event to chase by email'],
   ] as const)('%s, %i sent', (why, n, title) => {
     expect(blockedTaskTitle('W', item(why, n))).toBe(title);
+  });
+});
+
+describe('decideActions: a rejection blocks the kind until a human acts', () => {
+  it('a rejected invitation waits, and says how to act', () => {
+    const d = decide('2026-11-10', speaker('idea'), [rej('invitation', '2026-11-02')]);
+    expect(planned(d)).toEqual([]);
+    expect(d.waiting[0]?.why).toMatch(/rejected at review.*until you act.*--redraft invitation/);
+  });
+
+  it('a status change AFTER the rejection is a re-approach: a new round', () => {
+    const d = decide('2026-11-10', speaker('idea', { statusSince: '2026-11-05T08:00:00.000Z' }), [
+      rej('invitation', '2026-11-02'),
+    ]);
+    expect(planned(d)).toEqual(['invitation#2']);
+  });
+
+  it('a status change BEFORE the rejection is not: still blocked', () => {
+    const d = decide('2026-11-10', speaker('idea', { statusSince: '2026-11-01T08:00:00.000Z' }), [
+      rej('invitation', '2026-11-02'),
+    ]);
+    expect(planned(d)).toEqual([]);
+  });
+
+  it('a rejection with no recorded time (older data) is never reset by a status change', () => {
+    const old: PipelineMessage = { ...rej('invitation', '2026-11-02') };
+    delete old.rejectedAt;
+    const d = decide('2026-11-10', speaker('idea', { statusSince: '2026-11-05T08:00:00.000Z' }), [
+      old,
+    ]);
+    expect(planned(d)).toEqual([]);
+  });
+
+  it('a rejected chase is re-drafted by --redraft: round n+1, rejected one untouched', () => {
+    const rejected = rej('chase_abstract', '2026-11-16');
+    const d = decideActions({
+      now: at('2026-11-20'),
+      eventDate: EVENT,
+      speakers: [speaker('confirmed')],
+      messages: [rejected],
+      policy: POLICY,
+      redraft: [{ speakerId: S, kind: 'chase_abstract' }],
+    });
+    expect(planned(d)).toEqual(['chase_abstract#2']);
+    expect(d.notes).toEqual([]);
+    // Without the request: still blocked.
+    expect(planned(decide('2026-11-20', speaker('confirmed'), [rejected]))).toEqual([]);
+  });
+
+  it('--redraft goes through the same table: a kind that does not apply is refused, with the reason', () => {
+    const redraft = (status: SpeakerStatus, kind: MessageKind, messages: PipelineMessage[]) =>
+      decideActions({
+        now: at('2026-11-20'),
+        eventDate: EVENT,
+        speakers: [speaker(status)],
+        messages,
+        policy: POLICY,
+        redraft: [{ speakerId: S, kind }],
+      });
+    const declined = redraft('declined', 'invitation', [rej('invitation', '2026-11-02')]);
+    expect(planned(declined)).toEqual([]);
+    expect(declined.notes[0]).toMatch(/invitation does not apply while the speaker is declined/);
+    const notRejected = redraft('confirmed', 'chase_abstract', [msg('chase_abstract', 'approved')]);
+    expect(planned(notRejected)).toEqual([]);
+    expect(notRejected.notes[0]).toMatch(/is approved, not rejected: reject it first/);
+    const nothing = redraft('confirmed', 'chase_abstract', []);
+    expect(nothing.notes[0]).toMatch(/no chase_abstract to redraft yet/);
+    const filled = decideActions({
+      now: at('2026-11-20'),
+      eventDate: EVENT,
+      speakers: [speaker('confirmed', { hasBio: true })],
+      messages: [rej('chase_bio', '2026-11-16')],
+      policy: POLICY,
+      redraft: [{ speakerId: S, kind: 'chase_bio' }],
+    });
+    expect(filled.notes[0]).toMatch(/bio is already on file/);
+    expect(
+      decideActions({
+        now: at('2026-11-20'),
+        eventDate: EVENT,
+        speakers: [speaker('confirmed')],
+        messages: [],
+        policy: POLICY,
+        redraft: [{ speakerId: 'f'.repeat(24), kind: 'chase_abstract' }],
+      }).notes[0],
+    ).toMatch(/no speaker/);
+  });
+
+  it('--redraft cannot get around the draft window or the cap: the window still turns it into a task', () => {
+    const d = decideActions({
+      now: at('2026-12-10'),
+      eventDate: EVENT,
+      speakers: [speaker('abstract_received')],
+      messages: [rej('chase_slides', '2026-12-06')],
+      policy: POLICY,
+      redraft: [{ speakerId: S, kind: 'chase_slides' }],
+    });
+    expect(planned(d)).toEqual([]);
+    expect(d.blocked.map((b) => b.why)).toEqual(['no_time']);
   });
 });

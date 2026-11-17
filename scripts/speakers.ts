@@ -13,6 +13,7 @@ import {
   SpeakerNotInEventError,
 } from '../src/agents/speakers/speakers.store.js';
 import { IllegalTransitionError } from '../src/agents/speakers/transitions.js';
+import { MESSAGE_KINDS } from '../src/domain/message.schema.js';
 import { SPEAKER_STATUSES } from '../src/domain/speaker.schema.js';
 import { EmbeddingMismatchError, EmbeddingUnavailableError } from '../src/retrieval/embedder.js';
 import { SpeakerSuggester } from '../src/retrieval/suggest-speakers.js';
@@ -20,7 +21,10 @@ import { runCli } from './cli.js';
 
 const USAGE = `Usage: npm run speakers -- <command> [options]
 
-  run --event <id> [--now <ISO>]       run the pipeline: print planned actions and the drafts written
+  run --event <id> [--now <ISO>] [--redraft <kind> --speaker <id>]
+                                       run the pipeline: print planned actions and the drafts written.
+                                       --redraft asks for a NEW round of a kind whose draft you rejected
+                                       (the rejected draft stays on record; wording is never edited)
   list --event <id> [--now <ISO>]      pipeline table: speaker, status, last sent, next action
   show <messageId>                     one draft, readable (copy it out from here)
   sent <messageId> [--by <name>]       record that you sent it; chases are measured from now
@@ -41,6 +45,8 @@ const { values, positionals } = parseArgs({
     set: { type: 'string' },
     by: { type: 'string' },
     topic: { type: 'string' },
+    redraft: { type: 'string' },
+    speaker: { type: 'string' },
     now: { type: 'string' },
     help: { type: 'boolean', short: 'h' },
   },
@@ -67,7 +73,20 @@ runCli(
     switch (command) {
       case 'run': {
         if (!values.event) return usage();
-        const r = await service.run(values.event, { now });
+        if (values.redraft && !values.speaker) {
+          console.error('--redraft <kind> needs --speaker <id>');
+          return 2;
+        }
+        const r = await service.run(values.event, {
+          now,
+          ...(values.redraft && values.speaker
+            ? {
+                redraft: [
+                  { speakerId: values.speaker, kind: z.enum(MESSAGE_KINDS).parse(values.redraft) },
+                ],
+              }
+            : {}),
+        });
         if (r.replaced) {
           console.log(
             `The pending approval request ${r.replaced} was retired (expired, not deleted); its unapproved drafts are in this run's request.\n`,
@@ -125,7 +144,8 @@ runCli(
         console.log(`  to ${speakerName}${email ? ` <${email}>` : ''}`);
         console.log(`  ${m.kind} round ${String(m.round)}; ${m.reason}`);
         if (m.sentAt) console.log(`  sent ${m.sentAt} by ${m.sentBy ?? '?'}`);
-        if (m.rejectionReason) console.log(`  rejected: ${m.rejectionReason}`);
+        if (m.rejectionReason)
+          console.log(`  rejected${m.rejectedAt ? ` ${m.rejectedAt}` : ''}: ${m.rejectionReason}`);
         console.log(`\nSubject: ${m.subject}\n\n${m.body}\n`);
         console.log('Facts (from the event record):');
         for (const [k, v] of Object.entries(m.facts)) console.log(`  ${k}: ${v}`);

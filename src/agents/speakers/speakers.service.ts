@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { Message } from '../../domain/message.schema.js';
+import { MESSAGE_KINDS, type Message } from '../../domain/message.schema.js';
 import type { SpeakerStatus } from '../../domain/speaker.schema.js';
 import { threadIdFor } from '../../graph/thread.js';
 import { ProviderUnavailableError, StructuredOutputError } from '../../llm/errors.js';
@@ -8,7 +8,13 @@ import type {
   ApprovalDecisionsRepository,
   ApprovalRequestsRepository,
 } from '../../approvals/approvals.repository.js';
-import { type ChasePolicy, type Decision, decideActions, type PlannedAction } from './decide.js';
+import {
+  type ChasePolicy,
+  type Decision,
+  decideActions,
+  type PlannedAction,
+  type Redraft,
+} from './decide.js';
 import { NODE_REQUEST_APPROVAL } from './speakers.graph.js';
 import type { SpeakersRuntime, SpeakersThreadView } from './speakers.runtime.js';
 import { pipelineInput, statusFor } from './pipeline.js';
@@ -93,7 +99,14 @@ export class SpeakersService {
     private readonly policy: ChasePolicy,
   ) {}
 
-  async run(eventId: string, options: { now?: Date } = {}): Promise<RunResult> {
+  async run(
+    eventId: string,
+    options: { now?: Date; redraft?: readonly Redraft[] } = {},
+  ): Promise<RunResult> {
+    for (const r of options.redraft ?? []) {
+      if (!(MESSAGE_KINDS as readonly string[]).includes(r.kind))
+        throw new RangeError(`--redraft needs a message kind, one of: ${MESSAGE_KINDS.join(', ')}`);
+    }
     const event = await this.store.mustFindEvent(eventId); // before any thread exists
     const threadId = threadIdFor(event._id, 'speakers');
     const before = await this.runtime.inspect(threadId);
@@ -116,6 +129,11 @@ export class SpeakersService {
         replaced = request._id;
       }
     }
+    if (before.status === 'resumable' && (options.redraft?.length ?? 0) > 0) {
+      throw new RangeError(
+        `A previous run of this event stopped part-way; finish it first (npm run approvals -- resume ${threadId}), then use --redraft.`,
+      );
+    }
     const view = await this.guard(threadId, () =>
       before.status === 'resumable'
         ? this.runtime.continue(threadId)
@@ -124,6 +142,7 @@ export class SpeakersService {
           this.runtime.start(threadId, {
             eventId: event._id,
             ...(options.now ? { now: options.now } : {}),
+            ...(options.redraft ? { redraft: options.redraft } : {}),
           }),
     );
     return { ...(await this.result(view, callsBefore)), ...(replaced ? { replaced } : {}) };

@@ -430,8 +430,27 @@ days relative to the event day:
 A second chase of a kind needs the previous one marked sent and 7 days elapsed. Messages are only
 drafted up to T-4d, so every due date can give 3 days' notice and still fall before the event; from
 T-3d to the event day an item still missing becomes the "call them" task, and after the event nothing
-is chased. A draft rejected at review is final for that kind and event. An unsent draft that no longer
+is chased. A draft rejected at review blocks that kind until a human acts (see below). An unsent draft that no longer
 applies (the status moved on, the bio arrived) becomes `superseded`; nothing is deleted.
+
+### Rejecting a draft is not a dead end
+
+Rejection means the same here as in the planner: nothing from the rejected proposal is applied, the
+reason and the time of the decision stay on the draft (`rejectionReason`, `rejectedAt`), it is never
+edited or deleted, and an explicit human act produces a **new** draft (a new round) with a new approval
+request on the same thread. Until you act, the kind is held, the way a sent invitation holds it, and
+`list` says how to act. Two ways to act:
+
+- **Reset the speaker's status after the rejection** (`status --set …`): `declined`, then `idea` for an
+  invitation. A status change dated later than `rejectedAt` earns a new round.
+- **`npm run speakers -- run --event <id> --redraft <kind> --speaker <id>`** for the cases where the
+  status cannot be reset (a confirmed speaker's chase). It is a flag on `run`, not a separate command,
+  because `run` is the only command that calls a model. It goes through the same table and guards as a
+  scheduled message (the kind must apply to the speaker's status today, bio/photo must still be
+  missing, the draft window still closes at T-4d) and says why when it is refused.
+
+Rewording a draft is therefore: remove it in `approvals edit` (or reject the request), then `--redraft`.
+A stored draft is never edited, so what was reviewed is what exists.
 
 ### Chase policy
 

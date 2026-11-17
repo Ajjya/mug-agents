@@ -44,13 +44,18 @@ Rules beyond the table, which I decided and you should check:
    happened, so slides could never produce a task.)
 2. **The limit task comes one interval after the last chase**, or when the window closes, whichever is
    first. The last chase gets its interval to be answered before "call them" appears.
-3. **A rejected draft is final for that kind and event; a sent invitation is final until a human
-   resets the speaker.** Rejecting means "not this message", and the agent does not try again. A sent
-   invitation parks the speaker for the event, but moving them back to `idea` _after_ it was sent
-   (`declined → idea`, or `invited → idea`) is a re-approach: the next run drafts invitation round 2,
-   and reply chases count from the new invitation. (Review finding 5: the rule "to re-approach, change
-   the status" was in the first version of this text and was not true; a probe returned nothing.) A
-   rejected invitation stays final whatever the status: there is no timestamp on a rejection to compare.
+3. **A rejection blocks the kind until a human acts; so does a sent invitation.** Rejected drafts
+   keep `rejectedAt` (the approval decision's own timestamp). A status change _after_ it is a
+   re-approach and earns a new round (invitation: `declined`, then `idea`; the speaker's status is
+   `idea` already, so `idea → idea` cannot be the reset). Where the status cannot be reset (a
+   confirmed speaker's chase), `speakers run --redraft <kind> --speaker <id>` does it. I made that a
+   flag on `run`, not a `redraft` command: spec §8 says `run` is the only command that calls a model.
+   It passes through the same table and guards as any scheduled message and reports why it was refused.
+   A sent invitation likewise parks the speaker, and a later reset to `idea` re-approaches
+   (round 2; reply chases count from the new invitation). A rejection with no `rejectedAt` (data from
+   before this change) cannot be reset by status, only by `--redraft`. The planner's meaning of
+   "reject" is the same (nothing applied, reason kept, an explicit act produces a new proposal with a new
+   request); `test/unit/rejection-agreement.test.ts` states it as four invariants and checks both.
 4. **Unsent drafts that no longer apply become `superseded`.** For example, the speaker declined while a
    chase sat unsent, the bio arrived while its chase was waiting, or the **event day came** (an approved
    chase would otherwise mean "send this now" forever). A thank-you is exempt.

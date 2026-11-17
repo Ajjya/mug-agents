@@ -29,7 +29,8 @@ export const MESSAGE_CHANNELS = ['email'] as const;
 /**
  *  - draft:      written, not reviewed (or reviewed and not needing approval)
  *  - approved:   a human approved it: "send this now"
- *  - rejected:   a human rejected it at review; never redrafted for the same round
+ *  - rejected:   a human rejected it at review (with `rejectedAt`); it stays on record, and that kind
+ *                waits for a human act: a status reset after `rejectedAt`, or `speakers run --redraft`
  *  - sent:       a human said it went out (`speakers sent <id>`); chases are measured from `sentAt`
  *  - superseded: no longer applies (the speaker's status moved on before it was sent)
  */
@@ -70,6 +71,8 @@ export const MessageInputSchema = z
     needsApproval: z.boolean(),
     status: z.enum(MESSAGE_STATUSES),
     rejectionReason: nonEmpty.optional(),
+    /** When the rejection was decided: the approval decision's own timestamp. */
+    rejectedAt: isoDate.optional(),
     approvalRequestId: entityId.optional(),
     /** `eventId:speakerId:kind:round`, unique: a second draft for the same key is a no-op. */
     idempotencyKey: nonEmpty,
@@ -84,6 +87,7 @@ export const MessageSchema = MessageInputSchema.extend(documentShape);
 export const MessagePatchSchema = MessageInputSchema.pick({
   status: true,
   rejectionReason: true,
+  rejectedAt: true,
   approvalRequestId: true,
   sentAt: true,
   sentBy: true,

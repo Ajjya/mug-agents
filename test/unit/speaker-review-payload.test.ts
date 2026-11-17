@@ -87,6 +87,19 @@ describe('editing speaker drafts: removal only', () => {
     }
   });
 
+  it('the refusal names the path that works: remove it, then run --redraft with the real ids', () => {
+    let message = '';
+    try {
+      assertEditMatches(original, { ...original, drafts: [{ ...first, body: 'Reworded.' }] });
+    } catch (e) {
+      message = e instanceof Error ? e.message : '';
+    }
+    expect(message).toContain(
+      `npm run speakers -- run --event ${original.eventId} --redraft ${first.kind} --speaker ${first.speakerId}`,
+    );
+    expect(message).not.toMatch(/reject and re-run/);
+  });
+
   it('adding a draft that was not in the request is refused', () => {
     const extra = { ...first, messageId: '7'.repeat(24) };
     expect(() => {

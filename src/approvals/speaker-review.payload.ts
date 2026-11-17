@@ -56,7 +56,8 @@ export class InvalidSpeakerEditError extends Error {
 /**
  * An edit of speaker drafts can only REMOVE drafts: the kept ones are approved, the removed ones are
  * rejected. Nothing in a kept draft may change: its facts were filled from the event record, and its
- * recipient was chosen by code. To change wording, reject and re-run.
+ * recipient was chosen by code. Wording is changed by a NEW round, never by editing a stored draft:
+ * remove (or reject) the draft here, then `speakers run --event <id> --redraft <kind> --speaker <id>`.
  */
 export function assertSpeakerEditAllowed(
   original: SpeakerReviewPayload,
@@ -75,7 +76,8 @@ export function assertSpeakerEditAllowed(
     }
     if (JSON.stringify(o) !== JSON.stringify({ ...o, ...d })) {
       problems.push(
-        `draft ${d.messageId} was changed: an edit can only remove drafts (reject and re-run to reword)`,
+        `draft ${d.messageId} was changed: an edit can only remove drafts. To reword it, remove it here (or reject the request), then run: ` +
+          `npm run speakers -- run --event ${original.eventId} --redraft ${o.kind} --speaker ${o.speakerId}`,
       );
     }
   }
