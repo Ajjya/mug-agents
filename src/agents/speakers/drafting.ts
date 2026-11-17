@@ -161,7 +161,8 @@ const WEEKDAYS = 'monday|tuesday|wednesday|thursday|friday|saturday|sunday';
 /** Patterns that state a fact. Matched case-insensitively against what the model wrote. */
 export const FORBIDDEN: readonly { name: string; re: RegExp }[] = [
   { name: 'an ISO date', re: /\b\d{4}-\d{1,2}-\d{1,2}\b/i },
-  { name: 'a numeric date', re: /\b\d{1,2}[/.]\d{1,2}(?:[/.]\d{2,4})?\b/ },
+  // Slashed day/month, or dotted with a 4-digit year: "8.0" and "7.0.12" are versions, not dates.
+  { name: 'a numeric date', re: /\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b|\b\d{1,2}\.\d{1,2}\.\d{4}\b/ },
   {
     name: 'a day and month',
     re: new RegExp(`\\b\\d{1,2}(?:st|nd|rd|th)?\\s+(?:of\\s+)?(?:${MONTHS})\\b`, 'i'),

@@ -189,6 +189,15 @@ describe('draftSchema: the model may not write a fact', () => {
     expect(schema.safeParse({ ...good, usedFacts: ['event_title'] }).success).toBe(false);
   });
 
+  it.each([['12/12'], ['12/12/26'], ['12.12.2026']])('refuses the numeric date %s', (d) => {
+    expect(schema.safeParse({ ...good, body: `${good.body}\nSee you ${d}.` }).success).toBe(false);
+  });
+
+  it('does not mistake version numbers for dates (review finding 12)', () => {
+    const body = `${good.body}\nWe would love a talk on MongoDB 8.0, or what changed since 7.0.12 and driver 6.10.`;
+    expect(schema.safeParse({ ...good, body }).success).toBe(true);
+  });
+
   it('does not mistake ordinary words for dates ("may", "march on")', () => {
     const body = `${good.body}\nYou may bring a friend; we march on with the community.`;
     expect(schema.safeParse({ ...good, body }).success).toBe(true);
