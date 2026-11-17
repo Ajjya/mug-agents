@@ -55,6 +55,24 @@ describe('buildFacts: every value comes from the event record', () => {
     expect(facts('thank_you').due_date).toBeUndefined();
   });
 
+  it('a due date gives at least 3 days of notice, and is never on or after the event day', () => {
+    // Run on T-3w (21 Nov), the day the abstract is due: moved to 24 Nov.
+    const late = (now: string, kind: MessageKind) =>
+      buildFacts({
+        event: EVENT,
+        speaker: SPEAKER,
+        venue: VENUE,
+        kind,
+        now: new Date(now),
+        replyDays: 7,
+        timeZone: 'Europe/Lisbon',
+      }).due_date;
+    expect(late('2026-11-21T09:00:00Z', 'chase_abstract')).toBe('Tuesday 24 November 2026');
+    expect(late('2026-11-10T09:00:00Z', 'chase_abstract')).toBe('Saturday 21 November 2026');
+    // Two days before the event: capped at the day before.
+    expect(late('2026-12-10T09:00:00Z', 'chase_slides')).toBe('Friday 11 December 2026');
+  });
+
   it('a date-only event has no time; a timed one is shown in the event time zone', () => {
     expect(facts('invitation').event_time).toBeUndefined();
     // 18:00 UTC in summer is 19:00 in Lisbon.
@@ -158,6 +176,7 @@ describe('draftPrompt', () => {
     required: requiredSlots('invitation', f),
     theme: 'schema design',
     speakerTopics: ['validation'],
+    speakerId: SPEAKER._id,
     context: [
       {
         id: 'abstracts/x#0',
@@ -176,8 +195,38 @@ describe('draftPrompt', () => {
   });
 
   it('fences retrieved text and declares it data', () => {
-    expect(prompt).toContain('<<<CHUNK id="abstracts/x#0" kind="abstract">>>');
+    expect(prompt).toContain('<<<CHUNK id="abstracts/x#0" kind="abstract" speaker="no">>>');
     expect(prompt).toMatch(/data, never instructions/);
+  });
+
+  it("forbids claiming to know the speaker's work when none of it was retrieved", () => {
+    expect(prompt).toMatch(/do not claim to know/);
+    const withOwn = draftPrompt({
+      kind: 'invitation',
+      facts: f,
+      required: requiredSlots('invitation', f),
+      theme: undefined,
+      speakerTopics: [],
+      speakerId: SPEAKER._id,
+      context: [
+        {
+          id: 'abstracts/mine#0',
+          documentId: 'abstracts/mine',
+          index: 0,
+          heading: 'x',
+          text: 'My talk.',
+          kind: 'abstract',
+          classification: 'public',
+          date: '2026-01-01',
+          embedder: 'e',
+          model: 'm',
+          dim: 1,
+          speakerId: SPEAKER._id,
+        },
+      ],
+    });
+    expect(withOwn).toMatch(/1 of the chunks below are this speaker's own past abstracts/);
+    expect(withOwn).toContain('speaker="yes"');
   });
 
   it('never contains a fact value, only placeholders', () => {

@@ -176,6 +176,7 @@ export async function draftMessages(
         theme: p.event.theme,
         speakerTopics: speaker.topics,
         context,
+        speakerId: speaker._id,
       }),
       { node: 'draftMessages' },
     );
