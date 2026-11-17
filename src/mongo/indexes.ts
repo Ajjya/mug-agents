@@ -25,6 +25,8 @@ export const INDEXES: Record<CollectionName, IndexDescription[]> = {
   speakers: [
     { key: { email: 1 }, name: 'speakers_email_unique', unique: true, sparse: true },
     { key: { handle: 1 }, name: 'speakers_handle_unique', unique: true, sparse: true },
+    // The pipeline query: every speaker with an entry for an event (findByEventId). Multikey.
+    { key: { 'perEvent.eventId': 1 }, name: 'speakers_perEvent_eventId' },
   ],
   organisations: [{ key: { kind: 1 }, name: 'organisations_kind' }],
   tasks: [

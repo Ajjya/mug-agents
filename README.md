@@ -427,7 +427,8 @@ the speaker `idea → invited`; marking a thank-you sent moves `slides_received 
 
 ```bash
 npm run speakers -- run --event <id>          # the only command that calls a model
-npm run speakers -- list --event <id>         # speaker, status, last sent, next action
+npm run speakers -- list --event <id>         # speaker, status, last sent, next action, then the messages
+npm run speakers -- list --event <id> --all   # ... including superseded and rejected drafts
 npm run speakers -- show <messageId>          # one draft, readable, to copy out
 npm run speakers -- candidates --event <id> --topic "change streams"   # M3's suggestSpeakers
 npm run approvals -- list                     # first-contact drafts wait here

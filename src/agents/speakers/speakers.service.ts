@@ -1,5 +1,10 @@
 import { z } from 'zod';
-import { MESSAGE_KINDS, type Message, type MessageKind } from '../../domain/message.schema.js';
+import {
+  MESSAGE_KINDS,
+  type Message,
+  type MessageKind,
+  isRecordedOutside,
+} from '../../domain/message.schema.js';
 import type { SpeakerStatus } from '../../domain/speaker.schema.js';
 import { threadIdFor } from '../../graph/thread.js';
 import { ProviderUnavailableError, StructuredOutputError } from '../../llm/errors.js';
@@ -77,6 +82,23 @@ export interface RunResult {
   calls: LlmCallRecord[];
 }
 
+/** A message in the event's pipeline, as `list` shows it. */
+export interface MessageRow {
+  id: string;
+  speakerName: string;
+  kind: MessageKind;
+  round: number;
+  status: Message['status'];
+  needsApproval: boolean;
+  /** When it was sent, else when it was drafted. */
+  at: string;
+  /** A send recorded outside the system: no text. */
+  recorded: boolean;
+}
+
+/** What `list` hides unless asked: drafts that are no longer part of the work. */
+export const HIDDEN_BY_DEFAULT: readonly Message['status'][] = ['superseded', 'rejected'];
+
 export interface PipelineRow {
   speakerId: string;
   name: string;
@@ -152,7 +174,8 @@ export class SpeakersService {
   async list(
     eventId: string,
     now: Date = new Date(),
-  ): Promise<{ rows: PipelineRow[]; notes: string[] }> {
+    options: { all?: boolean } = {},
+  ): Promise<{ rows: PipelineRow[]; notes: string[]; messages: MessageRow[]; hidden: number }> {
     const p = await this.store.load(eventId);
     const d = decideActions(
       pipelineInput(p, now, { ...this.policy, maxDraftsPerRun: Number.MAX_SAFE_INTEGER }),
@@ -180,7 +203,18 @@ export class SpeakersService {
         next: next.join('; ') || '-',
       };
     });
-    return { rows, notes: d.notes };
+    const shown = p.messages.filter((m) => options.all || !HIDDEN_BY_DEFAULT.includes(m.status));
+    const messages = shown.map((m): MessageRow => ({
+      id: m._id,
+      speakerName: p.speakers.find((s) => s._id === m.speakerId)?.name ?? m.speakerId,
+      kind: m.kind,
+      round: m.round,
+      status: m.status,
+      needsApproval: m.needsApproval,
+      at: m.sentAt ?? m.createdAt,
+      recorded: isRecordedOutside(m),
+    }));
+    return { rows, notes: d.notes, messages, hidden: p.messages.length - shown.length };
   }
 
   /**

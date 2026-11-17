@@ -501,6 +501,54 @@ export function speakersWorkflowSuite(
       expect(await eventMessages(h, s.eventId)).toHaveLength(1);
     });
 
+    it('list hides superseded and rejected drafts unless --all (review item 6)', async () => {
+      const h = await fresh();
+      const s = await seed(h.repos, [
+        { name: 'Ada One', status: 'confirmed', contacted: true }, // an auto chase, later superseded
+        { name: 'Bea Two', status: 'idea' }, // a first contact, later rejected
+        { name: 'Cy Three', status: 'idea' }, // a send recorded outside the system
+      ]);
+      const [ada, , cy] = [s.speakers['Ada One'] ?? '', '', s.speakers['Cy Three'] ?? ''];
+      await h.service.recordSent(
+        { eventId: s.eventId, speakerId: cy, kind: 'invitation', on: '2026-11-01', by: 'vlad' },
+        day('2026-11-02'),
+      );
+      const run = await h.service.run(s.eventId, { now: day('2026-11-14') });
+      await h.approvals.decide(
+        run.requestId ?? '',
+        { decision: 'reject', reason: 'no' },
+        'vlad',
+        day('2026-11-14'),
+      );
+      await h.service.setStatus(ada, s.eventId, 'declined', day('2026-11-15'));
+      await h.service.run(s.eventId, { now: day('2026-11-16') }); // supersedes Ada's unsent chase
+
+      const statuses = async (all: boolean) =>
+        (await h.service.list(s.eventId, day('2026-11-16'), { all })).messages.map((m) => [
+          m.speakerName,
+          m.kind,
+          m.status,
+        ]);
+      const normal = await h.service.list(s.eventId, day('2026-11-16'));
+      // Cy's recorded invitation is 13 days old by 11-14, so Cy also has a reply chase waiting.
+      expect(normal.messages.map((m) => [m.speakerName, m.kind, m.status, m.recorded])).toEqual([
+        ['Cy Three', 'invitation', 'sent', true],
+        ['Cy Three', 'chase_reply', 'draft', false],
+      ]);
+      expect(normal.hidden).toBe(2);
+      const everything = await statuses(true);
+      expect(everything).toHaveLength(4);
+      expect(everything.map((r) => r[2]).sort()).toEqual([
+        'draft',
+        'rejected',
+        'sent',
+        'superseded',
+      ]);
+      expect((await h.service.list(s.eventId, day('2026-11-16'), { all: true })).hidden).toBe(0);
+      // Hiding is display only: the messages are all still stored.
+      expect(await eventMessages(h, s.eventId)).toHaveLength(4);
+    });
+
     it('an illegal status transition is refused and changes nothing', async () => {
       const h = await fresh();
       const s = await seed(h.repos, [{ name: 'Wendeline Gooseberry', status: 'idea' }]);

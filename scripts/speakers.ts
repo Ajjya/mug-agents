@@ -25,7 +25,10 @@ const USAGE = `Usage: npm run speakers -- <command> [options]
                                        run the pipeline: print planned actions and the drafts written.
                                        --redraft asks for a NEW round of a kind whose draft you rejected
                                        (the rejected draft stays on record; wording is never edited)
-  list --event <id> [--now <ISO>]      pipeline table: speaker, status, last sent, next action
+  list --event <id> [--now <ISO>] [--all]
+                                       pipeline table: speaker, status, last sent, next action, then
+                                       the event's messages. Superseded and rejected drafts are hidden
+                                       unless --all
   show <messageId>                     one draft, readable (copy it out from here)
   sent <messageId> [--by <name>]       record that you sent it; chases are measured from now
   sent --speaker <id> --event <id> --kind <kind> --on <date> [--round <n>] [--by <name>]
@@ -55,6 +58,7 @@ const { values, positionals } = parseArgs({
     on: { type: 'string' },
     round: { type: 'string' },
     now: { type: 'string' },
+    all: { type: 'boolean' },
     help: { type: 'boolean', short: 'h' },
   },
 });
@@ -129,13 +133,29 @@ runCli(
       }
       case 'list': {
         if (!values.event) return usage();
-        const { rows, notes } = await service.list(values.event, now);
+        const { rows, notes, messages, hidden } = await service.list(values.event, now, {
+          all: values.all === true,
+        });
         const pad = (s: string, n: number) => (s.length >= n ? s : s + ' '.repeat(n - s.length));
         console.log(`${pad('SPEAKER', 28)}${pad('STATUS', 19)}${pad('LAST SENT', 28)}NEXT`);
         for (const r of rows) {
           const last = r.lastSent ? `${r.lastSent.kind} ${r.lastSent.at.slice(0, 10)}` : '-';
           console.log(`${pad(r.name, 28)}${pad(r.status, 19)}${pad(last, 28)}${r.next}`);
         }
+        console.log(`\nMESSAGES (${String(messages.length)})`);
+        for (const m of messages) {
+          const flags = [m.needsApproval ? 'first contact' : '', m.recorded ? 'recorded' : '']
+            .filter(Boolean)
+            .join(', ');
+          console.log(
+            `  ${m.id}  ${pad(m.speakerName, 24)}${pad(`${m.kind} #${String(m.round)}`, 20)}${pad(m.status, 11)}${m.at.slice(0, 10)}${flags ? `  (${flags})` : ''}`,
+          );
+        }
+        if (messages.length === 0) console.log('  none');
+        if (hidden > 0)
+          console.log(
+            `  (${String(hidden)} superseded or rejected hidden: use --all to show them)`,
+          );
         for (const n of notes) console.log(`\nNote: ${n}`);
         console.log(
           '\nThe pipeline is only as current as what it has been told: nothing reads replies yet.',
