@@ -163,6 +163,39 @@ export function speakersWorkflowSuite(
       expect(await eventMessages(h, s.eventId)).toHaveLength(2);
     });
 
+    it('a pending review does not stall the event (review finding 3)', async () => {
+      const h = await fresh();
+      const s = await seed(h.repos, [
+        { name: 'Wendeline Gooseberry', status: 'idea' },
+        { name: 'Ignatius Fogwhistle', status: 'confirmed', contacted: true },
+      ]);
+      const first = await h.service.run(s.eventId, { now: day('2026-11-01') });
+      expect(first.status).toBe('awaiting_approval');
+      // Nobody decides. Two weeks later the confirmed speaker's abstract chase is due.
+      const later = await h.service.run(s.eventId, { now: day('2026-11-14') });
+      expect(later.replaced).toBe(first.requestId);
+      expect(later.created.map((m) => [m.kind, m.needsApproval])).toEqual([
+        ['chase_abstract', false],
+      ]);
+      expect(later.status).toBe('awaiting_approval');
+      // The old request is retired, not deleted; the new one carries the unapproved invitation.
+      expect((await h.repos.requests.findById(first.requestId ?? ''))?.status).toBe('expired');
+      const pending = (await h.approvals.list()).pending;
+      expect(pending.map((p) => [p.request._id, p.orphan])).toEqual([[later.requestId, false]]);
+      const payload = pending[0]?.request.payload;
+      expect(payload && 'drafts' in payload ? payload.drafts.map((d) => d.kind) : []).toEqual([
+        'invitation',
+      ]);
+      await expect(
+        h.approvals.decide(first.requestId ?? '', { decision: 'approve' }, 'vlad'),
+      ).rejects.toThrow(/already expired/);
+      await h.approvals.decide(later.requestId ?? '', { decision: 'approve' }, 'vlad');
+      const byKind = new Map((await eventMessages(h, s.eventId)).map((m) => [m.kind, m.status]));
+      expect(byKind.get('invitation')).toBe('approved');
+      expect(byKind.get('chase_abstract')).toBe('draft');
+      expect(await eventMessages(h, s.eventId)).toHaveLength(2);
+    });
+
     it("every draft's date, time and venue are the event record's, exactly", async () => {
       const h = await fresh();
       const s = await seed(h.repos, [{ name: 'Wendeline Gooseberry', status: 'idea' }]);

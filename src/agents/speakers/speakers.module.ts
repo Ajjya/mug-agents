@@ -3,7 +3,9 @@ import type { BaseCheckpointSaver } from '@langchain/langgraph';
 import type { Db } from 'mongodb';
 import { APPROVALS_GATE, ApprovalsStoreModule } from '../../approvals/approvals-store.module.js';
 import {
+  APPROVAL_DECISIONS_REPOSITORY,
   APPROVAL_REQUESTS_REPOSITORY,
+  type ApprovalDecisionsRepository,
   type ApprovalRequestsRepository,
 } from '../../approvals/approvals.repository.js';
 import { APP_CONFIG } from '../../config/config.module.js';
@@ -129,13 +131,20 @@ const policyOf = (c: AppConfig): ChasePolicy => ({
     },
     {
       provide: SpeakersService,
-      inject: [SPEAKER_PIPELINE_STORE, SPEAKERS_RUNTIME, APPROVAL_REQUESTS_REPOSITORY, APP_CONFIG],
+      inject: [
+        SPEAKER_PIPELINE_STORE,
+        SPEAKERS_RUNTIME,
+        APPROVAL_REQUESTS_REPOSITORY,
+        APPROVAL_DECISIONS_REPOSITORY,
+        APP_CONFIG,
+      ],
       useFactory: (
         store: SpeakerPipelineStore,
         runtime: SpeakersRuntime,
         requests: ApprovalRequestsRepository,
+        decisions: ApprovalDecisionsRepository,
         c: AppConfig,
-      ) => new SpeakersService(store, runtime, requests, policyOf(c)),
+      ) => new SpeakersService(store, runtime, requests, decisions, policyOf(c)),
     },
   ],
   exports: [SpeakersService, SPEAKERS_RUNTIME],

@@ -197,7 +197,7 @@ export function buildSpeakersHarness(
     context,
     store,
     runtime,
-    service: new SpeakersService(store, runtime, repos.requests, policy),
+    service: new SpeakersService(store, runtime, repos.requests, repos.decisions, policy),
     approvals: new ApprovalsService(repos.requests, repos.decisions, [runtime]),
     behaviour,
   };

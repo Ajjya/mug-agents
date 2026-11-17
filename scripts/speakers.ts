@@ -3,6 +3,7 @@ import { parseArgs } from 'node:util';
 import { z } from 'zod';
 import { EventNotFoundError } from '../src/agents/planner/plan-persistence.js';
 import {
+  PendingDecisionUndeliveredError,
   SpeakersRunInterruptedError,
   SpeakersService,
 } from '../src/agents/speakers/speakers.service.js';
@@ -64,12 +65,10 @@ runCli(
       case 'run': {
         if (!values.event) return usage();
         const r = await service.run(values.event, { now });
-        if (r.alreadyWaiting) {
+        if (r.replaced) {
           console.log(
-            `A run for this event is already waiting for approval (request ${r.requestId ?? '?'}). No new run started.\n` +
-              'Decide with: npm run approvals -- show <id>',
+            `The pending approval request ${r.replaced} was retired (expired, not deleted); its unapproved drafts are in this run's request.\n`,
           );
-          return 0;
         }
         const d = r.decision;
         console.log(`PLANNED (${String(d?.actions.length ?? 0)})`);
@@ -166,6 +165,7 @@ runCli(
       err instanceof MessageNotSendableError ||
       err instanceof SpeakerNotInEventError ||
       err instanceof IllegalTransitionError ||
+      err instanceof PendingDecisionUndeliveredError ||
       err instanceof EmbeddingUnavailableError ||
       err instanceof EmbeddingMismatchError
     ) {

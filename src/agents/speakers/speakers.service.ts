@@ -3,7 +3,10 @@ import type { SpeakerStatus } from '../../domain/speaker.schema.js';
 import { threadIdFor } from '../../graph/thread.js';
 import { ProviderUnavailableError, StructuredOutputError } from '../../llm/errors.js';
 import type { LlmCallRecord } from '../../llm/model.types.js';
-import type { ApprovalRequestsRepository } from '../../approvals/approvals.repository.js';
+import type {
+  ApprovalDecisionsRepository,
+  ApprovalRequestsRepository,
+} from '../../approvals/approvals.repository.js';
 import { type ChasePolicy, type Decision, decideActions, type PlannedAction } from './decide.js';
 import { NODE_REQUEST_APPROVAL, type SpeakersState } from './speakers.graph.js';
 import type { SpeakersRuntime, SpeakersThreadView } from './speakers.runtime.js';
@@ -23,11 +26,24 @@ export class SpeakersRunInterruptedError extends Error {
   }
 }
 
+/** A decision was recorded for the pending review but never delivered: deliver it, don't replace it. */
+export class PendingDecisionUndeliveredError extends Error {
+  constructor(
+    public readonly threadId: string,
+    public readonly requestId: string,
+  ) {
+    super(
+      `Request ${requestId} has a recorded decision that was not delivered. Run: npm run approvals -- resume ${threadId}`,
+    );
+    this.name = 'PendingDecisionUndeliveredError';
+  }
+}
+
 export interface RunResult {
   status: 'awaiting_approval' | 'completed';
   threadId: string;
-  /** A run was already waiting for a decision: reported, nothing new started, no model call. */
-  alreadyWaiting: boolean;
+  /** The pending approval request this run retired (its drafts are asked for again). */
+  replaced?: string;
   decision: Decision | null;
   /** Drafts this run created (a second run for the same day creates none). */
   created: Message[];
@@ -57,6 +73,7 @@ export class SpeakersService {
     private readonly store: SpeakerPipelineStore,
     private readonly runtime: SpeakersRuntime,
     private readonly requests: ApprovalRequestsRepository,
+    private readonly decisions: ApprovalDecisionsRepository,
     private readonly policy: ChasePolicy,
   ) {}
 
@@ -65,16 +82,35 @@ export class SpeakersService {
     const threadId = threadIdFor(event._id, 'speakers');
     const before = await this.runtime.inspect(threadId);
     const callsBefore = before.calls.length;
-    if (before.status === 'awaiting_decision') return await this.result(before, 0, true);
+    let replaced: string | undefined;
+    if (before.status === 'awaiting_decision') {
+      // A pending review must not stop every later run for the event (chases for other speakers
+      // included). The pending request is retired (status `expired`, nothing deleted) and a new run
+      // asks again: its review holds the still-unapproved drafts plus any new ones.
+      const request = before.runId
+        ? await this.requests.findByKey(threadId, before.runId, NODE_REQUEST_APPROVAL)
+        : null;
+      if (request && (await this.decisions.findByRequestId(request._id))) {
+        throw new PendingDecisionUndeliveredError(threadId, request._id);
+      }
+      if (request?.status === 'pending') {
+        await this.requests.updateWithRetry(request._id, (r) => ({
+          status: r.status === 'pending' ? 'expired' : r.status,
+        }));
+        replaced = request._id;
+      }
+    }
     const view = await this.guard(threadId, () =>
       before.status === 'resumable'
         ? this.runtime.continue(threadId)
-        : this.runtime.start(threadId, {
+        : // A waiting thread is started again with new input: LangGraph begins a new run from
+          // START and the old interrupt is dropped (verified in the speakers workflow tests).
+          this.runtime.start(threadId, {
             eventId: event._id,
             ...(options.now ? { now: options.now } : {}),
           }),
     );
-    return await this.result(view, callsBefore, false);
+    return { ...(await this.result(view, callsBefore)), ...(replaced ? { replaced } : {}) };
   }
 
   /** The pipeline as a table: who is where, what was last sent, what comes next. No model, no writes. */
@@ -171,17 +207,12 @@ export class SpeakersService {
     }
   }
 
-  private async result(
-    view: SpeakersThreadView,
-    callsBefore: number,
-    alreadyWaiting: boolean,
-  ): Promise<RunResult> {
+  private async result(view: SpeakersThreadView, callsBefore: number): Promise<RunResult> {
     const values = (await this.runtime.values(view.threadId)) as SpeakersState;
     const createdIds = values.created ?? [];
     const all = values.eventId ? await this.store.eventMessages(values.eventId) : [];
     const base = {
       threadId: view.threadId,
-      alreadyWaiting,
       decision: values.decision ?? null,
       created: all.filter((m) => createdIds.includes(m._id)),
       existing: values.existing?.length ?? 0,
