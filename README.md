@@ -389,8 +389,16 @@ cannot know that a message went out or that someone answered. Two commands tell 
 
 ```bash
 npm run speakers -- sent <messageId>                                  # you sent it: chases count from now
+npm run speakers -- sent --speaker <id> --event <id> --kind invitation --on 2026-11-01
+                                                                      # you sent it outside this system
 npm run speakers -- status <speakerId> --event <id> --set confirmed   # what happened (guarded)
 ```
+
+A send you did without a draft here is recorded with `sent --speaker … --kind … --on <date>`: a message
+already `sent`, with no text, `sentBy: recorded:<name>`, dated `--on` (chases measure from that date).
+Recording the same send again changes nothing (an explicit `--round` makes the natural key the check;
+otherwise a recorded send of the same kind on the same day is the same send), and it is refused if a
+draft of that kind is still waiting (mark that one instead).
 
 Until a draft is marked sent, nothing is ever chased because of it. A `sent` repeated after a crash
 finishes the status step it missed. Marking an invitation sent moves

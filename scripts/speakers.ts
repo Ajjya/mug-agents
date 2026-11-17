@@ -28,6 +28,10 @@ const USAGE = `Usage: npm run speakers -- <command> [options]
   list --event <id> [--now <ISO>]      pipeline table: speaker, status, last sent, next action
   show <messageId>                     one draft, readable (copy it out from here)
   sent <messageId> [--by <name>]       record that you sent it; chases are measured from now
+  sent --speaker <id> --event <id> --kind <kind> --on <date> [--round <n>] [--by <name>]
+                                       record a send done OUTSIDE this system (no draft exists): a
+                                       message already sent, no text, dated --on; chases measure from
+                                       that date. Recording the same send again changes nothing
   status <speakerId> --event <id> --set <status>
                                        record what happened (checked against the transition table)
   candidates [--event <id>] [--topic "..."]
@@ -47,6 +51,9 @@ const { values, positionals } = parseArgs({
     topic: { type: 'string' },
     redraft: { type: 'string' },
     speaker: { type: 'string' },
+    kind: { type: 'string' },
+    on: { type: 'string' },
+    round: { type: 'string' },
     now: { type: 'string' },
     help: { type: 'boolean', short: 'h' },
   },
@@ -146,16 +153,40 @@ runCli(
         if (m.sentAt) console.log(`  sent ${m.sentAt} by ${m.sentBy ?? '?'}`);
         if (m.rejectionReason)
           console.log(`  rejected${m.rejectedAt ? ` ${m.rejectedAt}` : ''}: ${m.rejectionReason}`);
-        console.log(`\nSubject: ${m.subject}\n\n${m.body}\n`);
+        console.log(
+          m.body === ''
+            ? `\nSubject: ${m.subject}\n\n(no text: this send was recorded, not drafted here)\n`
+            : `\nSubject: ${m.subject}\n\n${m.body}\n`,
+        );
         console.log('Facts (from the event record):');
         for (const [k, v] of Object.entries(m.facts)) console.log(`  ${k}: ${v}`);
         return 0;
       }
       case 'sent': {
-        if (!target) return usage();
         const by = values.by ?? config.APPROVER_NAME ?? userInfo().username;
-        const m = await service.sent(target, by, now);
-        console.log(`Recorded: ${m.kind} ${m._id} sent ${m.sentAt ?? ''} by ${m.sentBy ?? by}.`);
+        if (target) {
+          const m = await service.sent(target, by, now);
+          console.log(`Recorded: ${m.kind} ${m._id} sent ${m.sentAt ?? ''} by ${m.sentBy ?? by}.`);
+          return 0;
+        }
+        // No messageId: a send done outside this system.
+        if (!values.speaker || !values.event || !values.kind || !values.on) return usage();
+        const r = await service.recordSent(
+          {
+            eventId: values.event,
+            speakerId: values.speaker,
+            kind: z.enum(MESSAGE_KINDS).parse(values.kind),
+            on: values.on,
+            by,
+            ...(values.round ? { round: z.coerce.number().int().min(1).parse(values.round) } : {}),
+          },
+          now,
+        );
+        console.log(
+          r.created
+            ? `Recorded: ${r.message.kind} round ${String(r.message.round)} (${r.message._id}) sent ${r.message.sentAt ?? ''}, outside this system.`
+            : `Already recorded: ${r.message.kind} round ${String(r.message.round)} (${r.message._id}); nothing changed.`,
+        );
         return 0;
       }
       case 'status': {

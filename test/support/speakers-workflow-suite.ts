@@ -423,6 +423,84 @@ export function speakersWorkflowSuite(
       expect(await h.store.currentStatus(sp, s.eventId)).toBe('invited');
     });
 
+    it('a send recorded outside the system: chases measure from its date (review item 3)', async () => {
+      const h = await fresh();
+      const s = await seed(h.repos, [{ name: 'Wendeline Gooseberry', status: 'idea' }]);
+      const sp = s.speakers['Wendeline Gooseberry'] ?? '';
+      const rec = await h.service.recordSent(
+        { eventId: s.eventId, speakerId: sp, kind: 'invitation', on: '2026-11-01', by: 'vlad' },
+        day('2026-11-03'),
+      );
+      expect(rec.created).toBe(true);
+      expect(rec.message).toMatchObject({
+        kind: 'invitation',
+        round: 1,
+        status: 'sent',
+        body: '',
+        sentBy: 'recorded:vlad',
+        sentAt: '2026-11-01T12:00:00.000Z',
+        needsApproval: false,
+      });
+      expect(await h.store.currentStatus(sp, s.eventId)).toBe('invited');
+      // Six days after: nothing. Seven: the first reply chase, an auto draft (a message was sent).
+      expect((await h.service.run(s.eventId, { now: day('2026-11-07') })).created).toEqual([]);
+      const chase = await h.service.run(s.eventId, { now: day('2026-11-08') });
+      expect(chase.created.map((m) => [m.kind, m.round, m.status, m.needsApproval])).toEqual([
+        ['chase_reply', 1, 'draft', false],
+      ]);
+      expect(chase.status).toBe('completed');
+    });
+
+    it('recording the same send again is a no-op, and a different day is a new round', async () => {
+      const h = await fresh();
+      const s = await seed(h.repos, [{ name: 'Wendeline Gooseberry', status: 'confirmed' }]);
+      const sp = s.speakers['Wendeline Gooseberry'] ?? '';
+      const input = {
+        eventId: s.eventId,
+        speakerId: sp,
+        kind: 'chase_abstract' as const,
+        by: 'vlad',
+      };
+      const a = await h.service.recordSent({ ...input, on: '2026-11-14' }, day('2026-11-15'));
+      const again = await h.service.recordSent({ ...input, on: '2026-11-14' }, day('2026-11-16'));
+      expect([a.created, again.created, again.message._id]).toEqual([true, false, a.message._id]);
+      // An explicit round makes the natural key the check, whatever the date.
+      const explicit = await h.service.recordSent(
+        { ...input, on: '2026-11-20', round: 1 },
+        day('2026-11-21'),
+      );
+      expect([explicit.created, explicit.message._id]).toEqual([false, a.message._id]);
+      const second = await h.service.recordSent({ ...input, on: '2026-11-21' }, day('2026-11-22'));
+      expect([second.created, second.message.round]).toEqual([true, 2]);
+      expect(await eventMessages(h, s.eventId)).toHaveLength(2);
+    });
+
+    it('recording refuses: a pending draft of that kind, a future date, a speaker not in the event', async () => {
+      const h = await fresh();
+      const s = await seed(h.repos, [
+        { name: 'Wendeline Gooseberry', status: 'idea', contacted: true },
+      ]);
+      const sp = s.speakers['Wendeline Gooseberry'] ?? '';
+      const draft = await h.service.run(s.eventId, { now: day('2026-10-31') });
+      const input = { eventId: s.eventId, speakerId: sp, kind: 'invitation' as const, by: 'vlad' };
+      await expect(
+        h.service.recordSent({ ...input, on: '2026-11-01' }, day('2026-11-02')),
+      ).rejects.toThrow(new RegExp(`speakers sent ${draft.created[0]?._id ?? ''}`));
+      await expect(
+        h.service.recordSent({ ...input, kind: 'chase_bio', on: '2026-12-30' }, day('2026-11-02')),
+      ).rejects.toThrow(/in the future/);
+      await expect(
+        h.service.recordSent({ ...input, kind: 'chase_bio', on: 'last week' }, day('2026-11-02')),
+      ).rejects.toThrow(/ISO date/);
+      await expect(
+        h.service.recordSent(
+          { ...input, speakerId: 'f'.repeat(24), on: '2026-11-01' },
+          day('2026-11-02'),
+        ),
+      ).rejects.toThrow(/no pipeline entry/);
+      expect(await eventMessages(h, s.eventId)).toHaveLength(1);
+    });
+
     it('an illegal status transition is refused and changes nothing', async () => {
       const h = await fresh();
       const s = await seed(h.repos, [{ name: 'Wendeline Gooseberry', status: 'idea' }]);

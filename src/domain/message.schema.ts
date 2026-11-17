@@ -52,7 +52,7 @@ export const FACT_SLOTS = [
 
 export const MessageFactsSchema = z.partialRecord(z.enum(FACT_SLOTS), nonEmpty);
 
-export const MessageInputSchema = z
+const messageBase = z
   .object({
     eventId: entityId,
     /** The recipient. Chosen by code from the pipeline, never by the model. */
@@ -62,7 +62,8 @@ export const MessageInputSchema = z
     /** 1-based: which attempt of this kind for this speaker and event. */
     round: z.number().int().min(1),
     subject: nonEmpty,
-    body: nonEmpty,
+    /** Empty only for a send recorded outside the system (see {@link RECORDED_PREFIX}). */
+    body: z.string(),
     /** The fact values substituted into subject/body, as taken from the event record. */
     facts: MessageFactsSchema,
     /** Why the agent planned it (from decideActions). */
@@ -81,17 +82,42 @@ export const MessageInputSchema = z
   })
   .strict();
 
-export const MessageSchema = MessageInputSchema.extend(documentShape);
+/**
+ * A send a human did outside this system and recorded afterwards (`speakers sent --speaker ...`).
+ * It has no text, and `sentBy` is `recorded:<name>`: that prefix is the marker, in one place.
+ */
+export const RECORDED_PREFIX = 'recorded:';
+export const recordedBy = (name: string): string => `${RECORDED_PREFIX}${name}`;
+export const isRecordedOutside = (m: { sentBy?: string | undefined }): boolean =>
+  m.sentBy?.startsWith(RECORDED_PREFIX) === true;
+
+/** A body may be empty only for a recorded send, which is always `sent` and marked by `sentBy`. */
+function bodyRules(
+  value: { body: string; status: string; sentBy?: string | undefined },
+  ctx: z.RefinementCtx,
+): void {
+  if (value.body.trim() !== '') return;
+  if (value.status === 'sent' && isRecordedOutside(value)) return;
+  ctx.addIssue({
+    code: 'custom',
+    path: ['body'],
+    message: `must not be empty (only a send recorded outside the system, sentBy "${RECORDED_PREFIX}…", has no text)`,
+  });
+}
+
+export const MessageInputSchema = messageBase.superRefine(bodyRules);
+export const MessageSchema = messageBase.extend(documentShape).superRefine(bodyRules);
 
 /** Only the lifecycle changes after creation: what was written (and reviewed) is immutable. */
-export const MessagePatchSchema = MessageInputSchema.pick({
-  status: true,
-  rejectionReason: true,
-  rejectedAt: true,
-  approvalRequestId: true,
-  sentAt: true,
-  sentBy: true,
-})
+export const MessagePatchSchema = messageBase
+  .pick({
+    status: true,
+    rejectionReason: true,
+    rejectedAt: true,
+    approvalRequestId: true,
+    sentAt: true,
+    sentBy: true,
+  })
   .partial()
   .strict();
 

@@ -3,7 +3,9 @@ import {
   type Message,
   type MessageFacts,
   type MessageKind,
+  isRecordedOutside,
   messageIdempotencyKey,
+  recordedBy,
 } from '../../domain/message.schema.js';
 import type { Organisation } from '../../domain/organisation.schema.js';
 import type { Speaker, SpeakerStatus } from '../../domain/speaker.schema.js';
@@ -265,18 +267,97 @@ export class SpeakerPipelineStore {
     // Also on a repeated `sent`: if a crash came between the two writes, this finishes the job. It
     // applies only while the status is unchanged since the send, so a later human change (a speaker
     // parked back to idea) is never undone.
+    if (sent.sentAt)
+      await this.followStatus(m.kind, m.speakerId, m.eventId, sent.sentAt, now, false);
+    return sent;
+  }
+
+  /** The status step a sent message implies: invitation idea -> invited, thank-you -> thanked. */
+  private async followStatus(
+    kind: MessageKind,
+    speakerId: string,
+    eventId: string,
+    sentAt: string,
+    now: Date,
+    explicit: boolean,
+  ): Promise<void> {
     const follow: Partial<Record<MessageKind, [SpeakerStatus, SpeakerStatus]>> = {
       invitation: ['idea', 'invited'],
       thank_you: ['slides_received', 'thanked'],
     };
-    const step = follow[m.kind];
-    if (step && sent.sentAt) {
-      const entry = await this.entry(m.speakerId, m.eventId);
-      if (entry.status === step[0] && entry.updatedAt <= sent.sentAt) {
-        await this.setStatus(m.speakerId, m.eventId, step[1], now);
-      }
+    const step = follow[kind];
+    if (!step) return;
+    const entry = await this.entry(speakerId, eventId);
+    // An explicit human record ("I sent it on 25 Oct") is the latest word, whatever its date; a
+    // repeated `sent` only completes a send, so it must not undo a status change made since.
+    if (entry.status === step[0] && (explicit || entry.updatedAt <= sentAt)) {
+      await this.setStatus(speakerId, eventId, step[1], now);
     }
-    return sent;
+  }
+
+  /**
+   * A send done outside this system, recorded afterwards: creates a message already `sent`, with no
+   * text and `sentBy` marking it as recorded. Chases then measure from `sentAt` like any other.
+   * Idempotent: with an explicit round the natural key makes a second call a no-op; without one, a
+   * recorded send of the same kind on the same day is the same send.
+   */
+  async recordSent(
+    input: {
+      eventId: string;
+      speakerId: string;
+      kind: MessageKind;
+      sentAt: string;
+      by: string;
+      round?: number;
+    },
+    now: Date,
+  ): Promise<{ message: Message; created: boolean }> {
+    await this.entry(input.speakerId, input.eventId); // the speaker must be in this event's pipeline
+    const mine = (await this.eventMessages(input.eventId)).filter(
+      (m) => m.speakerId.toLowerCase() === input.speakerId.toLowerCase() && m.kind === input.kind,
+    );
+    const day = input.sentAt.slice(0, 10);
+    if (input.round === undefined) {
+      const same = mine.find((m) => isRecordedOutside(m) && m.sentAt?.slice(0, 10) === day);
+      if (same) return { message: same, created: false };
+    }
+    const pending = mine.find((m) => m.status === 'draft' || m.status === 'approved');
+    if (pending) {
+      throw new MessageNotSendableError(
+        pending._id,
+        `a ${input.kind} draft (round ${String(pending.round)}, ${pending.status}) already exists for this speaker: mark that one with "speakers sent ${pending._id}" instead of recording a second`,
+      );
+    }
+    const round = input.round ?? Math.max(0, ...mine.map((m) => m.round)) + 1;
+    const idempotencyKey = messageIdempotencyKey(input.eventId, input.speakerId, input.kind, round);
+    const existing = await this.messages.findByIdempotencyKey(idempotencyKey);
+    if (existing) return { message: existing, created: false };
+    let message: Message;
+    try {
+      message = await this.messages.insert({
+        eventId: input.eventId,
+        speakerId: input.speakerId,
+        kind: input.kind,
+        channel: 'email',
+        round,
+        subject: '(sent outside this system)',
+        body: '',
+        facts: {},
+        reason: 'recorded as sent outside this system',
+        needsApproval: false,
+        status: 'sent',
+        idempotencyKey,
+        sentAt: input.sentAt,
+        sentBy: recordedBy(input.by),
+      });
+    } catch (err) {
+      if (!(err instanceof DuplicateKeyError)) throw err;
+      const raced = await this.messages.findByIdempotencyKey(idempotencyKey);
+      if (!raced) throw err;
+      return { message: raced, created: false };
+    }
+    await this.followStatus(input.kind, input.speakerId, input.eventId, input.sentAt, now, true);
+    return { message, created: true };
   }
 
   private async entry(

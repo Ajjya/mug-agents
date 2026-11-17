@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { MESSAGE_KINDS, type Message } from '../../domain/message.schema.js';
+import { MESSAGE_KINDS, type Message, type MessageKind } from '../../domain/message.schema.js';
 import type { SpeakerStatus } from '../../domain/speaker.schema.js';
 import { threadIdFor } from '../../graph/thread.js';
 import { ProviderUnavailableError, StructuredOutputError } from '../../llm/errors.js';
@@ -211,6 +211,31 @@ export class SpeakersService {
 
   async sent(messageId: string, by: string, now: Date = new Date()): Promise<Message> {
     return await this.store.markSent(messageId, by, now);
+  }
+
+  /**
+   * Records a send done outside this system (a message that is not a draft here). It is a message
+   * already `sent`, with no text, so chases and the first-contact rule treat it like any other.
+   */
+  async recordSent(
+    input: {
+      eventId: string;
+      speakerId: string;
+      kind: MessageKind;
+      /** `YYYY-MM-DD` or a full ISO instant; a date means noon UTC. Not in the future. */
+      on: string;
+      by: string;
+      round?: number;
+    },
+    now: Date = new Date(),
+  ): Promise<{ message: Message; created: boolean }> {
+    const iso = /^\d{4}-\d{2}-\d{2}$/.test(input.on) ? `${input.on}T12:00:00.000Z` : input.on;
+    const at = new Date(iso);
+    if (Number.isNaN(at.getTime()))
+      throw new RangeError(`--on must be an ISO date, got "${input.on}"`);
+    if (at.getTime() > now.getTime() + 86_400_000)
+      throw new RangeError(`--on ${input.on} is in the future: record a send that has happened`);
+    return await this.store.recordSent({ ...input, sentAt: at.toISOString() }, now);
   }
 
   async setStatus(
