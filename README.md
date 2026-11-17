@@ -26,30 +26,34 @@ Or `npm run build && npm start`.
 Validated with Zod at boot (`src/config/env.schema.ts`). Invalid or missing values exit non-zero
 with a list of every problem.
 
-| Variable                 | Required            | Default                                                       | Notes                                                                                                        |
-| ------------------------ | ------------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| `MONGODB_URI`            | yes                 | –                                                             | `mongodb://…` or `mongodb+srv://…`                                                                           |
-| `MONGODB_DB`             | yes                 | –                                                             | Database name                                                                                                |
-| `NODE_ENV`               | no                  | `development`                                                 | `development` \| `test` \| `production`                                                                      |
-| `PORT`                   | no                  | `3000`                                                        |                                                                                                              |
-| `LOG_LEVEL`              | no                  | `info`                                                        | `silent` \| `fatal` \| `error` \| `warn` \| `info` \| `debug` \| `trace`                                     |
-| `OLLAMA_BASE_URL`        | no                  | `https://ollama.com/v1`                                       | OpenAI-compatible endpoint                                                                                   |
-| `OLLAMA_API_KEY`         | at first model call | –                                                             | **Secret.** Not required at boot or for `npm test`                                                           |
-| `OLLAMA_MAX_CONCURRENCY` | no                  | `3`                                                           | Provider limit, not a tuning knob                                                                            |
-| `LLM_MODEL_LADDER`       | no                  | `ollama:gemma4:31b,ollama:gpt-oss:20b,ollama:mistral-large-4` | Ordered rungs; unknown provider or duplicates rejected                                                       |
-| `LLM_PRICES`             | no                  | `{}`                                                          | JSON map model ref → `{inputPerMTok, outputPerMTok}`                                                         |
-| `LLM_TIMEOUT_MS`         | no                  | `60000`                                                       | Per provider call                                                                                            |
-| `CHECKPOINT_TTL_DAYS`    | no                  | `30`                                                          | Days a finished thread's checkpoints are kept; paused/failed threads never expire                            |
-| `APPROVER_NAME`          | no                  | OS user                                                       | Recorded as the decider when `approvals` has no `--by`                                                       |
-| `OLLAMA_LOCAL_BASE_URL`  | no                  | `http://127.0.0.1:11434`                                      | Local Ollama, for embeddings only                                                                            |
-| `EMBEDDING_MODEL`        | no                  | `nomic-embed-text`                                            | Local embedding model; recorded on every chunk                                                               |
-| `EVAL_EMBEDDERS`         | no                  | `ollama-local:<EMBEDDING_MODEL>`                              | Embedders the retrieval eval compares                                                                        |
-| `RETRIEVAL_STORE`        | no                  | `bruteforce`                                                  | `bruteforce` or `atlas`                                                                                      |
-| `ATLAS_LOCAL_URI`        | no                  | –                                                             | mongodb-atlas-local, for the Atlas arm of tests and eval                                                     |
-| `VECTOR_MIN_SCORE`       | no                  | `0.575`                                                       | Cosine below this is not relevant (calibrated on the sample)                                                 |
-| `VECTOR_MIN_GAP`         | no                  | `0.05`                                                        | Scale-free vector gate: top cosine minus the median of the retrieved set                                     |
-| `KEYWORD_MIN_COVERAGE`   | no                  | `0.5`                                                         | Keyword arm: share of the query's distinct terms a chunk must contain                                        |
-| `LLM_MAX_ATTEMPTS`       | no                  | 2 × ladder length                                             | Total provider calls per structured call; must let every rung be reached (3 rungs need ≥ 5), else boot fails |
+| Variable                  | Required            | Default                                                       | Notes                                                                                                        |
+| ------------------------- | ------------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `MONGODB_URI`             | yes                 | –                                                             | `mongodb://…` or `mongodb+srv://…`                                                                           |
+| `MONGODB_DB`              | yes                 | –                                                             | Database name                                                                                                |
+| `NODE_ENV`                | no                  | `development`                                                 | `development` \| `test` \| `production`                                                                      |
+| `PORT`                    | no                  | `3000`                                                        |                                                                                                              |
+| `LOG_LEVEL`               | no                  | `info`                                                        | `silent` \| `fatal` \| `error` \| `warn` \| `info` \| `debug` \| `trace`                                     |
+| `OLLAMA_BASE_URL`         | no                  | `https://ollama.com/v1`                                       | OpenAI-compatible endpoint                                                                                   |
+| `OLLAMA_API_KEY`          | at first model call | –                                                             | **Secret.** Not required at boot or for `npm test`                                                           |
+| `OLLAMA_MAX_CONCURRENCY`  | no                  | `3`                                                           | Provider limit, not a tuning knob                                                                            |
+| `LLM_MODEL_LADDER`        | no                  | `ollama:gemma4:31b,ollama:gpt-oss:20b,ollama:mistral-large-4` | Ordered rungs; unknown provider or duplicates rejected                                                       |
+| `LLM_PRICES`              | no                  | `{}`                                                          | JSON map model ref → `{inputPerMTok, outputPerMTok}`                                                         |
+| `LLM_TIMEOUT_MS`          | no                  | `60000`                                                       | Per provider call                                                                                            |
+| `CHECKPOINT_TTL_DAYS`     | no                  | `30`                                                          | Days a finished thread's checkpoints are kept; paused/failed threads never expire                            |
+| `APPROVER_NAME`           | no                  | OS user                                                       | Recorded as the decider when `approvals` has no `--by`                                                       |
+| `OLLAMA_LOCAL_BASE_URL`   | no                  | `http://127.0.0.1:11434`                                      | Local Ollama, for embeddings only                                                                            |
+| `EMBEDDING_MODEL`         | no                  | `nomic-embed-text`                                            | Local embedding model; recorded on every chunk                                                               |
+| `EVAL_EMBEDDERS`          | no                  | `ollama-local:<EMBEDDING_MODEL>`                              | Embedders the retrieval eval compares                                                                        |
+| `RETRIEVAL_STORE`         | no                  | `bruteforce`                                                  | `bruteforce` or `atlas`                                                                                      |
+| `ATLAS_LOCAL_URI`         | no                  | –                                                             | mongodb-atlas-local, for the Atlas arm of tests and eval                                                     |
+| `VECTOR_MIN_SCORE`        | no                  | `0.575`                                                       | Cosine below this is not relevant (calibrated on the sample)                                                 |
+| `VECTOR_MIN_GAP`          | no                  | `0.05`                                                        | Scale-free vector gate: top cosine minus the median of the retrieved set                                     |
+| `KEYWORD_MIN_COVERAGE`    | no                  | `0.5`                                                         | Keyword arm: share of the query's distinct terms a chunk must contain                                        |
+| `CHASE_MAX_ROUNDS`        | no                  | `2`                                                           | Sent chases of one kind per speaker per event before a task replaces the next message                        |
+| `CHASE_MIN_INTERVAL_DAYS` | no                  | `7`                                                           | Days after the last sent message before the next chase is due                                                |
+| `MAX_DRAFTS_PER_RUN`      | no                  | `10`                                                          | Drafts one `speakers run` may write; the rest wait for the next run                                          |
+| `EVENT_TIME_ZONE`         | no                  | `Europe/Lisbon`                                               | Time zone event and slot times are written in, in drafts                                                     |
+| `LLM_MAX_ATTEMPTS`        | no                  | 2 × ladder length                                             | Total provider calls per structured call; must let every rung be reached (3 rungs need ≥ 5), else boot fails |
 
 `process.env` is read only in `src/config/config.module.ts`.
 
@@ -244,13 +248,17 @@ One table, `src/approvals/autonomy.ts`, enforced in code at the service boundary
 approval. Adding an action without an entry fails the build; `never` cannot be bypassed by any flag,
 argument, environment variable or config value.
 
-| Action                  | Level                                                             |
-| ----------------------- | ----------------------------------------------------------------- |
-| `draft_internal_note`   | auto                                                              |
-| `create_task`           | auto                                                              |
-| `plan_review`           | approve                                                           |
-| `send_external_message` | approve (nothing sends yet: the entry exists so M4/M5 inherit it) |
-| `delete_anything`       | never                                                             |
+| Action                     | Level                                                             |
+| -------------------------- | ----------------------------------------------------------------- |
+| `draft_internal_note`      | auto                                                              |
+| `create_task`              | auto                                                              |
+| `plan_review`              | approve                                                           |
+| `send_external_message`    | approve (nothing sends yet: the entry exists so M4/M5 inherit it) |
+| `delete_anything`          | never                                                             |
+| `draft_speaker_message`    | auto                                                              |
+| `first_contact_message`    | approve (the speaker has never had a message marked sent)         |
+| `chase_in_existing_thread` | auto (a sent message exists; the chase limit is enforced)         |
+| `thank_you_message`        | auto                                                              |
 
 ### Checkpoints: operational data, and retention
 
@@ -369,6 +377,114 @@ Writes `evals/retrieval/report-<date>.md`: every (embedder x store x strategy) a
 no-answer correctness, forbidden (personal) documents returned, latency and corpus size; plus
 `suggestSpeakers` grounding with the real model. Uses the `mug_retrieval_eval` database. The embedder is
 a matrix dimension (`EVAL_EMBEDDERS`), one value today.
+
+## Speakers agent (M3b)
+
+Runs the speaker pipeline for one event: knows who is at which stage, decides what is overdue, drafts
+the messages, and stops for approval where the autonomy table says so. **It sends nothing.** There is no
+email channel before M4: drafts land in the `messages` collection, and you copy them out.
+
+**The pipeline is only as current as what you have told it.** Nothing reads an inbox yet, so the agent
+cannot know that a message went out or that someone answered. Two commands tell it:
+
+```bash
+npm run speakers -- sent <messageId>                                  # you sent it: chases count from now
+npm run speakers -- status <speakerId> --event <id> --set confirmed   # what happened (guarded)
+```
+
+Until a draft is marked sent, nothing is ever chased because of it. Marking an invitation sent moves
+the speaker `idea → invited`; marking a thank-you sent moves `slides_received → thanked`.
+
+```bash
+npm run speakers -- run --event <id>          # the only command that calls a model
+npm run speakers -- list --event <id>         # speaker, status, last sent, next action
+npm run speakers -- show <messageId>          # one draft, readable, to copy out
+npm run speakers -- candidates --event <id> --topic "change streams"   # M3's suggestSpeakers
+npm run approvals -- list                     # first-contact drafts wait here
+```
+
+`run` and `list` take `--now <ISO>` to see the pipeline as of another day. A second `run` the same day
+writes nothing and calls no model.
+
+### How it decides
+
+The code decides what to do; the model only writes text. `decideActions`
+(`src/agents/speakers/decide.ts`) is a pure function of the speakers' statuses, the messages already
+in the database, the event date and today. No model, no I/O, no clock of its own. Days are UTC calendar
+days relative to the event day:
+
+| Status                | Trigger                                                    | Message                               |
+| --------------------- | ---------------------------------------------------------- | ------------------------------------- |
+| `idea`                | T-6w reached, before the event day                         | `invitation`                          |
+| `invited`             | invitation marked sent, 7 days since the last sent message | `chase_reply`                         |
+| `confirmed`           | T-4w reached                                               | `chase_abstract`                      |
+| `confirmed`           | T-3w reached, `speaker.bio` / `speaker.photoUrl` empty     | `chase_bio` / `chase_photo`           |
+| `abstract_received`   | T-3w reached, bio / photo empty                            | `chase_bio` / `chase_photo`           |
+| `abstract_received`   | T-1w reached                                               | `chase_slides`                        |
+| `slides_received`     | the day after the event                                    | `thank_you`                           |
+| `declined`, `thanked` | –                                                          | nothing; unsent drafts are superseded |
+
+A second chase of a kind needs the previous one marked sent and 7 days elapsed. Chases stop on the
+event day. A draft rejected at review is final for that kind and event. An unsent draft that no longer
+applies (the status moved on, the bio arrived) becomes `superseded`; nothing is deleted.
+
+### Chase policy
+
+- `CHASE_MAX_ROUNDS` (2) sent chases of one kind per speaker per event. When the next one would be due,
+  the agent writes no message and creates one task instead: "Call <speaker> about the abstract — 2
+  chases unanswered".
+- `CHASE_MIN_INTERVAL_DAYS` (7) after the last **sent** message.
+- `MAX_DRAFTS_PER_RUN` (10): a backlog (a wrong clock, a stale event) is cut, oldest due first; the rest
+  come up on the next run.
+
+### Status transitions
+
+`src/agents/speakers/transitions.ts`, one table with a guard. Anything else throws
+`IllegalTransitionError`, and a status without a row fails the build.
+
+```
+idea              -> invited, declined
+invited           -> confirmed, declined, idea      (idea = parked)
+confirmed         -> abstract_received, declined
+abstract_received -> slides_received, declined
+slides_received   -> thanked
+declined          -> idea                           (re-approach for a later event)
+thanked           -> (terminal)
+```
+
+### Facts are never the model's
+
+Dates, times, venue, agenda slot and due dates come from the event record. The model is given
+`{{placeholders}}` and what they mean, never the values. Its answer is refused, and retried by the
+model ladder, if it writes a date, weekday, time, year, email address, link, amount of money or the
+venue itself, or drops a required placeholder. Code then fills the placeholders, and the draft records the
+facts it used (`messages.facts`). Due dates give at least 3 days' notice. Retrieved corpus text (the
+speaker's own past abstracts and the venue's host notes, public scope) is fenced and declared reference
+only, and the drafting call has no tools.
+
+### What approval means while nothing sends
+
+`approved` means "send this now"; `draft` means "written, not reviewed" (or not needing review). That is
+the whole ceremony. A first-contact draft cannot be marked sent until it is approved. In
+`npm run approvals`, `approve` approves every draft in the request, `reject --reason` rejects them all,
+and `edit` takes the `show --json` payload with drafts **removed**: the kept ones are approved and the
+removed ones rejected. An edit cannot reword a draft or change its recipient.
+
+### What the agent may write
+
+`messages`, `tasks` and `speakers.perEvent[].status`, nothing else. It never creates a speaker, never
+changes a speaker's name, email, bio or photo, and never touches an event's date, venue or agenda. A
+test compares those fields before and after a run.
+
+### Trajectory evals
+
+```bash
+npm run eval:speakers
+```
+
+Six scenarios on a frozen clock with a scripted model (behind the real validation and ladder): never
+replies, confirms late, declines, the event moves closer, the clock jumps a month, resume
+mid-approval. Writes `evals/speakers/report-<date>.md`. They also run in `npm test`.
 
 ## Design notes
 
