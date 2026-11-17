@@ -102,6 +102,17 @@ const formatTime = (d: Date, timeZone: string): string =>
 
 const utcDayMs = (d: Date): number => Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
 
+/**
+ * Every due date, reply-by dates included: at least MIN_NOTICE_DAYS from today, and never on or after
+ * the event day. decideActions only drafts while both can hold (up to T-(MIN_NOTICE_DAYS+1)).
+ */
+export function dueDay(targetMs: number, now: Date, eventDayMs: number): number {
+  return Math.min(
+    Math.max(targetMs, utcDayMs(now) + MIN_NOTICE_DAYS * DAY_MS),
+    eventDayMs - DAY_MS,
+  );
+}
+
 /** A stored date with no time of day (the planner stores date-only as UTC midnight). */
 const isDateOnly = (iso: string): boolean => iso.endsWith('T00:00:00.000Z');
 
@@ -116,20 +127,16 @@ export function buildFacts(input: FactInput): MessageFacts {
     const d = new Date(event.date);
     facts.event_date = formatDay(d, 'UTC');
     if (!isDateOnly(event.date)) facts.event_time = formatTime(d, timeZone);
+    const eventDay = utcDayMs(d);
     const offset = DUE_OFFSET_DAYS[kind];
-    if (offset !== undefined) {
-      // Never ask for something sooner than MIN_NOTICE_DAYS from today (a late run would otherwise
-      // ask for it "by today"), and never later than the day before the event.
-      const eventDay = utcDayMs(d);
-      const due = Math.min(
-        Math.max(eventDay + offset * DAY_MS, utcDayMs(now) + MIN_NOTICE_DAYS * DAY_MS),
-        eventDay - DAY_MS,
-      );
-      facts.due_date = formatDay(new Date(due), 'UTC');
-    }
-  }
-  if (kind === 'invitation' || kind === 'chase_reply') {
-    facts.due_date = formatDay(new Date(utcDayMs(now) + input.replyDays * DAY_MS), 'UTC');
+    const target =
+      kind === 'invitation' || kind === 'chase_reply'
+        ? utcDayMs(now) + input.replyDays * DAY_MS
+        : offset === undefined
+          ? undefined
+          : eventDay + offset * DAY_MS;
+    if (target !== undefined)
+      facts.due_date = formatDay(new Date(dueDay(target, now, eventDay)), 'UTC');
   }
   if (venue) facts.venue = venue.address ? `${venue.name}, ${venue.address}` : venue.name;
   const slot = event.agenda.find((a) => a.speakerId?.toLowerCase() === speaker._id.toLowerCase());

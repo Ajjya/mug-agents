@@ -73,6 +73,53 @@ describe('buildFacts: every value comes from the event record', () => {
     expect(late('2026-12-10T09:00:00Z', 'chase_slides')).toBe('Friday 11 December 2026');
   });
 
+  it('a reply-by date is never after the event (review finding 7)', () => {
+    const replyBy = (now: string) =>
+      buildFacts({
+        event: EVENT,
+        speaker: SPEAKER,
+        venue: VENUE,
+        kind: 'invitation',
+        now: new Date(now),
+        replyDays: 7,
+        timeZone: 'Europe/Lisbon',
+      }).due_date;
+    expect(replyBy('2026-11-01T09:00:00Z')).toBe('Sunday 8 November 2026');
+    // Drafted on the last draft day (T-4d): now + 7 would be after the event; capped at the day before.
+    expect(replyBy('2026-12-08T09:00:00Z')).toBe('Friday 11 December 2026');
+  });
+
+  it('within the draft window every due date gives at least 3 days and is before the event', () => {
+    const eventDay = Date.parse('2026-12-12T00:00:00Z');
+    for (const kind of [
+      'invitation',
+      'chase_reply',
+      'chase_abstract',
+      'chase_bio',
+      'chase_slides',
+    ] as const) {
+      for (
+        let d = Date.parse('2026-10-31T00:00:00Z');
+        d <= Date.parse('2026-12-08T00:00:00Z');
+        d += 86_400_000
+      ) {
+        const now = new Date(d + 9 * 3_600_000);
+        const due = buildFacts({
+          event: EVENT,
+          speaker: SPEAKER,
+          venue: VENUE,
+          kind,
+          now,
+          replyDays: 7,
+          timeZone: 'Europe/Lisbon',
+        }).due_date;
+        const dueMs = Date.parse(`${(due ?? '').split(' ').slice(1).join(' ')} UTC`);
+        expect(dueMs - d, `${kind} on ${now.toISOString()}`).toBeGreaterThanOrEqual(3 * 86_400_000);
+        expect(dueMs, `${kind} on ${now.toISOString()}`).toBeLessThan(eventDay);
+      }
+    }
+  });
+
   it('a date-only event has no time; a timed one is shown in the event time zone', () => {
     expect(facts('invitation').event_time).toBeUndefined();
     // 18:00 UTC in summer is 19:00 in Lisbon.
