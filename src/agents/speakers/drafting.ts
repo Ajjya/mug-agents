@@ -9,6 +9,7 @@ import {
 import type { Organisation } from '../../domain/organisation.schema.js';
 import type { Speaker } from '../../domain/speaker.schema.js';
 import type { ChunkView } from '../../retrieval/vector-store.js';
+import { MIN_NOTICE_DAYS } from './decide.js';
 
 /**
  * Drafting a speaker message. The division of labour:
@@ -30,9 +31,6 @@ export const DUE_OFFSET_DAYS: Partial<Record<MessageKind, number>> = {
   chase_photo: -14,
   chase_slides: -2,
 };
-
-/** The least notice a due date gives, in days from today. */
-export const MIN_NOTICE_DAYS = 3;
 
 export const SLOT_DESCRIPTIONS: Record<FactSlot, string> = {
   speaker_name: "the speaker's name",

@@ -82,6 +82,17 @@ const KIND_LABEL: Record<MessageKind, string> = {
   thank_you: 'the thank-you',
 };
 
+const chases = (n: number): string => `${String(n)} ${n === 1 ? 'chase' : 'chases'} unanswered`;
+
+/** The task a blocked item becomes. */
+export function blockedTaskTitle(speakerName: string, item: BlockedItem): string {
+  const about = `Call ${speakerName} about ${KIND_LABEL[item.kind]}`;
+  if (item.why === 'limit') return `${about} — ${chases(item.roundsSent)}`;
+  return item.roundsSent > 0
+    ? `${about} — ${chases(item.roundsSent)}, too close to the event to chase again`
+    : `${about} — too close to the event to chase by email`;
+}
+
 /**
  * Everything the Speakers agent reads and writes. It WRITES only `messages`, `tasks` and
  * `speakers.perEvent[].status`: never a speaker (no insert, no name/email/bio/photo), never an event.
@@ -182,7 +193,7 @@ export class SpeakerPipelineStore {
     );
     if (existing) return { task: existing, created: false };
     const task = await this.tasks.insert({
-      title: `Call ${speakerName} about ${KIND_LABEL[item.kind]} — ${String(item.roundsSent)} chases unanswered`,
+      title: blockedTaskTitle(speakerName, item),
       owner: this.taskOwner,
       status: 'open',
       source: 'agent',

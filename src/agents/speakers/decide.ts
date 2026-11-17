@@ -10,6 +10,13 @@ import type { SpeakerStatus } from '../../domain/speaker.schema.js';
 
 const DAY_MS = 86_400_000;
 
+/**
+ * The least notice any message gives, in days. A message is only drafted while its due date can be
+ * at least this far ahead and still before the event day, so the last day to draft is
+ * T-(MIN_NOTICE_DAYS + 1). After that, an item still missing becomes a task for a human.
+ */
+export const MIN_NOTICE_DAYS = 3;
+
 export interface ChasePolicy {
   /** Sent chases of one kind per speaker per event before the agent stops and creates a task. */
   chaseMaxRounds: number;
@@ -63,6 +70,8 @@ export interface BlockedItem {
   speakerId: string;
   kind: MessageKind;
   roundsSent: number;
+  /** `limit`: CHASE_MAX_ROUNDS chases sent. `no_time`: no further chase fits before the event. */
+  why: 'limit' | 'no_time';
   reason: string;
 }
 
@@ -181,17 +190,24 @@ export function decideActions(input: PipelineInput): Decision {
     const mine = input.messages.filter((m) => m.speakerId === speaker.id);
     const applicable = kindsFor(speaker.status).filter((k) => !satisfied(speaker, k));
 
-    // Unsent drafts whose purpose is gone: the status moved on, or the data arrived.
+    // Unsent drafts whose purpose is gone: the status moved on, the data arrived, or the event day
+    // came (a pre-event message left "approved" would otherwise mean "send this now" forever).
+    const eventCame = hasDate && today >= eventDay;
     for (const m of mine) {
-      if (!PENDING.includes(m.status) || applicable.includes(m.kind)) continue;
+      if (!PENDING.includes(m.status)) continue;
+      const preEventGone = eventCame && m.kind !== 'thank_you';
+      if (applicable.includes(m.kind) && !preEventGone) continue;
       out.supersede.push({
         messageId: m.id,
-        reason: satisfied(speaker, m.kind)
-          ? `${m.kind.replace('chase_', '')} is now on file`
-          : `speaker is now ${speaker.status}`,
+        reason: preEventGone
+          ? 'the event day has come'
+          : satisfied(speaker, m.kind)
+            ? `${m.kind.replace('chase_', '')} is now on file`
+            : `speaker is now ${speaker.status}`,
       });
     }
     if (!hasDate) continue;
+    const lastDraftDay = eventDay - (MIN_NOTICE_DAYS + 1) * DAY_MS;
 
     for (const rule of RULES.filter((r) => r.status === speaker.status)) {
       const kind = rule.kind;
@@ -215,13 +231,22 @@ export function decideActions(input: PipelineInput): Decision {
 
       // ---- one-off messages: the invitation and the thank-you ----
       if (kind === 'invitation' || kind === 'thank_you') {
-        if (ofKind.some((m) => m.status === 'sent')) continue; // already went out
+        if (ofKind.some((m) => m.status === 'sent')) {
+          wait(
+            kind === 'invitation'
+              ? 'parked: the invitation for this event was already sent; nothing more is drafted for this event'
+              : 'the thank-you was sent',
+          );
+          continue;
+        }
         if (from !== null && today < from) {
           wait(`not before ${rule.label}`, ymd(from));
           continue;
         }
-        if (kind === 'invitation' && today >= eventDay) {
-          wait('the event day has passed');
+        if (kind === 'invitation' && today > lastDraftDay) {
+          wait(
+            `too close to the event to invite (${String(MIN_NOTICE_DAYS)} days' notice needed before ${ymd(eventDay)})`,
+          );
           continue;
         }
         due.push({
@@ -238,8 +263,8 @@ export function decideActions(input: PipelineInput): Decision {
       }
 
       // ---- chases ----
-      if (today >= eventDay) {
-        wait('the event day has come: no more chases');
+      if (today > eventDay) {
+        wait('the event is over: no chases, no tasks');
         continue;
       }
       if (from !== null && today < from) {
@@ -268,25 +293,36 @@ export function decideActions(input: PipelineInput): Decision {
         anchor?.sentAt === undefined
           ? ''
           : `last ${anchor.kind} sent ${anchor.sentAt.slice(0, 10)} (${String(elapsed)} days ago)`;
+      const block = (why: BlockedItem['why'], reason: string): void => {
+        out.blocked.push({ speakerId: speaker.id, kind, roundsSent: sent, why, reason });
+      };
 
+      // Too close to the event for any further message: a human calls instead. This is what makes
+      // every chase kind end in a task, whatever CHASE_MAX_ROUNDS x CHASE_MIN_INTERVAL_DAYS is.
+      if (today > lastDraftDay) {
+        block(
+          'no_time',
+          `${[since, `still ${speaker.status}`].filter(Boolean).join(', ')}: no further chase can give ${String(MIN_NOTICE_DAYS)} days' notice before ${ymd(eventDay)}`,
+        );
+        continue;
+      }
       if (sent >= policy.chaseMaxRounds) {
-        // The last chase gets its full interval to be answered before a human is asked to call.
+        // The last chase gets its full interval to be answered before a human is asked to call
+        // (or until the window closes, whichever comes first: see above).
         if (!intervalOk) {
           wait(`${since}; at the chase limit, waiting out the interval`, ymd(nextOn ?? today));
           continue;
         }
-        out.blocked.push({
-          speakerId: speaker.id,
-          kind,
-          roundsSent: sent,
-          reason: `${String(sent)} ${kind} sent, ${since}, still ${speaker.status}: chase limit ${String(policy.chaseMaxRounds)} reached`,
-        });
+        block(
+          'limit',
+          `${String(sent)} ${kind} sent, ${since}, still ${speaker.status}: chase limit ${String(policy.chaseMaxRounds)} reached`,
+        );
         continue;
       }
       if (!intervalOk) {
         wait(
           `${since}; next chase due after ${String(policy.chaseMinIntervalDays)} days`,
-          ymd(nextOn ?? today),
+          ymd(Math.min(nextOn ?? today, lastDraftDay + DAY_MS)),
         );
         continue;
       }

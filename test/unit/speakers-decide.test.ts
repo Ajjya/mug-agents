@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { blockedTaskTitle } from '../../src/agents/speakers/speakers.store.js';
 import {
   type ChasePolicy,
   type Decision,
@@ -67,10 +68,16 @@ const ROWS: Row[] = [
   { name: 'idea, T-6w minus 1 day', day: '2026-10-30', speaker: speaker('idea'), actions: [] },
   { name: 'idea, T-6w', day: '2026-10-31', speaker: speaker('idea'), actions: ['invitation#1'] },
   {
-    name: 'idea, the day before',
-    day: '2026-12-11',
+    name: 'idea, T-4d: the last day an invitation can give 3 days notice',
+    day: '2026-12-08',
     speaker: speaker('idea'),
     actions: ['invitation#1'],
+  },
+  {
+    name: 'idea, T-3d: too close to invite',
+    day: '2026-12-09',
+    speaker: speaker('idea'),
+    actions: [],
   },
   { name: 'idea, event day', day: '2026-12-12', speaker: speaker('idea'), actions: [] },
   {
@@ -160,8 +167,16 @@ const ROWS: Row[] = [
     blocked: ['chase_reply'],
   },
   {
-    name: 'invited, event day: no more chases',
+    name: 'invited, event day, no reply: a task, not silence',
     day: '2026-12-12',
+    speaker: speaker('invited'),
+    messages: [msg('invitation', 'sent', '2026-11-01')],
+    actions: [],
+    blocked: ['chase_reply'],
+  },
+  {
+    name: 'invited, the day after the event: nothing',
+    day: '2026-12-13',
     speaker: speaker('invited'),
     messages: [msg('invitation', 'sent', '2026-11-01')],
     actions: [],
@@ -442,5 +457,88 @@ describe('decideActions: the event', () => {
       policy: POLICY,
     });
     expect(planned(again)).toEqual([]);
+  });
+});
+
+describe('decideActions: every chase kind ends in a task (review findings)', () => {
+  it('slides never arrive: one chase, then a task when no second chase fits before the event', () => {
+    const sent = [msg('chase_slides', 'sent', '2026-12-05')];
+    const s = speaker('abstract_received');
+    // The next chase would be due 12 Dec, the event day. Until the window closes (T-4d, 8 Dec), wait.
+    const waiting = decide('2026-12-08', s, sent);
+    expect(planned(waiting)).toEqual([]);
+    expect(waiting.blocked).toEqual([]);
+    expect(waiting.waiting[0]).toMatchObject({ kind: 'chase_slides', dueOn: '2026-12-09' });
+    for (const day of ['2026-12-09', '2026-12-11', '2026-12-12']) {
+      const d = decide(day, s, sent);
+      expect(planned(d)).toEqual([]);
+      expect(d.blocked.map((b) => [b.kind, b.why, b.roundsSent])).toEqual([
+        ['chase_slides', 'no_time', 1],
+      ]);
+    }
+    expect(decide('2026-12-13', s, sent).blocked).toEqual([]);
+  });
+
+  it('a limit whose interval runs past the event still produces the task', () => {
+    const sent = [
+      msg('chase_bio', 'sent', '2026-11-30', 1),
+      msg('chase_bio', 'sent', '2026-12-07', 2),
+    ];
+    const s = speaker('confirmed', { hasBio: false, hasPhoto: true });
+    const d = decide('2026-12-09', s, [...sent, msg('chase_abstract', 'sent', '2026-11-14')]);
+    expect(d.blocked.filter((b) => b.kind === 'chase_bio').map((b) => b.why)).toEqual(['no_time']);
+  });
+
+  it('every chase kind reaches a task for some timeline, at the default policy', () => {
+    const cases: [SpeakerStatus, MessageKind, Partial<PipelineSpeaker>][] = [
+      ['invited', 'chase_reply', {}],
+      ['confirmed', 'chase_abstract', {}],
+      ['confirmed', 'chase_bio', { hasBio: false }],
+      ['confirmed', 'chase_photo', { hasPhoto: false }],
+      ['abstract_received', 'chase_slides', {}],
+    ];
+    for (const [status, kind, over] of cases) {
+      const extra = kind === 'chase_reply' ? [msg('invitation', 'sent', '2026-10-31')] : [];
+      const d = decide('2026-12-10', speaker(status, over), extra);
+      expect(
+        d.blocked.map((b) => b.kind),
+        kind,
+      ).toContain(kind);
+    }
+  });
+
+  it('on the event day an unsent pre-event draft is superseded; a thank-you is not', () => {
+    const d = decide('2026-12-12', speaker('confirmed'), [msg('chase_abstract', 'approved')]);
+    expect(d.supersede.map((x) => x.reason)).toEqual(['the event day has come']);
+    const t = decide('2026-12-20', speaker('slides_received'), [msg('thank_you', 'approved')]);
+    expect(t.supersede).toEqual([]);
+  });
+
+  it('a parked speaker (invitation already sent) is shown as parked, not silently skipped', () => {
+    const d = decide('2026-11-20', speaker('idea'), [msg('invitation', 'sent', '2026-11-01')]);
+    expect(d.waiting.map((w) => w.why)).toEqual([
+      'parked: the invitation for this event was already sent; nothing more is drafted for this event',
+    ]);
+  });
+});
+
+describe('blocked task titles', () => {
+  const item = (why: 'limit' | 'no_time', roundsSent: number) => ({
+    speakerId: S,
+    kind: 'chase_slides' as const,
+    roundsSent,
+    why,
+    reason: 'x',
+  });
+  it.each([
+    ['limit', 2, 'Call W about the slides — 2 chases unanswered'],
+    [
+      'no_time',
+      1,
+      'Call W about the slides — 1 chase unanswered, too close to the event to chase again',
+    ],
+    ['no_time', 0, 'Call W about the slides — too close to the event to chase by email'],
+  ] as const)('%s, %i sent', (why, n, title) => {
+    expect(blockedTaskTitle('W', item(why, n))).toBe(title);
   });
 });
