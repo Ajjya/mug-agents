@@ -535,9 +535,10 @@ test compares those fields before and after a run.
 npm run eval:speakers
 ```
 
-Eight scenarios on a frozen clock with a scripted model (behind the real validation and ladder): never
+Nine scenarios on a frozen clock with a scripted model (behind the real validation and ladder): never
 replies, confirms late, declines, the event moves closer, the clock jumps a month, resume
-mid-approval, slides never arrive, and four speakers through the whole timeline. Writes `evals/speakers/report-<date>.md`. They also run in `npm test`.
+mid-approval, slides never arrive, four speakers through the whole timeline, and an abstract chase
+that only falls due in the closing window. Writes `evals/speakers/report-<date>.md`. They also run in `npm test`.
 
 ## Design notes
 

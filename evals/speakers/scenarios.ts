@@ -254,6 +254,42 @@ export async function fullPipeline(): Promise<ScenarioResult> {
   );
 }
 
+/**
+ * MIN_NOTICE_DAYS through a different kind than slides: an ABSTRACT chase that only falls due in the
+ * closing window (nobody ran the agent between T-4w and T-4d). Event day 12 Dec; the last day a message
+ * can still give 3 days' notice is 8 Dec.
+ */
+export async function abstractChaseInClosingWindow(): Promise<ScenarioResult> {
+  const ctx = await setup([{ name: 'Wendeline Gooseberry', status: 'confirmed', contacted: true }]);
+  await step(ctx, '2026-12-08', { sendAll: true });
+  await step(ctx, '2026-12-09');
+  await step(ctx, '2026-12-12');
+  await step(ctx, '2026-12-13');
+  const chases = (await ctx.h.repos.messages.findByEventId(ctx.eventId)).items.filter(
+    (m) => m.kind === 'chase_abstract',
+  );
+  const tasks = (await ctx.h.repos.tasks.findByEventId(ctx.eventId)).items;
+  return result(
+    'Abstract chase inside the closing window',
+    ['12-08 chase_abstract#1', '12-09 task:chase_abstract', '12-12 -', '12-13 -'],
+    ctx,
+    [
+      {
+        // The chase's own due date (T-3w) is long past: the notice rule moves it to 3 days out.
+        what: 'last draft day: due date is 11 Dec, 3 days after 8 Dec and before the event',
+        ok: chases.length === 1 && chases[0]?.facts.due_date === 'Friday 11 December 2026',
+      },
+      {
+        what: 'next day: a task naming the chase, no second message',
+        ok:
+          tasks.length === 1 &&
+          tasks[0]?.title ===
+            'Call Wendeline Gooseberry about the abstract — 1 chase unanswered, too close to the event to chase again',
+      },
+    ],
+  );
+}
+
 export const SCENARIOS = [
   speakerNeverReplies,
   speakerConfirmsLate,
@@ -263,6 +299,7 @@ export const SCENARIOS = [
   resumeMidApproval,
   slidesNeverArrive,
   fullPipeline,
+  abstractChaseInClosingWindow,
 ];
 
 export async function runScenarios(): Promise<ScenarioResult[]> {
