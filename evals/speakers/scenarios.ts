@@ -207,7 +207,6 @@ export async function slidesNeverArrive(): Promise<ScenarioResult> {
   const ctx = await setup([
     { name: 'Wendeline Gooseberry', status: 'abstract_received', contacted: true },
   ]);
-  const sp = ctx.speakers['Wendeline Gooseberry'] ?? '';
   await step(ctx, '2026-12-05', { sendAll: true });
   await step(ctx, '2026-12-08');
   await step(ctx, '2026-12-09');
