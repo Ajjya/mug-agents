@@ -27,7 +27,9 @@
     "seed-speakers": "npm run build:scripts --silent && node --env-file-if-exists=.env dist-scripts/scripts/seed-speakers.js",
     "search": "npm run build:scripts --silent && node --env-file-if-exists=.env dist-scripts/scripts/search.js",
     "suggest-speakers": "npm run build:scripts --silent && node --env-file-if-exists=.env dist-scripts/scripts/suggest-speakers.js",
+    "speakers": "npm run build:scripts --silent && node --env-file-if-exists=.env dist-scripts/scripts/speakers.js",
     "eval:retrieval": "npm run build:scripts --silent && node --env-file-if-exists=.env dist-scripts/evals/retrieval/run.js",
+    "eval:speakers": "npm run build:scripts --silent && node --env-file-if-exists=.env dist-scripts/evals/speakers/run.js",
     "bench:crossover": "npm run build:scripts --silent && node --env-file-if-exists=.env dist-scripts/evals/retrieval/crossover.js"
   },
   "dependencies": {
