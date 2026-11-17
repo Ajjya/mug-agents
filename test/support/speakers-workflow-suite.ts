@@ -7,7 +7,11 @@ import { MessageNotSendableError } from '../../src/agents/speakers/speakers.stor
 import { FORBIDDEN } from '../../src/agents/speakers/drafting.js';
 import { allPages } from '../../src/agents/planner/plan-persistence.js';
 import type { SpeakersHarness, SpeakersHarnessOptions, SpeakerRepos } from './speakers-harness.js';
-import { buildSpeakersHarness, injectedAnswer } from './speakers-harness.js';
+import {
+  buildSpeakersHarness,
+  droppedPlaceholderAnswer,
+  injectedAnswer,
+} from './speakers-harness.js';
 import { SimulatedCrash } from './planner-harness.js';
 
 /** Event day Saturday 12 December 2026: T-6w 31 Oct, T-4w 14 Nov, T-3w 21 Nov, T-1w 5 Dec. */
@@ -67,7 +71,19 @@ export async function seed(
       links: {},
       ...(p.bio === false ? {} : { bio: 'Builds things with documents.' }),
       ...(p.photo === false ? {} : { photoUrl: 'https://photos.invalid/x.jpg' }),
-      perEvent: [{ eventId: event._id, status: p.status, updatedAt: '2026-09-01T00:00:00.000Z' }],
+      perEvent: [
+        { eventId: event._id, status: p.status, updatedAt: '2026-09-01T00:00:00.000Z' },
+        // A speaker of an earlier event too: that entry must never change.
+        ...(p.contacted
+          ? [
+              {
+                eventId: other._id,
+                status: 'thanked' as const,
+                updatedAt: '2026-04-19T10:00:00.000Z',
+              },
+            ]
+          : []),
+      ],
     });
     speakers[p.name] = s._id;
     if (p.contacted) {
@@ -116,6 +132,8 @@ async function forbiddenFields(h: SpeakersHarness, eventId: string): Promise<str
       s.handle,
       s.topics,
       s.links,
+      // Every other event's pipeline entry: a status write must touch only this event's.
+      s.perEvent.filter((e) => e.eventId.toLowerCase() !== eventId.toLowerCase()),
     ]),
     count: speakers.length,
     event: [event?.title, event?.date, event?.venueOrganisationId, event?.agenda, event?.capacity],
@@ -347,6 +365,21 @@ export function speakersWorkflowSuite(
       ).toHaveLength(2);
     });
 
+    it("a status write changes only that event's entry (review finding 9)", async () => {
+      const h = await fresh();
+      const s = await seed(h.repos, [
+        { name: 'Wendeline Gooseberry', status: 'idea', contacted: true },
+      ]);
+      const sp = s.speakers['Wendeline Gooseberry'] ?? '';
+      const before = (await h.repos.speakers.findById(sp))?.perEvent ?? [];
+      await h.service.setStatus(sp, s.eventId, 'invited', day('2026-11-01'));
+      const after = (await h.repos.speakers.findById(sp))?.perEvent ?? [];
+      const other = (xs: typeof before) => xs.filter((e) => e.eventId === s.otherEventId);
+      expect(other(after)).toEqual(other(before));
+      expect(other(after)[0]?.status).toBe('thanked');
+      expect(after.find((e) => e.eventId === s.eventId)?.status).toBe('invited');
+    });
+
     it('an illegal status transition is refused and changes nothing', async () => {
       const h = await fresh();
       const s = await seed(h.repos, [{ name: 'Wendeline Gooseberry', status: 'idea' }]);
@@ -402,6 +435,16 @@ export function speakersWorkflowSuite(
       // Refused twice by validation (same rung, retried with the issues), accepted on the third.
       expect(r.calls.map((c) => c.outcome)).toEqual(['invalid', 'invalid', 'valid']);
       expect(h.model.prompts[0]).toContain('<<<CHUNK id="abstracts/evil#0"');
+    });
+
+    it('a dropped required placeholder goes back through the model ladder (spec 5.4)', async () => {
+      const h = await fresh();
+      const s = await seed(h.repos, [{ name: 'Wendeline Gooseberry', status: 'idea' }]);
+      h.model.queue = [droppedPlaceholderAnswer];
+      const r = await h.service.run(s.eventId, { now: day('2026-11-02') });
+      expect(r.calls.map((c) => c.outcome)).toEqual(['invalid', 'valid']);
+      expect(r.calls[0]?.issues).toEqual(['body: must contain the placeholder {{due_date}}']);
+      expect(r.created[0]?.facts.due_date).toBe('Monday 9 November 2026');
     });
 
     it('reject: all rejected, and a later run does not redraft them', async () => {

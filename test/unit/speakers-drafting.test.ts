@@ -168,6 +168,19 @@ describe('draftSchema: the model may not write a fact', () => {
     expect(r.success).toBe(false);
   });
 
+  it('refuses a dropped required placeholder even when usedFacts is consistent with the text', () => {
+    // Without {{due_date}}, and usedFacts says so: only the required-placeholder rule can catch it.
+    const r = schema.safeParse({
+      ...good,
+      body: good.body.replace(' by {{due_date}}', ''),
+      usedFacts: good.usedFacts.filter((f) => f !== 'due_date'),
+    });
+    expect(r.success).toBe(false);
+    expect(r.error?.issues.map((i) => i.message)).toEqual([
+      'must contain the placeholder {{due_date}}',
+    ]);
+  });
+
   it('refuses a dropped required placeholder, an unknown one, and a wrong usedFacts list', () => {
     expect(
       schema.safeParse({ ...good, body: good.body.replace('{{due_date}}', 'soon') }).success,

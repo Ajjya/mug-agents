@@ -95,6 +95,20 @@ export function injectedAnswer(prompt: string): string {
   });
 }
 
+/** A model that leaves out a required placeholder, and is consistent about it in usedFacts. */
+export function droppedPlaceholderAnswer(prompt: string): string {
+  const ok = JSON.parse(compliantAnswer(prompt)) as {
+    subject: string;
+    body: string;
+    usedFacts: string[];
+  };
+  return JSON.stringify({
+    subject: ok.subject,
+    body: ok.body.replace('Please note: {{due_date}}.', 'Please reply soon.'),
+    usedFacts: ok.usedFacts.filter((f) => f !== 'due_date'),
+  });
+}
+
 /** A fake provider in front of the real callStructured: validation and the retry ladder are real. */
 export class ScriptedModel implements LlmProvider {
   readonly name = 'ollama';
