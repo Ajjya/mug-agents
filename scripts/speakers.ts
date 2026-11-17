@@ -26,7 +26,10 @@ const USAGE = `Usage: npm run speakers -- <command> [options]
   sent <messageId> [--by <name>]       record that you sent it; chases are measured from now
   status <speakerId> --event <id> --set <status>
                                        record what happened (checked against the transition table)
-  candidates --event <id> --topic "..." speakers who could talk on a topic (M3's suggestSpeakers)
+  candidates [--event <id>] [--topic "..."]
+                                       speakers who could talk on a topic (M3's suggestSpeakers);
+                                       with --event the topic defaults to its theme, and speakers
+                                       already in its pipeline are marked
 
 Only "run" can call a model. Nothing is ever sent by this tool: you copy a draft out and send it
 yourself, then say so with "sent". Approvals go through: npm run approvals -- list`;
@@ -143,14 +146,20 @@ runCli(
         return 0;
       }
       case 'candidates': {
-        if (!values.topic) return usage();
-        const r = await app.get(SpeakerSuggester, { strict: false }).suggest(values.topic);
+        const ctx = values.event ? await service.candidateContext(values.event) : undefined;
+        const topic = values.topic ?? ctx?.topic;
+        if (!topic) return usage();
+        const r = await app.get(SpeakerSuggester, { strict: false }).suggest(topic);
         if (r.suggestions.length === 0) {
-          console.log(r.message ?? `Nothing in the corpus matches "${values.topic}".`);
+          console.log(r.message ?? `Nothing in the corpus matches "${topic}".`);
           return 0;
         }
+        console.log(`Speakers for "${topic}":\n`);
         for (const s of r.suggestions) {
-          console.log(`${s.speaker.name} (${s.speaker.id})\n  ${s.reason}`);
+          const status = ctx?.inPipeline.get(s.speaker.id);
+          console.log(
+            `${s.speaker.name} (${s.speaker.id})${status ? `  [already in this event's pipeline: ${status}]` : ''}\n  ${s.reason}`,
+          );
           for (const c of s.citations) console.log(`  cites ${c.id}`);
         }
         return 0;

@@ -164,6 +164,20 @@ export class SpeakersService {
     return { rows, notes: d.notes };
   }
 
+  /**
+   * For `candidates --event`: the topic defaults to the event's theme (else its title), and who is
+   * already in the event's pipeline, with their status, so a suggestion is not mistaken for news.
+   */
+  async candidateContext(
+    eventId: string,
+  ): Promise<{ topic: string; inPipeline: Map<string, SpeakerStatus> }> {
+    const p = await this.store.load(eventId);
+    return {
+      topic: p.event.theme ?? p.event.title,
+      inPipeline: new Map(p.speakers.map((s) => [s._id, statusFor(s, p.event._id)])),
+    };
+  }
+
   async show(
     messageId: string,
   ): Promise<{ message: Message; speakerName: string; email?: string }> {

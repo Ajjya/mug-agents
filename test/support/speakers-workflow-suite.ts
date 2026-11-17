@@ -396,6 +396,16 @@ export function speakersWorkflowSuite(
       expect(dueNow).toEqual(['chase_abstract', 'chase_bio', 'invitation']);
     });
 
+    it('candidates --event: topic from the event theme, pipeline members known', async () => {
+      const h = await fresh();
+      const s = await seed(h.repos, [{ name: 'Wendeline Gooseberry', status: 'confirmed' }]);
+      const ctx = await h.service.candidateContext(s.eventId);
+      expect(ctx.topic).toBe('schema design');
+      expect([...ctx.inPipeline.entries()]).toEqual([
+        [s.speakers['Wendeline Gooseberry'], 'confirmed'],
+      ]);
+    });
+
     it('an illegal status transition is refused and changes nothing', async () => {
       const h = await fresh();
       const s = await seed(h.repos, [{ name: 'Wendeline Gooseberry', status: 'idea' }]);
