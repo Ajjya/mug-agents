@@ -380,6 +380,22 @@ export function speakersWorkflowSuite(
       expect(after.find((e) => e.eventId === s.eventId)?.status).toBe('invited');
     });
 
+    it('list shows as due exactly what run then drafts (one shared mapping)', async () => {
+      const h = await fresh();
+      const s = await seed(h.repos, [
+        { name: 'Wendeline Gooseberry', status: 'confirmed', bio: false, contacted: true },
+        { name: 'Ignatius Fogwhistle', status: 'idea', contacted: true },
+      ]);
+      const listed = await h.service.list(s.eventId, day('2026-11-21'));
+      const dueNow = listed.rows
+        .flatMap((r) => r.next.split('; ').filter((n) => n.endsWith('due now')))
+        .map((n) => n.replace(/ #\d+ due now$/, ''))
+        .sort();
+      const r = await h.service.run(s.eventId, { now: day('2026-11-21') });
+      expect(r.created.map((m) => m.kind).sort()).toEqual(dueNow);
+      expect(dueNow).toEqual(['chase_abstract', 'chase_bio', 'invitation']);
+    });
+
     it('an illegal status transition is refused and changes nothing', async () => {
       const h = await fresh();
       const s = await seed(h.repos, [{ name: 'Wendeline Gooseberry', status: 'idea' }]);

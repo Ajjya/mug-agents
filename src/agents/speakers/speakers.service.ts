@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import type { Message } from '../../domain/message.schema.js';
 import type { SpeakerStatus } from '../../domain/speaker.schema.js';
 import { threadIdFor } from '../../graph/thread.js';
@@ -8,8 +9,9 @@ import type {
   ApprovalRequestsRepository,
 } from '../../approvals/approvals.repository.js';
 import { type ChasePolicy, type Decision, decideActions, type PlannedAction } from './decide.js';
-import { NODE_REQUEST_APPROVAL, type SpeakersState } from './speakers.graph.js';
+import { NODE_REQUEST_APPROVAL } from './speakers.graph.js';
 import type { SpeakersRuntime, SpeakersThreadView } from './speakers.runtime.js';
+import { pipelineInput, statusFor } from './pipeline.js';
 import type { SpeakerPipelineStore } from './speakers.store.js';
 
 /** A run stopped on a provider or model failure; the thread keeps its progress and is resumable. */
@@ -25,6 +27,20 @@ export class SpeakersRunInterruptedError extends Error {
     this.name = 'SpeakersRunInterruptedError';
   }
 }
+
+/** The part of the graph state a run's result reads, validated rather than cast. */
+const ids = z.array(z.string()).nullable().optional();
+const RunSummarySchema = z.looseObject({
+  eventId: z.string().optional(),
+  decision: z
+    .custom<Decision>((v) => v === null || v === undefined || typeof v === 'object')
+    .nullable()
+    .optional(),
+  created: ids,
+  existing: ids,
+  superseded: ids,
+  tasksCreated: z.number().nullable().optional(),
+});
 
 /** A decision was recorded for the pending review but never delivered: deliver it, don't replace it. */
 export class PendingDecisionUndeliveredError extends Error {
@@ -119,29 +135,9 @@ export class SpeakersService {
     now: Date = new Date(),
   ): Promise<{ rows: PipelineRow[]; notes: string[] }> {
     const p = await this.store.load(eventId);
-    const statusOf = (s: (typeof p.speakers)[number]): SpeakerStatus =>
-      s.perEvent.find((e) => e.eventId.toLowerCase() === p.event._id.toLowerCase())?.status ??
-      'idea';
-    const d = decideActions({
-      now,
-      eventDate: p.event.date,
-      policy: { ...this.policy, maxDraftsPerRun: Number.MAX_SAFE_INTEGER },
-      speakers: p.speakers.map((s) => ({
-        id: s._id,
-        name: s.name,
-        status: statusOf(s),
-        hasBio: Boolean(s.bio?.trim()),
-        hasPhoto: Boolean(s.photoUrl),
-      })),
-      messages: p.messages.map((m) => ({
-        id: m._id,
-        speakerId: m.speakerId,
-        kind: m.kind,
-        round: m.round,
-        status: m.status,
-        ...(m.sentAt ? { sentAt: m.sentAt } : {}),
-      })),
-    });
+    const d = decideActions(
+      pipelineInput(p, now, { ...this.policy, maxDraftsPerRun: Number.MAX_SAFE_INTEGER }),
+    );
     const describe = (a: PlannedAction): string => `${a.kind} #${String(a.round)} due now`;
     const rows = p.speakers.map((s): PipelineRow => {
       const sent = p.messages
@@ -160,7 +156,7 @@ export class SpeakersService {
       return {
         speakerId: s._id,
         name: s.name,
-        status: statusOf(s),
+        status: statusFor(s, p.event._id),
         ...(sent?.sentAt ? { lastSent: { kind: sent.kind, at: sent.sentAt } } : {}),
         next: next.join('; ') || '-',
       };
@@ -208,7 +204,7 @@ export class SpeakersService {
   }
 
   private async result(view: SpeakersThreadView, callsBefore: number): Promise<RunResult> {
-    const values = (await this.runtime.values(view.threadId)) as SpeakersState;
+    const values = RunSummarySchema.parse(await this.runtime.values(view.threadId));
     const createdIds = values.created ?? [];
     const all = values.eventId ? await this.store.eventMessages(values.eventId) : [];
     const base = {

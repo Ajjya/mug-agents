@@ -1,5 +1,5 @@
 import { Command } from '@langchain/langgraph';
-import type { z } from 'zod';
+import { z } from 'zod';
 import type { LlmCallRecord } from '../llm/model.types.js';
 import { type ThreadLock, withLock } from './thread-lock.js';
 import { type ThreadPurpose, parseThreadId } from './thread.js';
@@ -53,6 +53,19 @@ const describeError = (error: unknown): string | undefined => {
   }
   return undefined;
 };
+
+/**
+ * The fields every approval graph's state shares, which the runtime reads. Validated, not cast: a
+ * graph whose state does not have this shape fails here, loudly, instead of reporting nonsense.
+ */
+const CommonStateSchema = z.looseObject({
+  runId: z.string().optional(),
+  eventId: z.string().optional(),
+  outcome: z.enum(['persisted', 'rejected']).nullable().optional(),
+  persisted: z.object({ created: z.number(), skipped: z.number() }).nullable().optional(),
+  calls: z.array(z.custom<LlmCallRecord>((v) => typeof v === 'object' && v !== null)).optional(),
+  payload: z.unknown().optional(),
+});
 
 /** The two calls the runtime makes on a compiled graph (method syntax: any compiled graph fits). */
 export interface RunnableGraph {
@@ -113,14 +126,7 @@ export class GraphRuntime<R = unknown> {
 
   async inspect(threadId: string): Promise<ThreadView<R>> {
     const snapshot = await this.graph.getState(cfg(threadId));
-    const values = snapshot.values as {
-      runId?: string;
-      eventId?: string;
-      outcome?: 'persisted' | 'rejected' | null;
-      persisted?: { created: number; skipped: number } | null;
-      calls?: LlmCallRecord[];
-      payload?: unknown;
-    };
+    const values = CommonStateSchema.parse(snapshot.values ?? {});
     const next = [...snapshot.next];
     const base = {
       threadId,

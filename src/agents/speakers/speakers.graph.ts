@@ -29,6 +29,7 @@ import type { ChunkView } from '../../retrieval/vector-store.js';
 import type { ApprovalGate } from '../planner/planner.graph.js';
 import { needsApproval } from './autonomy.js';
 import { type ChasePolicy, type Decision, decideActions } from './decide.js';
+import { pipelineInput } from './pipeline.js';
 import { buildFacts, draftPrompt, draftSchema, requiredSlots, substitute } from './drafting.js';
 import type { DraftRecord, LoadedPipeline, SpeakerPipelineStore } from './speakers.store.js';
 
@@ -118,28 +119,7 @@ export function decide(deps: SpeakersGraphDeps, state: SpeakersState): Partial<S
   const p = state.pipeline;
   if (!p) throw new Error('decideActions ran before loadPipeline');
   return {
-    decision: decideActions({
-      now: nowOf(state),
-      eventDate: p.event.date,
-      policy: deps.policy,
-      speakers: p.speakers.map((s) => ({
-        id: s._id,
-        name: s.name,
-        status:
-          s.perEvent.find((e) => e.eventId.toLowerCase() === p.event._id.toLowerCase())?.status ??
-          'idea',
-        hasBio: Boolean(s.bio?.trim()),
-        hasPhoto: Boolean(s.photoUrl),
-      })),
-      messages: p.messages.map((m) => ({
-        id: m._id,
-        speakerId: m.speakerId,
-        kind: m.kind,
-        round: m.round,
-        status: m.status,
-        ...(m.sentAt ? { sentAt: m.sentAt } : {}),
-      })),
-    }),
+    decision: decideActions(pipelineInput(p, nowOf(state), deps.policy)),
   };
 }
 
