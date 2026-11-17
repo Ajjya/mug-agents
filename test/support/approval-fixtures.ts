@@ -1,3 +1,4 @@
+import type { SpeakerReviewPayload } from '../../src/approvals/speaker-review.payload.js';
 import type {
   ApprovalDecisionInput,
   ApprovalRequestInput,
@@ -39,4 +40,31 @@ export const approvalDecisionInput = (
   decidedBy: 'vlad',
   decidedAt: NOW.toISOString(),
   ...over,
+});
+
+export const speakerReviewPayload = (eventId: string = ID_A): SpeakerReviewPayload => ({
+  eventId,
+  eventTitle: 'MUG Sample City Winter Meetup',
+  drafts: [
+    {
+      messageId: 'c'.repeat(24),
+      speakerId: 'd'.repeat(24),
+      speakerName: 'Wendeline Gooseberry',
+      kind: 'invitation',
+      round: 1,
+      reason: 'status idea and T-6w reached (2026-10-31)',
+      subject: 'Would you speak at MUG Sample City Winter Meetup?',
+      body: 'Hello Wendeline,\nWould you speak at MUG Sample City Winter Meetup on Saturday 12 December 2026?',
+    },
+    {
+      messageId: 'e'.repeat(24),
+      speakerId: 'f'.repeat(24),
+      speakerName: 'Ignatius Fogwhistle',
+      kind: 'invitation',
+      round: 1,
+      reason: 'status idea and T-6w reached (2026-10-31)',
+      subject: 'Would you speak at MUG Sample City Winter Meetup?',
+      body: 'Hello Ignatius,\nWould you speak at MUG Sample City Winter Meetup on Saturday 12 December 2026?',
+    },
+  ],
 });

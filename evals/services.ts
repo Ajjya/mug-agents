@@ -41,6 +41,6 @@ export function buildEvalServices(call: StructuredCall) {
     tasks,
     persistence,
     planner: new PlannerService(persistence, runtime, requests),
-    approvals: new ApprovalsService(requests, decisions, runtime),
+    approvals: new ApprovalsService(requests, decisions, [runtime]),
   };
 }

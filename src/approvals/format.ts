@@ -1,7 +1,14 @@
-import type { ThreadView } from '../agents/planner/planner.runtime.js';
-import type { ApprovalDecision, ApprovalRequest } from './approval.schema.js';
+import type { ThreadView } from '../graph/runtime.js';
+import { parseThreadId } from '../graph/thread.js';
+import {
+  type ApprovalDecision,
+  type ApprovalPayload,
+  type ApprovalRequest,
+  isPlanReview,
+} from './approval.schema.js';
 import type { Listing } from './approvals.service.js';
 import type { PlanReviewPayload } from './plan-review.payload.js';
+import type { SpeakerReviewPayload } from './speaker-review.payload.js';
 
 /** Human-readable age: "3d 4h", "12m", "40s". */
 export function formatAge(ms: number): string {
@@ -32,6 +39,35 @@ export function formatReview(review: PlanReviewPayload): string {
     for (const t of items) out.push(`    [ ] ${t.title}  (${t.owner})`);
   }
   return out.join('\n');
+}
+
+/** Speaker drafts a human is asked to approve: recipient, kind, reason, then the text. */
+export function formatSpeakerReview(review: SpeakerReviewPayload): string {
+  const out: string[] = [
+    `Event ${review.eventId}: ${review.eventTitle}`,
+    '',
+    `DRAFTS NEEDING APPROVAL (${String(review.drafts.length)})`,
+  ];
+  for (const d of review.drafts) {
+    out.push(
+      '',
+      `  message ${d.messageId}`,
+      `  to ${d.speakerName} (${d.speakerId})  ${d.kind} round ${String(d.round)}`,
+      `  why: ${d.reason}`,
+      `  subject: ${d.subject}`,
+      ...d.body.split('\n').map((l) => `    ${l}`),
+    );
+  }
+  out.push(
+    '',
+    'approve: every draft becomes "approved" (send it now). edit: remove drafts from the --json',
+    'payload; kept drafts are approved, removed ones rejected. reject: all rejected.',
+  );
+  return out.join('\n');
+}
+
+export function formatPayload(payload: ApprovalPayload): string {
+  return isPlanReview(payload) ? formatReview(payload) : formatSpeakerReview(payload);
 }
 
 const pad = (s: string, n: number): string => (s.length >= n ? s : s + ' '.repeat(n - s.length));
@@ -82,14 +118,21 @@ export function formatRequest(
       `  decided ${decision.decidedAt} by ${decision.decidedBy}: ${decision.decision}${why}`,
     );
   }
-  out.push('', formatReview(request.payload));
+  out.push('', formatPayload(request.payload));
   return out.join('\n');
 }
 
 /** How a run ended, one line. */
 export function formatThreadOutcome(thread: ThreadView): string {
+  const parsed = parseThreadId(thread.threadId);
+  const speakers = parsed.ok && parsed.value.purpose === 'speakers';
   switch (thread.status) {
     case 'completed':
+      if (speakers) {
+        return thread.outcome === 'rejected'
+          ? 'Run ended: drafts rejected at review (kept as "rejected"; nothing is deleted).'
+          : `Run ended: drafts recorded (${String(thread.persisted?.created ?? 0)} approved, ${String(thread.persisted?.skipped ?? 0)} rejected).`;
+      }
       return thread.outcome === 'rejected'
         ? 'Run ended: plan rejected, nothing persisted.'
         : `Run ended: plan persisted (${String(thread.persisted?.created ?? 0)} tasks created, ${String(thread.persisted?.skipped ?? 0)} already existed).`;

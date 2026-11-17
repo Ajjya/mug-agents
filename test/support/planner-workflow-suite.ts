@@ -73,7 +73,7 @@ export function plannerWorkflowSuite(
           nodeName: 'requestPlanApproval',
           threadId: r.threadId,
         });
-        expect(pending[0]?.payload.checklist).toHaveLength(5);
+        expect((pending[0]?.payload as PlanReviewPayload | undefined)?.checklist).toHaveLength(5);
         // the event exists in phase planning: the thread's anchor
         expect(r.event.phase).toBe('planning');
       });
@@ -163,7 +163,9 @@ export function plannerWorkflowSuite(
         });
         const tasks = (await h.repos.tasks.findByEventId(a.event._id)).items;
         expect(tasks.map((t) => t.title)).toEqual(['The human-edited task']);
-        expect(out.decision.editedPayload?.checklist[0]?.title).toBe('The human-edited task');
+        expect(
+          (out.decision.editedPayload as PlanReviewPayload | undefined)?.checklist[0]?.title,
+        ).toBe('The human-edited task');
       });
 
       it('reject persists no tasks, records the reason on the event, and leaves the phase at planning', async () => {

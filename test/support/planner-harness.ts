@@ -157,7 +157,7 @@ export function buildHarness(repos: Repos, options: HarnessOptions = {}): Harnes
   return {
     repos,
     planner: new PlannerService(persistence, runtime, repos.requests),
-    approvals: new ApprovalsService(repos.requests, repos.decisions, runtime),
+    approvals: new ApprovalsService(repos.requests, repos.decisions, [runtime]),
     runtime,
     persistence,
     retention,

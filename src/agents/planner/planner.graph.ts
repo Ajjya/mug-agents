@@ -6,7 +6,7 @@ import {
   StateGraph,
   interrupt,
 } from '@langchain/langgraph';
-import { DecisionValueSchema } from '../../approvals/approval.schema.js';
+import { DecisionValueSchema, isPlanReview } from '../../approvals/approval.schema.js';
 import { requireAutonomy } from '../../approvals/autonomy.js';
 import { type PlanReviewPayload, assertEditAllowed } from '../../approvals/plan-review.payload.js';
 import { newEntityId } from '../../domain/common.js';
@@ -249,9 +249,11 @@ export async function persistPlan(
     throw new Error('persistPlan must not run for a rejected plan');
   let effective = state.payload;
   if (decision.decision === 'edit') {
+    const edited = decision.editedPayload;
+    if (!isPlanReview(edited)) throw new Error('persistPlan was resumed with a non-plan edit');
     // Defence in depth: the approvals service already checked this before resuming.
-    assertEditAllowed(state.payload, decision.editedPayload);
-    effective = decision.editedPayload;
+    assertEditAllowed(state.payload, edited);
+    effective = edited;
   }
   const checklist: ChecklistOutput = {
     tasks: effective.checklist.map((t) => ({

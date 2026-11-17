@@ -14,7 +14,9 @@ import {
   ApprovalsService,
 } from '../src/approvals/approvals.service.js';
 import { formatListing, formatRequest, formatThreadOutcome } from '../src/approvals/format.js';
-import { InvalidEditError, PlanReviewPayloadSchema } from '../src/approvals/plan-review.payload.js';
+import { InvalidEditError } from '../src/approvals/plan-review.payload.js';
+import { ApprovalPayloadSchema } from '../src/approvals/approval.schema.js';
+import { InvalidSpeakerEditError } from '../src/approvals/speaker-review.payload.js';
 import { loadConfig } from '../src/config/config.module.js';
 import { ConfigError, type AppConfig } from '../src/config/env.schema.js';
 import { ProviderUnavailableError, StructuredOutputError } from '../src/llm/errors.js';
@@ -80,7 +82,7 @@ async function run(service: ApprovalsService, config: AppConfig, argv: string[])
           return 2;
         }
         const raw: unknown = JSON.parse(await readFile(values.file, 'utf8'));
-        const editedPayload = PlanReviewPayloadSchema.parse(raw); // validated before anything is resumed
+        const editedPayload = ApprovalPayloadSchema.parse(raw); // validated before anything is resumed
         value = { decision: 'edit', editedPayload };
       }
       const result = await service.decide(target, value, decidedBy);
@@ -146,7 +148,8 @@ async function main(): Promise<number> {
       err instanceof ApprovalNotFoundError ||
       err instanceof ApprovalNotPendingError ||
       err instanceof ApprovalConflictError ||
-      err instanceof InvalidEditError
+      err instanceof InvalidEditError ||
+      err instanceof InvalidSpeakerEditError
     ) {
       console.error(err.message);
       return 2;

@@ -1,8 +1,24 @@
 import { z } from 'zod';
 import { documentShape, entityId, isoDate, nonEmpty } from '../domain/common.js';
-import { PlanReviewPayloadSchema } from './plan-review.payload.js';
+import { type PlanReviewPayload, PlanReviewPayloadSchema } from './plan-review.payload.js';
+import { type SpeakerReviewPayload, SpeakerReviewPayloadSchema } from './speaker-review.payload.js';
 
-export const APPROVAL_KINDS = ['plan_review'] as const;
+export const APPROVAL_KINDS = ['plan_review', 'speaker_messages'] as const;
+export type ApprovalKind = (typeof APPROVAL_KINDS)[number];
+
+/**
+ * What a human is shown, one schema per kind. Both are strict objects with disjoint required keys
+ * (a plan has `milestones`, speaker drafts have `drafts`), so a payload parses as exactly one.
+ */
+export const ApprovalPayloadSchema = z.union([PlanReviewPayloadSchema, SpeakerReviewPayloadSchema]);
+export type ApprovalPayload = z.infer<typeof ApprovalPayloadSchema>;
+
+export const isPlanReview = (p: ApprovalPayload): p is PlanReviewPayload => 'milestones' in p;
+export const isSpeakerReview = (p: ApprovalPayload): p is SpeakerReviewPayload => 'drafts' in p;
+
+/** The kind a payload belongs to. */
+export const payloadKind = (p: ApprovalPayload): ApprovalKind =>
+  isPlanReview(p) ? 'plan_review' : 'speaker_messages';
 export const APPROVAL_REQUEST_STATUSES = ['pending', 'decided', 'expired'] as const;
 export const APPROVAL_DECISIONS = ['approve', 'edit', 'reject'] as const;
 
@@ -17,7 +33,8 @@ export const ApprovalRequestInputSchema = z
     nodeName: nonEmpty,
     eventId: entityId,
     kind: z.enum(APPROVAL_KINDS),
-    payload: PlanReviewPayloadSchema,
+    /** Must be the kind's payload: the gate writes them together, from one value. */
+    payload: ApprovalPayloadSchema,
     status: z.enum(APPROVAL_REQUEST_STATUSES),
     decidedAt: isoDate.optional(),
   })
@@ -40,7 +57,7 @@ export type ApprovalRequestStatus = (typeof APPROVAL_REQUEST_STATUSES)[number];
 /** What a human sends back (and what interrupt() resumes with): a decision, never a boolean. */
 export const DecisionValueSchema = z.discriminatedUnion('decision', [
   z.object({ decision: z.literal('approve') }).strict(),
-  z.object({ decision: z.literal('edit'), editedPayload: PlanReviewPayloadSchema }).strict(),
+  z.object({ decision: z.literal('edit'), editedPayload: ApprovalPayloadSchema }).strict(),
   z.object({ decision: z.literal('reject'), reason: nonEmpty }).strict(),
 ]);
 export type DecisionValue = z.infer<typeof DecisionValueSchema>;
@@ -49,7 +66,7 @@ const decisionBase = z
   .object({
     requestId: entityId,
     decision: z.enum(APPROVAL_DECISIONS),
-    editedPayload: PlanReviewPayloadSchema.optional(),
+    editedPayload: ApprovalPayloadSchema.optional(),
     reason: nonEmpty.optional(),
     /** Whoever the CLI/config says. No authentication yet: recorded as given. */
     decidedBy: nonEmpty,

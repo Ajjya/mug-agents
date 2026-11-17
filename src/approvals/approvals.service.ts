@@ -1,14 +1,18 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import type { PlannerRuntime, ThreadView } from '../agents/planner/planner.runtime.js';
+import type { GraphRuntime, ThreadView } from '../graph/runtime.js';
 import { allPages } from '../agents/planner/plan-persistence.js';
 import { type EntityId, isEntityId } from '../domain/common.js';
 import { parseThreadId } from '../graph/thread.js';
 import { DuplicateKeyError, VersionConflictError } from '../repositories/base.repository.js';
 import {
   type ApprovalDecision,
+  type ApprovalPayload,
   type ApprovalRequest,
   type DecisionValue,
   DecisionValueSchema,
+  isPlanReview,
+  isSpeakerReview,
+  payloadKind,
 } from './approval.schema.js';
 import {
   APPROVAL_DECISIONS_REPOSITORY,
@@ -16,9 +20,33 @@ import {
   type ApprovalDecisionsRepository,
   type ApprovalRequestsRepository,
 } from './approvals.repository.js';
-import { assertEditAllowed } from './plan-review.payload.js';
+import { InvalidEditError, assertEditAllowed } from './plan-review.payload.js';
+import { assertSpeakerEditAllowed } from './speaker-review.payload.js';
 
 export const PLANNER_RUNTIME = Symbol('PLANNER_RUNTIME');
+/** Every approval graph's runtime, one per thread purpose. */
+export const GRAPH_RUNTIMES = Symbol('GRAPH_RUNTIMES');
+
+/** What the approvals workflow needs from a graph runtime (any purpose). */
+export type ApprovalRuntime = Pick<
+  GraphRuntime,
+  'purpose' | 'approvalNode' | 'owns' | 'inspect' | 'resume' | 'continue' | 'inFlight'
+>;
+
+/**
+ * An edit must be of the request's own kind, and within what that kind allows to change. Checked
+ * before anything is recorded or resumed.
+ */
+export function assertEditMatches(original: ApprovalPayload, edited: ApprovalPayload): void {
+  if (payloadKind(original) !== payloadKind(edited)) {
+    throw new InvalidEditError([
+      `the edited payload is a ${payloadKind(edited)}, the request is a ${payloadKind(original)}`,
+    ]);
+  }
+  if (isPlanReview(original) && isPlanReview(edited)) assertEditAllowed(original, edited);
+  if (isSpeakerReview(original) && isSpeakerReview(edited))
+    assertSpeakerEditAllowed(original, edited);
+}
 
 export class ApprovalNotFoundError extends Error {
   constructor(public readonly requestId: string) {
@@ -120,8 +148,15 @@ export class ApprovalsService {
   constructor(
     @Inject(APPROVAL_REQUESTS_REPOSITORY) private readonly requests: ApprovalRequestsRepository,
     @Inject(APPROVAL_DECISIONS_REPOSITORY) private readonly decisions: ApprovalDecisionsRepository,
-    @Inject(PLANNER_RUNTIME) private readonly runtime: PlannerRuntime,
+    @Inject(GRAPH_RUNTIMES) private readonly runtimes: readonly ApprovalRuntime[],
   ) {}
+
+  /** The runtime that owns a thread, by its purpose. */
+  private runtimeFor(threadId: string): ApprovalRuntime {
+    const runtime = this.runtimes.find((r) => r.owns(threadId));
+    if (!runtime) throw new RangeError(`No approval graph handles thread ${threadId}`);
+    return runtime;
+  }
 
   async list(now: Date = new Date()): Promise<Listing> {
     const requests = await allPages((after) =>
@@ -129,7 +164,7 @@ export class ApprovalsService {
     );
     const pending = await Promise.all(
       requests.map(async (request): Promise<PendingRow> => {
-        const thread = await this.runtime.inspect(request.threadId);
+        const thread = await this.runtimeFor(request.threadId).inspect(request.threadId);
         const suspendedOnThis =
           thread.status === 'awaiting_decision' && thread.runId === request.runId;
         return {
@@ -140,7 +175,7 @@ export class ApprovalsService {
         };
       }),
     );
-    const inFlight = await this.runtime.inFlight();
+    const inFlight = (await Promise.all(this.runtimes.map((r) => r.inFlight()))).flat();
     return {
       pending,
       // A thread another process is running right now is not stopped, so it is not offered for resume.
@@ -155,7 +190,7 @@ export class ApprovalsService {
     const request = await this.mustFind(requestId);
     return {
       request,
-      thread: await this.runtime.inspect(request.threadId),
+      thread: await this.runtimeFor(request.threadId).inspect(request.threadId),
       decision: await this.decisions.findByRequestId(request._id),
     };
   }
@@ -177,9 +212,10 @@ export class ApprovalsService {
       throw new ApprovalNotPendingError(request._id, request.status);
 
     const parsed = DecisionValueSchema.parse(value);
-    if (parsed.decision === 'edit') assertEditAllowed(request.payload, parsed.editedPayload);
+    if (parsed.decision === 'edit') assertEditMatches(request.payload, parsed.editedPayload);
 
-    const before = await this.runtime.inspect(request.threadId);
+    const runtime = this.runtimeFor(request.threadId);
+    const before = await runtime.inspect(request.threadId);
     if (before.status !== 'awaiting_decision' || before.runId !== request.runId) {
       throw new ApprovalOrphanError(request._id, request.threadId);
     }
@@ -190,7 +226,7 @@ export class ApprovalsService {
       `approval ${request._id} ${parsed.decision} by ${decidedBy}; resuming ${request.threadId}`,
     );
     // Resume with exactly what is on record.
-    const thread = await this.runtime.resume(request.threadId, toValue(decision));
+    const thread = await runtime.resume(request.threadId, toValue(decision));
     return { request: decided, decision, thread };
   }
 
@@ -202,7 +238,8 @@ export class ApprovalsService {
   async resumeThread(threadId: string): Promise<ResumeResult> {
     const parsed = parseThreadId(threadId);
     if (!parsed.ok) throw new RangeError(parsed.error);
-    const thread = await this.runtime.inspect(threadId);
+    const runtime = this.runtimeFor(threadId);
+    const thread = await runtime.inspect(threadId);
 
     if (thread.status === 'none') {
       const stale = await allPages((after) =>
@@ -219,7 +256,7 @@ export class ApprovalsService {
 
     if (thread.status === 'awaiting_decision') {
       const request = thread.runId
-        ? await this.requests.findByKey(threadId, thread.runId, 'requestPlanApproval')
+        ? await this.requests.findByKey(threadId, thread.runId, runtime.approvalNode)
         : null;
       const recorded = request ? await this.decisions.findByRequestId(request._id) : null;
       if (request && recorded) {
@@ -228,7 +265,7 @@ export class ApprovalsService {
           await this.markDecided(request, new Date(recorded.decidedAt));
         return {
           status: 'resumed',
-          thread: await this.runtime.resume(threadId, toValue(recorded)),
+          thread: await runtime.resume(threadId, toValue(recorded)),
         };
       }
       return {
@@ -238,7 +275,7 @@ export class ApprovalsService {
       };
     }
 
-    return { status: 'resumed', thread: await this.runtime.continue(threadId) };
+    return { status: 'resumed', thread: await runtime.continue(threadId) };
   }
 
   private async mustFind(requestId: EntityId): Promise<ApprovalRequest> {

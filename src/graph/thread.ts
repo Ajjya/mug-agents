@@ -1,7 +1,7 @@
 import { ENTITY_ID_RE } from '../domain/common.js';
 
 /** What a graph thread is for. One thread per (event, purpose): that is what makes it unique. */
-export const THREAD_PURPOSES = ['plan'] as const;
+export const THREAD_PURPOSES = ['plan', 'speakers'] as const;
 export type ThreadPurpose = (typeof THREAD_PURPOSES)[number];
 
 export interface ThreadRef {
