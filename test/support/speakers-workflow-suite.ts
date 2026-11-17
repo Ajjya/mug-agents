@@ -62,7 +62,7 @@ export async function seed(
   for (const p of people) {
     const s = await repos.speakers.insert({
       name: p.name,
-      email: `${p.name.split(' ')[0]?.toLowerCase() ?? 'x'}@speakers.invalid`,
+      email: `${p.name.toLowerCase().replace(/[^a-z]+/g, '.')}@speakers.invalid`,
       topics: ['validation'],
       links: {},
       ...(p.bio === false ? {} : { bio: 'Builds things with documents.' }),

@@ -7,4 +7,5 @@ coverage
 dist-test
 dist-scripts
 dist-m2proc
+dist-speakersproc
 corpus/private/

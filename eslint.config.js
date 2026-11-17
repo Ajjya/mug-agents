@@ -3,7 +3,17 @@ import tseslint from 'typescript-eslint';
 import prettier from 'eslint-config-prettier';
 
 export default tseslint.config(
-  { ignores: ['dist', 'dist-scripts', 'dist-m2proc', 'node_modules', 'coverage', 'scripts/*.mjs'] },
+  {
+    ignores: [
+      'dist',
+      'dist-scripts',
+      'dist-m2proc',
+      'dist-speakersproc',
+      'node_modules',
+      'coverage',
+      'scripts/*.mjs',
+    ],
+  },
   js.configs.recommended,
   ...tseslint.configs.strictTypeChecked,
   {
