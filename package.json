@@ -14,6 +14,7 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "test:unit": "vitest run test/unit",
+    "test:prepare": "node node_modules/mongodb-memory-server/postinstall.js",
     "test": "vitest run --project unit --project integration",
     "verify": "npm run typecheck && npm run lint && npm test",
     "start:build": "npm run build && npm start",

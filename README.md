@@ -65,31 +65,52 @@ with a list of every problem.
 ## Test and quality
 
 ```bash
-npm run test:unit   # fast: schemas, config, policy checks
-npm test            # everything, including repository/app integration tests
-npm run lint
-npm run typecheck
+npm run test:unit      # no network, no mongod: schemas, decisions, drafting, the workflow suite in memory
+npm test               # + integration: a real mongod (see below); needs the network ONLY on a cold cache
+npm run verify         # typecheck + lint + npm test: what a "clean" claim means
+npm run test:prepare   # download the pinned mongod now (idempotent), so a later run is offline
 npm run build
 ```
 
-### Test MongoDB binary (CI)
+### Test MongoDB binary: what needs the network
+
+**The integration suite downloads a `mongod` (~80 MB) the first time, if it is not cached.** After
+that, `npm test` needs no network. Nothing in the suite calls Ollama, Docker or a model: models are
+scripted, and the embedder is stubbed. The `unit` project never starts a `mongod`.
 
 Integration tests run a real `mongod` through `mongodb-memory-server`, **pinned to 8.0.4**
 (`test/support/mongod-version.ts`, mirrored in `package.json` → `config.mongodbMemoryServer.version`;
 a unit test keeps them equal). Keep the major in line with the Atlas tier you deploy on, and bump
 both places together.
 
-- `npm ci` runs the library's postinstall hook, which downloads the pinned binary (~80 MB) into
-  `node_modules/.cache/mongodb-memory-server/`. Set `MONGOMS_DOWNLOAD_DIR=/some/dir` to put it
-  elsewhere.
-- **Cache it in CI** so builds do not re-download: cache that directory with the pinned version
-  in the key, e.g. GitHub Actions
-  `path: node_modules/.cache/mongodb-memory-server`, `key: mongod-8.0.4-${{ runner.os }}-${{ runner.arch }}`.
-- To pre-download without installing dependencies again, run
-  `node node_modules/mongodb-memory-server/postinstall.js` (or any test run; the first one
-  downloads on demand, the test hook timeout allows for it).
-- Offline/air-gapped runners: set `MONGOMS_DISABLE_POSTINSTALL=1` and point
-  `MONGOMS_SYSTEM_BINARY=/path/to/mongod` at a preinstalled binary of the same major.
+- **Where it is cached.** `MONGOMS_DOWNLOAD_DIR=/some/dir` chooses the directory. Without it, the
+  installed library (11.3.0) also looks in `~/.cache/mongodb-binaries/` (where it was found here),
+  so a machine that has run the tests before is warm.
+- **Warm it deliberately:** `npm run test:prepare` (the library's own postinstall step: it reads
+  the pinned version from `package.json`, and does nothing if the binary is already there).
+  `npm ci` runs the same step.
+- **Cache that directory in CI**, with the version in the key, e.g. GitHub Actions (there is no CI
+  config in this repository yet, so this is the step to add, not one that exists):
+
+  ```yaml
+  env:
+    MONGOMS_DOWNLOAD_DIR: ${{ github.workspace }}/.mongod-cache
+  steps:
+    - uses: actions/cache@v4
+      with:
+        path: .mongod-cache
+        key: mongod-8.0.4-${{ runner.os }}-${{ runner.arch }}
+    - run: npm ci && npm run test:prepare && npm run verify
+  ```
+
+- **Offline or air-gapped runners:** pre-populate `MONGOMS_DOWNLOAD_DIR`, or set
+  `MONGOMS_DISABLE_POSTINSTALL=1` and `MONGOMS_SYSTEM_BINARY=/path/to/mongod` (same major).
+- **How the "offline once warm" claim was checked** (2026-11-17, macOS arm64): with `HOME` pointing at
+  an empty directory, `MONGOMS_DOWNLOAD_DIR` at a copy of the cached binary and
+  `MONGOMS_DOWNLOAD_MIRROR=http://127.0.0.1:9` (nothing listens), `npx vitest run --project integration`
+  passed (10 files, 243 tests), and `npm run test:prepare` found the binary and did nothing. With an
+  empty cache directory and the same unreachable mirror, resolving the binary failed, because it tried
+  to download. Re-check it the same way after changing the pinned version.
 
 ## Event planner (M1)
 
