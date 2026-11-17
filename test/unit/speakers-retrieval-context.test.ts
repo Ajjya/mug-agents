@@ -74,6 +74,22 @@ describe('RetrievalDraftContext', () => {
     expect(asked.every((o) => o.classification?.join() === 'public')).toBe(true);
   });
 
+  it("finds the speaker's own abstract even when 14 others rank above it (review finding 16)", async () => {
+    const ranked = [
+      ...Array.from({ length: 14 }, (_, i) =>
+        chunk(`other-${String(i)}`, { speakerId: 'e'.repeat(24) }),
+      ),
+      chunk('mine-rank-15', { speakerId: SPEAKER._id }),
+    ];
+    const retrieval = {
+      search: (_t: string, o: SearchOptions = {}) => Promise.resolve(ranked.slice(0, o.limit ?? 5)),
+    } as unknown as RetrievalService;
+    const ids = (
+      await new RetrievalDraftContext(retrieval).forDraft(EVENT, SPEAKER, 'chase_bio')
+    ).map((c) => c.id);
+    expect(ids).toEqual(['mine-rank-15']);
+  });
+
   it('a chase gets no host notes', async () => {
     const { asked, ctx } = stub();
     expect((await ctx.forDraft(EVENT, SPEAKER, 'chase_slides')).map((c) => c.id)).toEqual(['mine']);

@@ -7,6 +7,13 @@ import type { ChunkView } from '../../retrieval/vector-store.js';
 import type { DraftContext } from './speakers.graph.js';
 
 /**
+ * How many ranked chunks are filtered down to this speaker's (or this venue's). The stores already
+ * rank at least 50 candidates per arm, so asking for 50 costs nothing extra; a top-8 cut missed a
+ * speaker's own abstract that ranked lower on the event's theme.
+ */
+const CANDIDATES = 50;
+
+/**
  * Context for a draft from M3's search, public scope only: the speaker's own past abstracts (chunks a
  * human tagged with that speaker in the manifest) and the host notes for the event's venue. At most
  * a few chunks: they set the tone, they are never a source of facts.
@@ -35,7 +42,11 @@ export class RetrievalDraftContext implements DraftContext {
   async forDraft(event: Event, speaker: Speaker, kind: MessageKind): Promise<ChunkView[]> {
     const topic = [event.theme ?? event.title, ...speaker.topics].join(' ');
     const abstracts = (
-      await this.search(topic, { kind: 'abstract', classification: ['public'], limit: 8 })
+      await this.search(topic, {
+        kind: 'abstract',
+        classification: ['public'],
+        limit: CANDIDATES,
+      })
     ).filter((c) => c.speakerId?.toLowerCase() === speaker._id.toLowerCase());
     // Host notes help an invitation or a thank-you sound like we know the place; not a chase.
     const notes =
@@ -44,7 +55,7 @@ export class RetrievalDraftContext implements DraftContext {
             await this.search(event.title, {
               kind: 'host_note',
               classification: ['public'],
-              limit: 5,
+              limit: CANDIDATES,
             })
           ).filter(
             (c) =>
