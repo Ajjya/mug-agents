@@ -516,6 +516,15 @@ facts it used (`messages.facts`). Due dates give at least 3 days' notice. Retrie
 speaker's own past abstracts and the venue's host notes, public scope) is fenced and declared reference
 only, and the drafting call has no tools.
 
+### How a speaker is greeted
+
+Drafts greet the speaker by `preferredName` when a human recorded one on the speaker (it can be set in
+`speakers.seed.json`, or on the speaker document), else by the full `name` exactly as stored. **No code
+splits or shortens a name**: names do not divide into first and last the same way across cultures, so
+there is no "first name" slot. The recipient shown in a review, in `show` and in task titles is always
+the full name; `preferredName` only affects the greeting. The agent never writes it (the
+forbidden-fields checksum includes it), and a test fails if `src/` ever calls `split` on a name.
+
 ### What approval means while nothing sends
 
 `approved` means "send this now"; `draft` means "written, not reviewed" (or not needing review). That is

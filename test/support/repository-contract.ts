@@ -359,6 +359,19 @@ export function speakersContract(create: Factory<SpeakersRepository>): void {
         expect(await repo.findByEmail('not an email')).toBeNull();
       });
 
+      it('preferredName is optional, round-trips, and cannot be blank (review item 7)', async () => {
+        const plain = await repo.insert(speakerInput({ name: 'Plain One' }));
+        expect(plain.preferredName).toBeUndefined();
+        const nick = await repo.insert(speakerInput({ name: 'Nick Two', preferredName: 'Nicky' }));
+        expect((await repo.findById(nick._id))?.preferredName).toBe('Nicky');
+        const patched = await repo.updateWithRetry(plain._id, () => ({ preferredName: 'Plainy' }));
+        expect(patched?.preferredName).toBe('Plainy');
+        expect(patched?.name).toBe('Plain One');
+        await expect(repo.insert(speakerInput({ preferredName: '   ' }))).rejects.toBeInstanceOf(
+          z.ZodError,
+        );
+      });
+
       it('a duplicate email (any case) on insert throws DuplicateKeyError naming the key', async () => {
         await repo.insert(speakerInput({ email: 'dup@example.com' }));
         const err = await repo

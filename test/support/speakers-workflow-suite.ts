@@ -33,6 +33,7 @@ export async function seed(
   repos: SpeakerRepos,
   people: {
     name: string;
+    preferredName?: string;
     status: SpeakerStatus;
     bio?: boolean;
     photo?: boolean;
@@ -66,6 +67,7 @@ export async function seed(
   for (const p of people) {
     const s = await repos.speakers.insert({
       name: p.name,
+      ...(p.preferredName ? { preferredName: p.preferredName } : {}),
       email: `${p.name.toLowerCase().replace(/[^a-z]+/g, '.')}@speakers.invalid`,
       topics: ['validation'],
       links: {},
@@ -127,6 +129,7 @@ async function forbiddenFields(h: SpeakersHarness, eventId: string): Promise<str
       s._id,
       s.name,
       s.email,
+      s.preferredName,
       s.bio,
       s.photoUrl,
       s.handle,
@@ -547,6 +550,33 @@ export function speakersWorkflowSuite(
       expect((await h.service.list(s.eventId, day('2026-11-16'), { all: true })).hidden).toBe(0);
       // Hiding is display only: the messages are all still stored.
       expect(await eventMessages(h, s.eventId)).toHaveLength(4);
+    });
+
+    it('greets by preferredName when there is one, else the full name; recipients stay full names (review item 7)', async () => {
+      const h = await fresh();
+      const s = await seed(h.repos, [
+        { name: 'Wendeline Gooseberry', preferredName: 'Wen', status: 'idea' },
+        { name: 'Ignatius Fogwhistle', status: 'idea' },
+      ]);
+      const r = await h.service.run(s.eventId, { now: day('2026-11-02') });
+      const bySpeaker = new Map(r.created.map((m) => [m.speakerId, m]));
+      const wen = bySpeaker.get(s.speakers['Wendeline Gooseberry'] ?? '');
+      const ignatius = bySpeaker.get(s.speakers['Ignatius Fogwhistle'] ?? '');
+      expect(wen?.body).toContain('Hello Wen,');
+      expect(wen?.facts.speaker_name).toBe('Wen');
+      expect(wen?.body).not.toContain('Gooseberry');
+      expect(ignatius?.body).toContain('Hello Ignatius Fogwhistle,');
+      expect(ignatius?.facts.speaker_name).toBe('Ignatius Fogwhistle');
+      // The model is told to use the name exactly as given: it never sees a way to shorten one.
+      expect(h.model.prompts[0]).toMatch(/\{\{speaker_name\}\}: the name to greet the speaker by/);
+      // The recipient a human reviews is the full name; the preferred name is only a greeting.
+      const payload = (await h.approvals.show(r.requestId ?? '')).request.payload;
+      if (!('drafts' in payload)) throw new Error('expected speaker drafts');
+      expect(payload.drafts.map((d) => d.speakerName).sort()).toEqual([
+        'Ignatius Fogwhistle',
+        'Wendeline Gooseberry',
+      ]);
+      expect((await h.service.show(wen?._id ?? '')).speakerName).toBe('Wendeline Gooseberry');
     });
 
     it('an illegal status transition is refused and changes nothing', async () => {

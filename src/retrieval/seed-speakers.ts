@@ -17,6 +17,7 @@ export const SeedSpeakerSchema = z
   .object({
     handle: z.string().regex(SPEAKER_HANDLE_RE),
     name: SpeakerInputSchema.shape.name,
+    preferredName: SpeakerInputSchema.shape.preferredName,
     topics: SpeakerInputSchema.shape.topics,
     bio: SpeakerInputSchema.shape.bio,
     links: SpeakerInputSchema.shape.links,
@@ -82,6 +83,7 @@ export async function seedSpeakers(
       links: s.links,
       perEvent: s.perEvent,
       ...(s.bio === undefined ? {} : { bio: s.bio }),
+      ...(s.preferredName === undefined ? {} : { preferredName: s.preferredName }),
     };
     const existing = await speakers.findByHandle(s.handle);
     if (!existing) {
@@ -94,7 +96,8 @@ export async function seedSpeakers(
       !same(existing.topics, wanted.topics) ||
       !same(existing.links, wanted.links) ||
       !same(existing.perEvent, wanted.perEvent) ||
-      (wanted.bio !== undefined && existing.bio !== wanted.bio);
+      (wanted.bio !== undefined && existing.bio !== wanted.bio) ||
+      (wanted.preferredName !== undefined && existing.preferredName !== wanted.preferredName);
     if (!changed) {
       result.unchanged.push(s.handle);
       continue;
@@ -105,6 +108,7 @@ export async function seedSpeakers(
       links: wanted.links,
       perEvent: wanted.perEvent,
       ...(wanted.bio === undefined ? {} : { bio: wanted.bio }),
+      ...(wanted.preferredName === undefined ? {} : { preferredName: wanted.preferredName }),
     }));
     result.updated.push(s.handle);
   }

@@ -33,6 +33,12 @@ export const SPEAKER_HANDLE_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 export const SpeakerInputSchema = z
   .object({
     name: nonEmpty,
+    /**
+     * How the speaker likes to be addressed, entered by a human. Used in greetings when present, else
+     * the full name. Never derived: no code splits or shortens `name`, because names do not divide
+     * into first and last the same way across cultures.
+     */
+    preferredName: nonEmpty.optional(),
     handle: z
       .string()
       .regex(SPEAKER_HANDLE_RE, 'must be a lower-case slug like "ana-ferreira"')

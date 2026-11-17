@@ -33,7 +33,7 @@ export const DUE_OFFSET_DAYS: Partial<Record<MessageKind, number>> = {
 };
 
 export const SLOT_DESCRIPTIONS: Record<FactSlot, string> = {
-  speaker_name: "the speaker's name",
+  speaker_name: 'the name to greet the speaker by (it may be a nickname: use it exactly as given)',
   event_title: 'the name of the event',
   event_date: 'the day of the event',
   event_time: 'the time the event starts',
@@ -69,7 +69,7 @@ const REQUIRED: Record<MessageKind, readonly FactSlot[]> = {
 
 export interface FactInput {
   event: Pick<Event, '_id' | 'title' | 'date' | 'agenda'>;
-  speaker: Pick<Speaker, '_id' | 'name'>;
+  speaker: Pick<Speaker, '_id' | 'name' | 'preferredName'>;
   venue: Pick<Organisation, 'name' | 'address'> | null;
   kind: MessageKind;
   now: Date;
@@ -122,7 +122,12 @@ const isDateOnly = (iso: string): boolean => iso.endsWith('T00:00:00.000Z');
  */
 export function buildFacts(input: FactInput): MessageFacts {
   const { event, speaker, venue, kind, now, timeZone } = input;
-  const facts: MessageFacts = { speaker_name: speaker.name, event_title: event.title };
+  // Greetings use the name the speaker likes when a human recorded one, else the full name as it is.
+  // There is no splitting or shortening of `name` anywhere: that would be a guess about how names work.
+  const facts: MessageFacts = {
+    speaker_name: speaker.preferredName ?? speaker.name,
+    event_title: event.title,
+  };
   if (event.date) {
     const d = new Date(event.date);
     facts.event_date = formatDay(d, 'UTC');

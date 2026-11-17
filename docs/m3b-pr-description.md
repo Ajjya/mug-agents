@@ -109,9 +109,9 @@ and tested:
    validation", taken from the speaker's recorded topics.
 2. The "by today" due date (rule 5 above).
 
-Not fixed: drafts greet with the full name ("Hi Perpetua Quillfeather"). A `first_name` slot would be
-small, but the speaker record has no first-name field, and splitting names in code is wrong often enough
-across cultures that I left it.
+Drafts greet by the full name unless a human recorded a `preferredName` on the speaker (optional;
+used in the greeting only, full name otherwise). There is deliberately no first-name slot and no code
+that splits a name; a test enforces the second.
 
 ## Trajectory harness
 
@@ -175,7 +175,6 @@ change, not a redesign.
 
 ## Not done
 
-- No first-name slot (see above).
 - `messages` are never pruned. That is deliberate (nothing is deleted), but superseded and rejected drafts will accumulate.
 
 ## Verification
