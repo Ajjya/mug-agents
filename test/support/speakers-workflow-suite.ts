@@ -264,6 +264,45 @@ export function speakersWorkflowSuite(
       ]);
     });
 
+    it('a repeated sent repairs a half-done send, and never undoes a later status change', async () => {
+      const h = await fresh();
+      const s = await seed(h.repos, [
+        { name: 'Wendeline Gooseberry', status: 'idea', contacted: true },
+      ]);
+      const sp = s.speakers['Wendeline Gooseberry'] ?? '';
+      const r = await h.service.run(s.eventId, { now: day('2026-10-31') });
+      const id = r.created[0]?._id ?? '';
+      // A crash between the two writes: the message is sent, the speaker is still idea.
+      await h.repos.messages.updateWithRetry(id, () => ({
+        status: 'sent',
+        sentAt: day('2026-11-01').toISOString(),
+        sentBy: 'vlad',
+      }));
+      expect(await h.store.currentStatus(sp, s.eventId)).toBe('idea');
+      const again = await h.service.sent(id, 'vlad', day('2026-11-02'));
+      expect(again.sentAt).toBe(day('2026-11-01').toISOString());
+      expect(await h.store.currentStatus(sp, s.eventId)).toBe('invited');
+      // Parked later by a human: a stray repeated `sent` must not move them back.
+      await h.service.setStatus(sp, s.eventId, 'idea', day('2026-11-05'));
+      await h.service.sent(id, 'vlad', day('2026-11-06'));
+      expect(await h.store.currentStatus(sp, s.eventId)).toBe('idea');
+    });
+
+    it('a thank-you marked sent moves slides_received -> thanked (review finding 10)', async () => {
+      const h = await fresh();
+      const s = await seed(h.repos, [
+        { name: 'Wendeline Gooseberry', status: 'slides_received', contacted: true },
+      ]);
+      const sp = s.speakers['Wendeline Gooseberry'] ?? '';
+      const r = await h.service.run(s.eventId, { now: day('2026-12-13') });
+      expect(r.created.map((m) => [m.kind, m.status, m.needsApproval])).toEqual([
+        ['thank_you', 'draft', false],
+      ]);
+      await h.service.sent(r.created[0]?._id ?? '', 'vlad', day('2026-12-13'));
+      expect(await h.store.currentStatus(sp, s.eventId)).toBe('thanked');
+      expect((await h.service.run(s.eventId, { now: day('2026-12-20') })).created).toEqual([]);
+    });
+
     it('at the chase limit: a task, no further message, and the task is not duplicated', async () => {
       const h = await fresh();
       const s = await seed(h.repos, [

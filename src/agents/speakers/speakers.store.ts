@@ -242,39 +242,54 @@ export class SpeakerPipelineStore {
    */
   async markSent(messageId: string, sentBy: string, now: Date): Promise<Message> {
     const m = await this.findMessage(messageId);
-    if (m.status === 'sent') return m;
-    if (m.status === 'draft' && m.needsApproval) {
-      throw new MessageNotSendableError(
-        messageId,
-        'it needs approval first (npm run approvals -- list)',
-      );
-    }
-    if (m.status !== 'draft' && m.status !== 'approved') {
-      throw new MessageNotSendableError(messageId, `it is ${m.status}`);
-    }
-    const sent = await this.messages.updateWithRetry(messageId, (doc) => {
-      if (doc.status !== 'draft' && doc.status !== 'approved') {
-        throw new MessageNotSendableError(messageId, `it is ${doc.status}`);
+    let sent = m;
+    if (m.status !== 'sent') {
+      if (m.status === 'draft' && m.needsApproval) {
+        throw new MessageNotSendableError(
+          messageId,
+          'it needs approval first (npm run approvals -- list)',
+        );
       }
-      return { status: 'sent', sentAt: now.toISOString(), sentBy };
-    });
+      if (m.status !== 'draft' && m.status !== 'approved') {
+        throw new MessageNotSendableError(messageId, `it is ${m.status}`);
+      }
+      sent =
+        (await this.messages.updateWithRetry(messageId, (doc) => {
+          if (doc.status !== 'draft' && doc.status !== 'approved') {
+            throw new MessageNotSendableError(messageId, `it is ${doc.status}`);
+          }
+          return { status: 'sent', sentAt: now.toISOString(), sentBy };
+        })) ?? m;
+    }
+    // Also on a repeated `sent`: if a crash came between the two writes, this finishes the job. It
+    // applies only while the status is unchanged since the send, so a later human change (a speaker
+    // parked back to idea) is never undone.
     const follow: Partial<Record<MessageKind, [SpeakerStatus, SpeakerStatus]>> = {
       invitation: ['idea', 'invited'],
       thank_you: ['slides_received', 'thanked'],
     };
     const step = follow[m.kind];
-    if (step) {
-      const current = await this.currentStatus(m.speakerId, m.eventId);
-      if (current === step[0]) await this.setStatus(m.speakerId, m.eventId, step[1], now);
+    if (step && sent.sentAt) {
+      const entry = await this.entry(m.speakerId, m.eventId);
+      if (entry.status === step[0] && entry.updatedAt <= sent.sentAt) {
+        await this.setStatus(m.speakerId, m.eventId, step[1], now);
+      }
     }
-    return sent ?? m;
+    return sent;
   }
 
-  async currentStatus(speakerId: string, eventId: string): Promise<SpeakerStatus> {
+  private async entry(
+    speakerId: string,
+    eventId: string,
+  ): Promise<{ status: SpeakerStatus; updatedAt: string }> {
     const s = await this.speakers.findById(speakerId);
     const entry = s?.perEvent.find((p) => p.eventId.toLowerCase() === eventId.toLowerCase());
     if (!entry) throw new SpeakerNotInEventError(speakerId, eventId);
-    return entry.status;
+    return entry;
+  }
+
+  async currentStatus(speakerId: string, eventId: string): Promise<SpeakerStatus> {
+    return (await this.entry(speakerId, eventId)).status;
   }
 
   /** The only status write. Patches `perEvent` and nothing else on the speaker. */
