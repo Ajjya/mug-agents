@@ -30,6 +30,8 @@ export interface PipelineSpeaker {
   id: string;
   name: string;
   status: SpeakerStatus;
+  /** When the status last changed (ISO). A reset to `idea` after a sent invitation re-approaches. */
+  statusSince?: string;
   /** `speaker.bio` is filled in. The agent never writes it; a human does. */
   hasBio: boolean;
   /** `speaker.photoUrl` is filled in. */
@@ -231,7 +233,15 @@ export function decideActions(input: PipelineInput): Decision {
 
       // ---- one-off messages: the invitation and the thank-you ----
       if (kind === 'invitation' || kind === 'thank_you') {
-        if (ofKind.some((m) => m.status === 'sent')) {
+        // A sent invitation is final for the event, unless a human has since moved the speaker back
+        // to `idea` (declined -> idea, or parked): that is a re-approach, and gets a new round.
+        const sentOnes = ofKind.filter((m) => m.status === 'sent');
+        const resetSince = (m: PipelineMessage): boolean =>
+          kind === 'invitation' &&
+          speaker.statusSince !== undefined &&
+          m.sentAt !== undefined &&
+          speaker.statusSince > m.sentAt;
+        if (sentOnes.length > 0 && !sentOnes.every(resetSince)) {
           wait(
             kind === 'invitation'
               ? 'parked: the invitation for this event was already sent; nothing more is drafted for this event'
@@ -283,7 +293,17 @@ export function decideActions(input: PipelineInput): Decision {
       } else {
         anchor = latestSent(ofKind);
       }
-      const sent = ofKind.filter((m) => m.status === 'sent').length;
+      // Rounds of a reply chase are counted since the latest sent invitation (a re-approach starts
+      // over); other kinds count every sent chase for the event.
+      const lastInvitation =
+        kind === 'chase_reply'
+          ? latestSent(mine.filter((m) => m.kind === 'invitation'))?.sentAt
+          : undefined;
+      const sent = ofKind.filter(
+        (m) =>
+          m.status === 'sent' &&
+          (lastInvitation === undefined || (m.sentAt ?? '') >= lastInvitation),
+      ).length;
       const anchorDay = anchor?.sentAt ? utcDay(new Date(anchor.sentAt)) : undefined;
       const elapsed = anchorDay === undefined ? undefined : daysBetween(anchorDay, today);
       const intervalOk = elapsed === undefined || elapsed >= policy.chaseMinIntervalDays;

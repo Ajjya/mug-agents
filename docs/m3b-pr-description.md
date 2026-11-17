@@ -36,17 +36,28 @@ days relative to the event day.
 
 Rules beyond the table, which I decided and you should check:
 
-1. **Chases stop on the event day.** No reminder for an abstract on the day of the talk.
-2. **The task comes one interval after the last chase**, not the moment the second chase is sent. The
-   last chase gets its 7 days to be answered before "call them" appears.
-3. **A rejected draft is final for that kind and event.** Rejecting means "not this message", and the
-   agent does not try again. To re-approach, change the status.
+1. **The draft window closes at T-4d.** A message is only drafted while it can give 3 days' notice
+   (`MIN_NOTICE_DAYS`) and still fall before the event. From T-3d to the event day, any chase item still
+   missing becomes the "call them" task (`no_time`), whatever `CHASE_MAX_ROUNDS` x
+   `CHASE_MIN_INTERVAL_DAYS` is; after the event, nothing is chased and no task is made. (Review
+   finding 1: with slides from T-1w and a 7-day interval, round 2 fell on the event day and never
+   happened, so slides could never produce a task.)
+2. **The limit task comes one interval after the last chase**, or when the window closes, whichever is
+   first. The last chase gets its interval to be answered before "call them" appears.
+3. **A rejected draft is final for that kind and event; a sent invitation is final until a human
+   resets the speaker.** Rejecting means "not this message", and the agent does not try again. A sent
+   invitation parks the speaker for the event, but moving them back to `idea` _after_ it was sent
+   (`declined → idea`, or `invited → idea`) is a re-approach: the next run drafts invitation round 2,
+   and reply chases count from the new invitation. (Review finding 5: the rule "to re-approach, change
+   the status" was in the first version of this text and was not true; a probe returned nothing.) A
+   rejected invitation stays final whatever the status: there is no timestamp on a rejection to compare.
 4. **Unsent drafts that no longer apply become `superseded`.** For example, the speaker declined while a
-   chase sat unsent, or the bio arrived while its chase was waiting.
+   chase sat unsent, the bio arrived while its chase was waiting, or the **event day came** (an approved
+   chase would otherwise mean "send this now" forever). A thank-you is exempt.
 5. **Due dates are code's**: abstract T-3w, bio/photo T-2w, slides T-2d, a reply within the chase
-   interval. Each gives **at least 3 days' notice** (`MIN_NOTICE_DAYS`) and is capped at the day before
-   the event. This was added after a real run: a chase drafted on T-3w asked for the abstract "by
-   today".
+   interval. Every one, reply-by dates included, goes through one function: at least 3 days from today
+   and never on or after the event day. Because drafting stops at T-4d (rule 1), both can always hold.
+   This was added after a real run: a chase drafted on T-3w asked for the abstract "by today".
 6. **Marking sent moves the status**: invitation sent, `idea → invited`; thank-you sent,
    `slides_received → thanked`, both through the guard. A first-contact draft cannot be marked sent
    until it is approved.
@@ -68,12 +79,22 @@ Rules beyond the table, which I decided and you should check:
   facts and recipient are exactly what code produced.
 - **Due dates and the facts list**: `messages.facts` holds the slot values used, and a test compares
   them with the event record.
+- **A pending review no longer stops the event.** The review fix (finding 3): a `run` on a thread that
+  is waiting retires the pending request (`expired`, not deleted) and starts a new run, whose review
+  holds the still-unapproved drafts plus any new ones. Auto drafts (chases) therefore go through
+  while a first contact waits. If a decision was recorded but not delivered, `run` refuses and points
+  to `approvals resume` instead.
 - **Drafting context degrades.** If local Ollama is down, context falls back to keyword search rather than failing the run.
 
 ## What a real run showed (Ollama Cloud, fictional data in the `_dev` database)
 
-Three drafts: an invitation, an abstract chase and a bio chase. Each passed validation on the first
-call; a second run planned nothing, drafted nothing and made no model call. Two findings, both fixed
+One run on a fresh fictional event produced three drafts (an invitation, an abstract chase, a bio
+chase) from three model calls; each passed validation on the first call. I then approved the request and
+ran again: the thread was complete, so the run planned nothing, wrote nothing and made no model call.
+(That second run was the idempotency check. A repeat run _while the request is still pending_ is a
+different path: it used to stop with "already waiting", which says nothing about idempotency, and now
+retires the request and re-runs. The review noticed the difference; it is covered by tests, not by the
+live run.) The approved drafts were never marked sent, so no chase followed, as intended. Two findings, both fixed
 and tested:
 
 1. The invitation prompt asked for a talk "close to their past talks". The model wrote that we had
@@ -89,7 +110,7 @@ across cultures that I left it.
 
 ## Trajectory harness
 
-`npm run eval:speakers` (`evals/speakers/report-2026-11-17.md`): **6/6**. It uses a frozen clock and a
+`npm run eval:speakers` (`evals/speakers/report-2026-11-17.md`): **8/8** (the six the spec lists, plus _slides never arrive_ and _four speakers through the whole timeline_, added after review: the original six only ever took `chase_reply` to its limit). It uses a frozen clock and a
 scripted model behind the real structured-call validation and ladder, with in-memory storage.
 
 | Scenario            | Path (one step per run)                                                       |
@@ -111,7 +132,7 @@ scripted model behind the real structured-call validation and ladder, with in-me
 
 ## Tests
 
-`npm test`: 46 files, 782 tests, no network, Docker or Ollama.
+`npm test`: see the verification line at the end, no network, Docker or Ollama.
 
 - **decideActions:** table-driven over every row, every 6-vs-7-day boundary, every status, the cap, rejection, supersession and a missing event date.
 - **Transition guard:** all 49 pairs.
@@ -151,5 +172,9 @@ change, not a redesign.
 
 - No first-name slot (see above).
 - `messages` are never pruned. That is deliberate (nothing is deleted), but superseded and rejected drafts will accumulate.
+
+## Verification
+
+typecheck and lint clean; `npm test`: 47 files, 826 tests; `npm run eval:speakers`: 8/8. Run with the network available (not sandboxed), so "no network" is by design of the tests, not enforced.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)

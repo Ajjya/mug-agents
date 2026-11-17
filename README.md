@@ -392,7 +392,8 @@ npm run speakers -- sent <messageId>                                  # you sent
 npm run speakers -- status <speakerId> --event <id> --set confirmed   # what happened (guarded)
 ```
 
-Until a draft is marked sent, nothing is ever chased because of it. Marking an invitation sent moves
+Until a draft is marked sent, nothing is ever chased because of it. A `sent` repeated after a crash
+finishes the status step it missed. Marking an invitation sent moves
 the speaker `idea → invited`; marking a thank-you sent moves `slides_received → thanked`.
 
 ```bash
@@ -404,7 +405,9 @@ npm run approvals -- list                     # first-contact drafts wait here
 ```
 
 `run` and `list` take `--now <ISO>` to see the pipeline as of another day. A second `run` the same day
-writes nothing and calls no model.
+writes nothing and calls no model. A `run` while a first-contact request is still unanswered retires
+that request (`expired`) and asks again with the same drafts, so chases for other speakers are not held
+up.
 
 ### How it decides
 
@@ -424,8 +427,10 @@ days relative to the event day:
 | `slides_received`     | the day after the event                                    | `thank_you`                           |
 | `declined`, `thanked` | –                                                          | nothing; unsent drafts are superseded |
 
-A second chase of a kind needs the previous one marked sent and 7 days elapsed. Chases stop on the
-event day. A draft rejected at review is final for that kind and event. An unsent draft that no longer
+A second chase of a kind needs the previous one marked sent and 7 days elapsed. Messages are only
+drafted up to T-4d, so every due date can give 3 days' notice and still fall before the event; from
+T-3d to the event day an item still missing becomes the "call them" task, and after the event nothing
+is chased. A draft rejected at review is final for that kind and event. An unsent draft that no longer
 applies (the status moved on, the bio arrived) becomes `superseded`; nothing is deleted.
 
 ### Chase policy
@@ -482,9 +487,9 @@ test compares those fields before and after a run.
 npm run eval:speakers
 ```
 
-Six scenarios on a frozen clock with a scripted model (behind the real validation and ladder): never
+Eight scenarios on a frozen clock with a scripted model (behind the real validation and ladder): never
 replies, confirms late, declines, the event moves closer, the clock jumps a month, resume
-mid-approval. Writes `evals/speakers/report-<date>.md`. They also run in `npm test`.
+mid-approval, slides never arrive, and four speakers through the whole timeline. Writes `evals/speakers/report-<date>.md`. They also run in `npm test`.
 
 ## Design notes
 

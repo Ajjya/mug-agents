@@ -202,6 +202,59 @@ export async function resumeMidApproval(): Promise<ScenarioResult> {
   ]);
 }
 
+/** Review: the eval only ever took chase_reply to its limit. Slides start T-1w, so the window is short. */
+export async function slidesNeverArrive(): Promise<ScenarioResult> {
+  const ctx = await setup([
+    { name: 'Wendeline Gooseberry', status: 'abstract_received', contacted: true },
+  ]);
+  const sp = ctx.speakers['Wendeline Gooseberry'] ?? '';
+  await step(ctx, '2026-12-05', { sendAll: true });
+  await step(ctx, '2026-12-08');
+  await step(ctx, '2026-12-09');
+  await step(ctx, '2026-12-12');
+  await step(ctx, '2026-12-13');
+  const slides = (await ctx.h.repos.messages.findByEventId(ctx.eventId)).items.filter(
+    (m) => m.kind === 'chase_slides',
+  );
+  return result(
+    'Slides never arrive',
+    ['12-05 chase_slides#1', '12-08 -', '12-09 task:chase_slides', '12-12 -', '12-13 -'],
+    ctx,
+    [{ what: 'one slides chase, then a task (no second chase fits)', ok: slides.length === 1 }],
+  );
+}
+
+/** Several speakers at different stages through the whole timeline, every message kind once. */
+export async function fullPipeline(): Promise<ScenarioResult> {
+  const ctx = await setup([
+    { name: 'Ada One', status: 'idea', contacted: true },
+    { name: 'Bea Two', status: 'confirmed', contacted: true },
+    { name: 'Cy Three', status: 'abstract_received', contacted: true },
+    { name: 'Di Four', status: 'slides_received', contacted: true },
+  ]);
+  await step(ctx, '2026-10-31', { sendAll: true }); // invitation to Ada
+  await step(ctx, '2026-11-14', { sendAll: true }); // abstract chase to Bea
+  await step(ctx, '2026-12-05', { sendAll: true }); // slides chase to Cy
+  await step(ctx, '2026-12-13', { sendAll: true }); // thank-you to Di
+  await step(ctx, '2026-12-14');
+  const tasks = (await ctx.h.repos.tasks.findByEventId(ctx.eventId)).items;
+  return result(
+    'Full pipeline, four speakers',
+    [
+      '10-31 invitation#1',
+      // Ada's invitation went out 10-31 (14 days ago, so a reply chase); Bea is at T-4w.
+      '11-14 chase_reply#1, chase_abstract#1',
+      // 21 days on: both are chased a second time; Cy is at T-1w for slides.
+      '12-05 chase_reply#2, chase_abstract#2, chase_slides#1',
+      '12-13 thank_you#1',
+      // The event is over: no more chases and no tasks.
+      '12-14 -',
+    ],
+    ctx,
+    [{ what: 'no task: nobody is stuck', ok: tasks.length === 0 }],
+  );
+}
+
 export const SCENARIOS = [
   speakerNeverReplies,
   speakerConfirmsLate,
@@ -209,6 +262,8 @@ export const SCENARIOS = [
   eventMovesCloser,
   clockJumpsAMonth,
   resumeMidApproval,
+  slidesNeverArrive,
+  fullPipeline,
 ];
 
 export async function runScenarios(): Promise<ScenarioResult[]> {

@@ -406,6 +406,23 @@ export function speakersWorkflowSuite(
       ]);
     });
 
+    it('declined, then moved back to idea: re-approached with a second invitation (review finding 5)', async () => {
+      const h = await fresh();
+      const s = await seed(h.repos, [
+        { name: 'Wendeline Gooseberry', status: 'idea', contacted: true },
+      ]);
+      const sp = s.speakers['Wendeline Gooseberry'] ?? '';
+      const first = await h.service.run(s.eventId, { now: day('2026-10-31') });
+      await h.service.sent(first.created[0]?._id ?? '', 'vlad', day('2026-11-01'));
+      await h.service.setStatus(sp, s.eventId, 'declined', day('2026-11-03'));
+      expect((await h.service.run(s.eventId, { now: day('2026-11-10') })).created).toEqual([]);
+      await h.service.setStatus(sp, s.eventId, 'idea', day('2026-11-12'));
+      const again = await h.service.run(s.eventId, { now: day('2026-11-13') });
+      expect(again.created.map((m) => [m.kind, m.round])).toEqual([['invitation', 2]]);
+      await h.service.sent(again.created[0]?._id ?? '', 'vlad', day('2026-11-14'));
+      expect(await h.store.currentStatus(sp, s.eventId)).toBe('invited');
+    });
+
     it('an illegal status transition is refused and changes nothing', async () => {
       const h = await fresh();
       const s = await seed(h.repos, [{ name: 'Wendeline Gooseberry', status: 'idea' }]);

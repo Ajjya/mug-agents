@@ -13,6 +13,16 @@ export function statusFor(
   );
 }
 
+function sinceOf(
+  speaker: LoadedPipeline['speakers'][number],
+  eventId: string,
+): { statusSince: string } | Record<string, never> {
+  const at = speaker.perEvent.find(
+    (e) => e.eventId.toLowerCase() === eventId.toLowerCase(),
+  )?.updatedAt;
+  return at ? { statusSince: at } : {};
+}
+
 /**
  * The one mapping from stored documents to decideActions' input. `speakers run` (the graph) and
  * `speakers list` both use it, so what the table shows and what a run does cannot drift apart.
@@ -26,6 +36,7 @@ export function pipelineInput(p: LoadedPipeline, now: Date, policy: ChasePolicy)
       id: s._id,
       name: s.name,
       status: statusFor(s, p.event._id),
+      ...sinceOf(s, p.event._id),
       hasBio: Boolean(s.bio?.trim()),
       hasPhoto: Boolean(s.photoUrl),
     })),

@@ -514,6 +514,28 @@ describe('decideActions: every chase kind ends in a task (review findings)', () 
     expect(t.supersede).toEqual([]);
   });
 
+  it('a speaker reset to idea AFTER a sent invitation is re-approached, with a new round (finding 5)', () => {
+    const sent = [msg('invitation', 'sent', '2026-11-01')];
+    const reset = speaker('idea', { statusSince: '2026-11-10T08:00:00.000Z' });
+    const d = decide('2026-11-20', reset, sent);
+    expect(planned(d)).toEqual(['invitation#2']);
+    // Reset BEFORE the invitation was sent: not a re-approach, still parked.
+    const early = speaker('idea', { statusSince: '2026-10-20T08:00:00.000Z' });
+    expect(planned(decide('2026-11-20', early, sent))).toEqual([]);
+  });
+
+  it('after a re-approach, reply chases count from the new invitation', () => {
+    const msgs = [
+      msg('invitation', 'sent', '2026-11-01', 1),
+      msg('chase_reply', 'sent', '2026-11-08', 1),
+      msg('chase_reply', 'sent', '2026-11-15', 2),
+      msg('invitation', 'sent', '2026-11-20', 2),
+    ];
+    const d = decide('2026-11-27', speaker('invited'), msgs);
+    expect(planned(d)).toEqual(['chase_reply#3']);
+    expect(d.blocked).toEqual([]);
+  });
+
   it('a parked speaker (invitation already sent) is shown as parked, not silently skipped', () => {
     const d = decide('2026-11-20', speaker('idea'), [msg('invitation', 'sent', '2026-11-01')]);
     expect(d.waiting.map((w) => w.why)).toEqual([
