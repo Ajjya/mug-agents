@@ -19,6 +19,10 @@ export interface FixtureMessage {
   to: string;
   subject: string;
   messageId: string;
+  inReplyTo?: string;
+  references?: string;
+  replyTo?: string;
+  cc?: string;
   body: string;
   attachments: { filename: string; mimeType: string; sizeBytes: number }[];
 }
@@ -163,7 +167,16 @@ export class FakeGmail implements GmailClient {
       threadId: m.threadId,
       labelIds: [...m.labels],
       receivedAt: m.receivedAt,
-      headers: { from: m.from, to: m.to, subject: m.subject, messageId: m.messageId },
+      headers: {
+        from: m.from,
+        to: m.to,
+        subject: m.subject,
+        messageId: m.messageId,
+        ...(m.inReplyTo ? { inReplyTo: m.inReplyTo } : {}),
+        ...(m.references ? { references: m.references } : {}),
+        ...(m.replyTo ? { replyTo: m.replyTo } : {}),
+        ...(m.cc ? { cc: m.cc } : {}),
+      },
     };
   }
 

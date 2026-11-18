@@ -101,7 +101,17 @@ describe('GoogleGmailClient: read-only, label-scoped, metadata really is metadat
       userId: 'me',
       id: 'm1',
       format: 'metadata',
-      metadataHeaders: ['From', 'To', 'Subject', 'Date', 'Message-ID'],
+      metadataHeaders: [
+        'From',
+        'To',
+        'Cc',
+        'Reply-To',
+        'Subject',
+        'Date',
+        'Message-ID',
+        'In-Reply-To',
+        'References',
+      ],
     });
     expect(m).toEqual({
       id: 'm1',
@@ -111,6 +121,35 @@ describe('GoogleGmailClient: read-only, label-scoped, metadata really is metadat
       headers: { from: 'A <a@x.invalid>', subject: 'Hello', messageId: '<m1@x.invalid>' },
     });
     expect(JSON.stringify(m)).not.toMatch(/LEAKED/);
+  });
+
+  it('maps the reply-chain headers M4b needs: In-Reply-To, References, Reply-To, Cc', async () => {
+    const { api, calls } = stub();
+    calls.get.mockResolvedValue({
+      data: {
+        id: 'm5',
+        threadId: 't5',
+        labelIds: ['Label_1'],
+        internalDate: '1793000000000',
+        payload: {
+          headers: [
+            { name: 'Message-ID', value: '<m5@x.invalid>' },
+            { name: 'In-Reply-To', value: '<m4@x.invalid>' },
+            { name: 'References', value: '<m1@x.invalid> <m4@x.invalid>' },
+            { name: 'Reply-To', value: 'Office <office@x.invalid>' },
+            { name: 'Cc', value: 'A <a@x.invalid>, b@x.invalid' },
+          ],
+        },
+      },
+    });
+    const m = await new GoogleGmailClient(api).getMetadata('m5');
+    expect(m.headers).toEqual({
+      messageId: '<m5@x.invalid>',
+      inReplyTo: '<m4@x.invalid>',
+      references: '<m1@x.invalid> <m4@x.invalid>',
+      replyTo: 'Office <office@x.invalid>',
+      cc: 'A <a@x.invalid>, b@x.invalid',
+    });
   });
 
   it('getFull decodes multipart text (UTF-8, base64url) and LISTS attachments without opening them', async () => {

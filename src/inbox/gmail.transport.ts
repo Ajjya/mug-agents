@@ -24,6 +24,12 @@ export interface GmailHeaders {
   date?: string;
   /** The RFC `Message-ID` header (M4b replies into it). */
   messageId?: string;
+  /** `In-Reply-To` and `References`: the chain a correct reply must extend (M4b). */
+  inReplyTo?: string;
+  references?: string;
+  /** Where a reply should go when it is not the sender, and who else was copied. */
+  replyTo?: string;
+  cc?: string;
 }
 
 /** Headers, labels and the received time. No body, no snippet: there is nowhere to put one. */

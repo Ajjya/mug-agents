@@ -26,7 +26,17 @@ import type { GmailCredentials } from './inbox.config.js';
  * the test suite touches Gmail.
  */
 
-const METADATA_HEADERS = ['From', 'To', 'Subject', 'Date', 'Message-ID'];
+const METADATA_HEADERS = [
+  'From',
+  'To',
+  'Cc',
+  'Reply-To',
+  'Subject',
+  'Date',
+  'Message-ID',
+  'In-Reply-To',
+  'References',
+];
 /** A decoded body is capped so one enormous message cannot become an enormous document. */
 const MAX_BODY_CHARS = 1_000_000;
 
@@ -49,6 +59,14 @@ function headersOf(part: gmail_v1.Schema$MessagePart | undefined): GmailHeaders 
   if (subject) out.subject = subject;
   if (date) out.date = date;
   if (messageId) out.messageId = messageId;
+  const inReplyTo = get('In-Reply-To');
+  const references = get('References');
+  const replyTo = get('Reply-To');
+  const cc = get('Cc');
+  if (inReplyTo) out.inReplyTo = inReplyTo;
+  if (references) out.references = references;
+  if (replyTo) out.replyTo = replyTo;
+  if (cc) out.cc = cc;
   return out;
 }
 

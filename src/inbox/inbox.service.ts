@@ -505,6 +505,12 @@ export class InboxService {
       receivedAt: full.receivedAt,
       from,
       to: parseAddressList(full.headers.to),
+      ...(full.headers.cc ? { cc: parseAddressList(full.headers.cc) } : {}),
+      ...(full.headers.replyTo ? { replyTo: parseAddressList(full.headers.replyTo) } : {}),
+      ...(full.headers.inReplyTo ? { inReplyTo: full.headers.inReplyTo.trim() } : {}),
+      ...(full.headers.references
+        ? { references: full.headers.references.split(/\s+/).filter(Boolean) }
+        : {}),
       subject: full.headers.subject ?? '',
       bodyText: full.bodyText,
       bodyRedacted: redacted,

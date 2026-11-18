@@ -87,6 +87,11 @@ export const InboundMessageInputSchema = z
     receivedAt: isoDate,
     from: AddressSchema,
     to: z.array(AddressSchema),
+    cc: z.array(AddressSchema).optional(),
+    replyTo: z.array(AddressSchema).optional(),
+    /** The reply chain, as the headers give it: what M4b must extend to reply into the right thread. */
+    inReplyTo: nonEmpty.optional(),
+    references: z.array(nonEmpty).optional(),
     subject: z.string(),
     /** The full body. Reachable only through the inbox repository's one explicit raw-body accessor. */
     bodyText: z.string(),

@@ -156,6 +156,39 @@ describe('poll -> store -> triage -> link', () => {
   });
 });
 
+describe('the reply chain is kept for M4b', () => {
+  it('stores Message-ID, In-Reply-To, References (split), Reply-To and Cc, and a message without them stores none', async () => {
+    const h = buildInboxHarness();
+    h.gmail.receive(
+      message({
+        id: 'm-450',
+        threadId: 'th-450',
+        messageId: '<m450@speakers.invalid>',
+        inReplyTo: '<m449@mug.invalid>',
+        references: '<m1@mug.invalid>   <m449@mug.invalid>',
+        replyTo: 'Office <office@speakers.invalid>',
+        cc: 'Ana <ana@speakers.invalid>, ben@speakers.invalid',
+      }),
+    );
+    h.gmail.receive(message({ id: 'm-451', threadId: 'th-451' }));
+    await h.service.poll({ now: NOW });
+
+    const full = await h.repos.inbound.findByGmailId('m-450');
+    expect(full).toMatchObject({
+      rfcMessageId: '<m450@speakers.invalid>',
+      inReplyTo: '<m449@mug.invalid>',
+      references: ['<m1@mug.invalid>', '<m449@mug.invalid>'],
+      replyTo: [{ name: 'Office', address: 'office@speakers.invalid' }],
+      cc: [{ name: 'Ana', address: 'ana@speakers.invalid' }, { address: 'ben@speakers.invalid' }],
+    });
+    const bare = await h.repos.inbound.findByGmailId('m-451');
+    expect(bare?.inReplyTo).toBeUndefined();
+    expect(bare?.references).toBeUndefined();
+    expect(bare?.cc).toBeUndefined();
+    expect(bare?.rfcMessageId).toBe('<m-451@people.invalid>'); // the one reply-into key is always captured when Gmail gives it
+  });
+});
+
 describe('linking rules (spec 7.2)', () => {
   it('a sender address matching a speaker links, whatever its case', async () => {
     const h = buildInboxHarness();
