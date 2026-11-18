@@ -286,18 +286,13 @@ describe('the OAuth flow for an installed app', () => {
   });
 
   it('accepts a redirect only with the right state, and reports an error plainly', () => {
+    const reason = (u: string): string => {
+      const r = parseCallback(u, 'STATE');
+      return r.ok ? '' : r.reason;
+    };
     expect(parseCallback('/?code=abc&state=STATE', 'STATE')).toEqual({ ok: true, code: 'abc' });
-    expect(parseCallback('/?code=abc&state=OTHER', 'STATE')).toMatchObject({
-      ok: false,
-      reason: expect.stringContaining('state'),
-    });
-    expect(parseCallback('/?error=access_denied&state=STATE', 'STATE')).toMatchObject({
-      ok: false,
-      reason: expect.stringContaining('access_denied'),
-    });
-    expect(parseCallback('/?state=STATE', 'STATE')).toMatchObject({
-      ok: false,
-      reason: expect.stringContaining('no authorization code'),
-    });
+    expect(reason('/?code=abc&state=OTHER')).toContain('state');
+    expect(reason('/?error=access_denied&state=STATE')).toContain('access_denied');
+    expect(reason('/?state=STATE')).toContain('no authorization code');
   });
 });
