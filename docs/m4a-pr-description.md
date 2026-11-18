@@ -212,10 +212,10 @@ that is too broad). Before that, set the OAuth consent screen to "In production"
 
 ## Verification
 
-Run on commit `e8e7b0e` (the last commit that changes anything but this paragraph), on a clean working tree, 2026-11-18,
-network available (not sandboxed): `npm run verify` (typecheck, lint, `npm test`) **exited 0: 64 test files, 1096 tests, all
-passing**; `npm run eval:speakers`: **11/11** trajectories (the nine from M3b plus the two reply scenarios). The
-integration suite needs the pinned `mongod` cached (see the README); nothing in the suite calls Gmail, Ollama or Docker.
-`npm run eval:triage` is the one command that calls a real model, and was run once on the fictional sample, above.
+Run on commit `1da0e02` (the last commit that changes anything but this paragraph), on a clean working tree, 2026-11-18,
+network available (not sandboxed): `npm run verify` (typecheck, lint, `npm test`) **exited 0: 67 test files, 1155 tests, all
+passing**; `npm run eval:speakers`: **11/11** trajectories. The integration suite needs the pinned `mongod` cached (see the
+README); nothing in the suite calls Gmail, Ollama or Docker. `npm run eval:triage` is the one command that calls a real model
+and was run on the fictional sample only (above; the numbers move by about a case between runs).
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
