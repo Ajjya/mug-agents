@@ -30,6 +30,13 @@ const TriageOutputBaseSchema = z
   })
   .strict();
 
+/**
+ * The same schema WITHOUT the fabrication check. The eval uses it so that a fabricated span is
+ * OBSERVED (and counted, by substring search in code) rather than silently retried away: production
+ * refuses and retries one, but the eval is measuring what the model does on its own.
+ */
+export const triageOutputLenientSchema = TriageOutputBaseSchema;
+
 export type TriageOutput = z.infer<typeof TriageOutputBaseSchema>;
 
 /** Whitespace-collapsed, case-folded: "verbatim" tolerates a client's line wrapping, not invention. */
