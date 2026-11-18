@@ -69,6 +69,10 @@ export class FakeGmail implements GmailClient {
   };
   /** The page size of listings (Gmail's max is 500); small values make a test page. */
   pageSize = 500;
+  /** What a history record CLAIMS about a message's labels, whatever the message really carries now. */
+  private readonly historyClaims = new Map<string, string[]>();
+  /** What a full fetch returns for a message's labels, when it differs from the headers (a label removed in between). */
+  private readonly fullLabels = new Map<string, string[]>();
   /** Simulates a WRONG QUERY: listings ignore the label and return every message in the mailbox. */
   ignoreLabelScope = false;
 
@@ -114,6 +118,16 @@ export class FakeGmail implements GmailClient {
   receive(message: FixtureMessage): void {
     this.messages.set(message.id, structuredClone(message));
     this.events.push({ historyId: ++this.historyId, type: 'messageAdded', messageId: message.id });
+  }
+
+  /** A history record will report these label ids for the message, whatever it carries. */
+  claimInHistory(messageId: string, labelIds: string[]): void {
+    this.historyClaims.set(messageId, labelIds);
+  }
+
+  /** The body fetch for this message reports these label ids (the headers said otherwise). */
+  changeLabelsOnFull(messageId: string, labelIds: string[]): void {
+    this.fullLabels.set(messageId, labelIds);
   }
 
   /** Every history id issued so far is now out of range (HTTP 404). */
@@ -196,7 +210,13 @@ export class FakeGmail implements GmailClient {
         const m = this.messages.get(e.messageId);
         if (!m || seen.has(e.messageId)) return [];
         seen.add(e.messageId);
-        return [{ messageId: m.id, threadId: m.threadId, labelIds: [...m.labels] }];
+        return [
+          {
+            messageId: m.id,
+            threadId: m.threadId,
+            labelIds: [...(this.historyClaims.get(m.id) ?? m.labels)],
+          },
+        ];
       });
     return Promise.resolve({ records, historyId: String(this.historyId) });
   }
@@ -206,6 +226,7 @@ export class FakeGmail implements GmailClient {
     const m = this.must(id);
     return Promise.resolve({
       ...this.toMetadata(m),
+      labelIds: [...(this.fullLabels.get(m.id) ?? m.labels)],
       bodyText: m.body,
       attachments: structuredClone(m.attachments),
     });

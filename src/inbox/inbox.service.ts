@@ -319,7 +319,8 @@ export class InboxService {
     }
     // Pass 1: what carries the label admits its thread. Pass 2: the rest, now that admission is known.
     for (const meta of metas.filter((m) => m.labelIds.includes(ctx.labelId))) {
-      await ctx.scope.admitByLabel(meta.threadId);
+      // NOT admitted here. The label seen in the headers is a claim; fetchAndStore admits the thread only
+      // after the body that comes back confirms it (otherwise its re-check would be checking itself).
       await this.fetchAndStore(meta.id, ctx, meta);
     }
     for (const meta of metas.filter((m) => !m.labelIds.includes(ctx.labelId))) {
@@ -363,6 +364,8 @@ export class InboxService {
    */
   private async processHistory(records: readonly HistoryRecord[], ctx: PollCtx): Promise<void> {
     const known = await this.deps.inbound.knownGmailIds(records.map((r) => r.messageId));
+    const claimed: MessageRef[] = [];
+    const rest: HistoryRecord[] = [];
     for (const rec of records) {
       if (ctx.seen.has(rec.messageId)) continue;
       if (known.has(rec.messageId)) {
@@ -374,22 +377,25 @@ export class InboxService {
         ctx.report.droppedExcluded++;
         continue;
       }
-      if (rec.labelIds.includes(ctx.labelId)) {
-        ctx.seen.add(rec.messageId);
-        const meta = await this.deps.gmail.getMetadata(rec.messageId);
-        await ctx.scope.admitByLabel(meta.threadId);
-        await this.fetchAndStore(meta.id, ctx, meta);
-      } else if (await ctx.scope.isAdmitted(rec.threadId)) {
-        ctx.seen.add(rec.messageId);
+      // A record that CLAIMS our label is only a claim (whether history reports a snapshot of the labels
+      // or the current ones is unverified against a real mailbox, and a label can be removed since).
+      // It goes through exactly the path the sweep uses: headers first, and admission only after the body
+      // that comes back confirms the label. It does not admit anything by itself.
+      if (rec.labelIds.includes(ctx.labelId))
+        claimed.push({ id: rec.messageId, threadId: rec.threadId });
+      else rest.push(rec);
+    }
+    await this.processLabelled(claimed, ctx);
+    for (const rec of rest) {
+      ctx.seen.add(rec.messageId);
+      if (await ctx.scope.isAdmitted(rec.threadId)) {
         await this.fetchAndStore(rec.messageId, ctx);
       } else if (rec.labelIds.includes(ctx.candidateId)) {
-        ctx.seen.add(rec.messageId);
         await this.processCandidates([{ id: rec.messageId, threadId: rec.threadId }], {
           ...ctx,
           seen: new Set(),
         });
       } else {
-        ctx.seen.add(rec.messageId);
         ctx.report.dropped++; // never fetched, headers included
       }
     }
@@ -437,6 +443,9 @@ export class InboxService {
     const { gmail } = this.deps;
     if (ctx.dry) {
       const m = meta ?? (await gmail.getMetadata(id));
+      // Dry run: the headers are all there is. A label in them admits the thread IN MEMORY, so later
+      // messages of that thread show up as they would on a real poll. Nothing is written.
+      if (m.labelIds.includes(ctx.labelId)) await ctx.scope.admitByLabel(m.threadId);
       ctx.report.wouldStore.push({
         gmailId: m.id,
         threadId: m.threadId,
@@ -446,13 +455,17 @@ export class InboxService {
       return;
     }
     const full = await gmail.getFull(id);
-    // Belt and braces: the label, or an admitted thread, on what actually came back.
-    const inScope =
-      full.labelIds.includes(ctx.labelId) || (await ctx.scope.isAdmitted(full.threadId));
+    // The re-check (spec 1.3), on what actually came back and NOT circular: the message's own labels, or
+    // an admission that already existed BEFORE this fetch. A thread is admitted by a label only after this
+    // passes, never before, so a stale claim (a history record, a label removed since the headers were
+    // read) cannot admit the thread and then pass its own check.
+    const labelledNow = full.labelIds.includes(ctx.labelId);
+    const inScope = labelledNow || (await ctx.scope.isAdmitted(full.threadId));
     if (!inScope || (await ctx.scope.isExcluded(full.threadId))) {
       ctx.report.dropped++;
       return;
     }
+    if (labelledNow) await ctx.scope.admitByLabel(full.threadId);
     if (full.labelIds.some((l) => OUTBOUND_LABELS.includes(l))) {
       ctx.report.skippedOutbound++; // our own side of the conversation is not inbound mail
       return;

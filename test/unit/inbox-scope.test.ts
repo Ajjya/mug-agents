@@ -144,6 +144,74 @@ describe('1.3 / 1.6 the history path', () => {
   });
 });
 
+describe('1.3 the re-check is not circular: a label CLAIM cannot admit a thread by itself', () => {
+  it('a history record that claims the label for a message that does not carry it admits nothing, fetches no body, sends nothing', async () => {
+    // The failing input from the review: a stale claim in the history feed. Before the fix the thread was
+    // admitted on the record's say-so, the body fetched and stored, and the full body sent to the model.
+    const h = buildInboxHarness();
+    await h.service.poll({ now: NOW });
+    const modelBefore = h.model.calls;
+    const fullBefore = h.gmail.calls.full.length;
+
+    h.gmail.receive(
+      message({ id: 'm-600', threadId: 'th-600', body: 'PRIVATE-MARKER-STALE a private message' }),
+    );
+    h.gmail.claimInHistory('m-600', ['INBOX', 'Label_1']); // the feed says labelled; the message is not
+    const report = await h.service.poll({ now: NOW });
+
+    expect(report.historyUsed).toBe(true);
+    expect(report.stored).toEqual([]);
+    expect(await h.repos.admitted.findByThreadId('th-600')).toBeNull(); // NOT admitted on a claim
+    expect(h.gmail.calls.metadata).toContain('m-600'); // verified against its own headers...
+    expect(h.gmail.calls.full.slice(fullBefore)).toEqual([]); // ...and no body was fetched
+    expect(h.model.calls).toBe(modelBefore);
+    await expectNothingPrivateLeft(h, [...PRIVATE, 'm-600']);
+
+    // And nothing later in that thread is picked up on the strength of the claim either.
+    h.gmail.receive(
+      message({ id: 'm-601', threadId: 'th-600', body: 'PRIVATE-MARKER-STALE a reply' }),
+    );
+    expect((await h.service.poll({ now: NOW })).stored).toEqual([]);
+    expect(h.gmail.calls.full).not.toContain('m-601');
+  });
+
+  it('a label seen in the HEADERS but gone when the body is fetched: dropped, and the thread is not admitted', async () => {
+    const h = buildInboxHarness();
+    h.gmail.receive(
+      message({
+        id: 'm-610',
+        threadId: 'th-610',
+        labels: ['INBOX', 'Label_1'],
+        body: 'PRIVATE-MARKER-RACE body',
+      }),
+    );
+    h.gmail.changeLabelsOnFull('m-610', ['INBOX']); // the label was removed between the two calls
+    const modelBefore = h.model.calls;
+    const report = await h.service.poll({ now: NOW });
+
+    expect(report.stored).not.toContain('m-610');
+    expect(await h.repos.inbound.findByGmailId('m-610')).toBeNull();
+    expect(await h.repos.admitted.findByThreadId('th-610')).toBeNull(); // the re-check had teeth: no admission
+    expect(h.model.prompts.slice(modelBefore).join()).not.toContain('PRIVATE-MARKER-RACE'); // nothing reached a model
+    expect(await storedEverything(h)).not.toContain('PRIVATE-MARKER-RACE');
+  });
+
+  it('but a label that is still there on the body admits the thread, after the check', async () => {
+    const h = buildInboxHarness();
+    h.gmail.receive(message({ id: 'm-620', threadId: 'th-620', labels: ['INBOX', 'Label_1'] }));
+    expect((await h.service.poll({ now: NOW })).stored).toContain('m-620');
+    expect((await h.repos.admitted.findByThreadId('th-620'))?.admittedBy).toBe('label');
+  });
+
+  it('an existing admission still lets a later unlabelled reply in (the re-check accepts a PRIOR admission)', async () => {
+    const h = buildInboxHarness();
+    await h.service.poll({ now: NOW });
+    h.gmail.receive(message({ id: 'm-630', threadId: 'th-005' }));
+    h.gmail.changeLabelsOnFull('m-630', ['INBOX']);
+    expect((await h.service.poll({ now: NOW })).stored).toEqual(['m-630']);
+  });
+});
+
 describe('1.5 a lost or expired cursor degrades to a bounded backfill over the label', () => {
   it('an expired history id falls back to the label sweep, never to the whole mailbox', async () => {
     const h = buildInboxHarness();
