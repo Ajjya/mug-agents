@@ -375,6 +375,34 @@ describe('1.1 candidates: metadata only, never a body, never a model', () => {
     expect((await h.service.listCandidates()).map((c) => c.threadId)).not.toContain('th-300');
   });
 
+  it('DECISION: a dismissed candidate that you later label mug-agents by hand is admitted (a later, stronger human decision); an exclusion is the hard stop', async () => {
+    // Dismissal refuses the LOOSE label for good. Applying the strong label afterwards is a deliberate
+    // human act, the same one that admits any thread; to refuse a thread against even that, exclude it.
+    const h = buildInboxHarness();
+    h.gmail.receive(
+      message({
+        id: 'm-310',
+        threadId: 'th-310',
+        labels: ['INBOX', 'Label_2'],
+        body: 'Body of a conference mailing.',
+      }),
+    );
+    await h.service.poll({ now: NOW });
+    await h.service.dismiss('th-310', 'a mailing');
+    expect(h.gmail.calls.full).not.toContain('m-310');
+
+    h.gmail.applyLabel('m-310', 'mug-agents'); // you decide it is MUG business after all
+    const report = await h.service.poll({ now: NOW });
+    expect(report.stored).toEqual(['m-310']);
+    expect((await h.repos.candidates.findByThreadId('th-310'))?.state).toBe('admitted');
+
+    // Whereas an exclusion beats even that.
+    h.gmail.receive(message({ id: 'm-311', threadId: 'th-311', labels: ['INBOX', 'Label_1'] }));
+    await h.service.excludeThread('th-311', 'no');
+    expect((await h.service.poll({ now: NOW })).stored).toEqual([]);
+    expect(h.gmail.calls.full).not.toContain('m-311');
+  });
+
   it('a candidate that later gets the strong label is admitted and its candidate record follows', async () => {
     const h = buildInboxHarness();
     await h.service.poll({ now: NOW });
