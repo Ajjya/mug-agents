@@ -84,8 +84,7 @@ What this does and does not say:
    fetch": a message the query should not have returned never has its body fetched at all. The body that does come back is
    checked again before it is stored.
 3. **Dismissal refuses the loose label; a later explicit `mug-agents` label admits the thread** (a later, stronger human
-   decision); `exclude-thread` is the hard stop and beats a label. The spec says dismissal is "permanent until I undo it";
-   this is my reading, tested, and worth confirming.
+   decision). **Confirmed by you on 2026-11-18.** `exclude-thread` is the hard stop and beats a label.
 4. **The history feed is filtered on what it reports.** `history.list` is unscoped by nature. A record whose labels and
    thread do not place it in scope is dropped with **no fetch, not even headers**.
 5. **Our own sent mail is not inbound.** A message carrying `SENT` or `DRAFT` is skipped (counted), not stored or triaged.

@@ -37,7 +37,7 @@ this code and by a human, never by a pattern:
 | `GMAIL_CANDIDATE_LABEL` (`mug-maybe`)             | loose filters (`from:meetup.com`, a keyword) | **headers only** (subject, sender, date): no body is fetched and no model is called. Nothing more happens until you `admit` the thread |
 
 A thread labelled both is admitted. Once any message in a thread carried `mug-agents`, or you admitted it, later
-messages in that thread are in scope even if unlabelled; `exclude-thread` revokes that, permanently, until undone.
+messages in that thread are in scope even if unlabelled; `exclude-thread` revokes that, permanently, until undone. Dismissing a candidate refuses the _loose_ label for good; labelling the thread `mug-agents` afterwards is a deliberate, stronger decision and admits it (confirmed 2026-11-18).
 
 What this means for the provider:
 

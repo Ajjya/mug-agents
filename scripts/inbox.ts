@@ -47,7 +47,8 @@ READ-ONLY. Nothing here sends, drafts or changes anything in Gmail: only gmail.r
   candidates                              threads carrying only the loose label: subject, sender, date,
                                           thread id. Metadata only: no body is ever fetched for these
   admit <threadId> [--by <name>]          let the system read a candidate thread (bodies, triage, links)
-  dismiss <threadId> [--reason "..."]     refuse a candidate for good (until: undismiss <threadId>)
+  dismiss <threadId> [--reason "..."]     refuse a candidate's loose label for good (undo: undismiss <threadId>);
+                                          labelling it mug-agents later still admits it: exclude-thread is the hard stop
   exclude-thread <threadId> --reason "..." stop reading a thread, even if labelled (until: include-thread)
   include-thread <threadId>               lift an exclusion
   list [--limit n]                        stored messages: id, date, sender, triage, link

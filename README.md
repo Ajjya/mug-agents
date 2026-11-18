@@ -580,6 +580,8 @@ pair fails the inbox's boot):
 | `GMAIL_LABEL` (e.g. `mug-agents`)          | your `+mug` filter, or you by hand           | fetch the full body, redact it, triage it (a provider call), link it |
 | `GMAIL_CANDIDATE_LABEL` (e.g. `mug-maybe`) | loose filters (`from:meetup.com`, a keyword) | **headers only**: no body is ever fetched and no model is called     |
 
+- **Dismissing** a candidate refuses the _loose_ label for good; applying `mug-agents` to that thread later is a deliberate,
+  stronger decision and admits it. To refuse a thread even against that, `exclude-thread` it.
 - Scope is the **thread**: once any message in a thread carried `mug-agents` (or you admitted it), later unlabelled
   replies are in scope. `exclude-thread` revokes that, permanently until undone, and beats a fresh label.
 - Every listing is scoped by a label **id** (the transport cannot express an unscoped list); every message has its
@@ -609,7 +611,7 @@ pair fails the inbox's boot):
 npm run inbox -- poll [--since <date>] [--dry-run]
 npm run inbox -- candidates                       # loose-label threads: subject, sender, date, thread id
 npm run inbox -- admit <threadId>                 # let the system read a candidate (stored, not inferred)
-npm run inbox -- dismiss <threadId> [--reason ..] # refuse it for good (undismiss undoes it)
+npm run inbox -- dismiss <threadId> [--reason ..] # refuse the loose label for good (undismiss undoes it)
 npm run inbox -- exclude-thread <threadId> --reason "..."   # stop reading a thread (include-thread undoes it)
 npm run inbox -- list | show <messageId> [--raw]
 npm run inbox -- link <messageId> --speaker <id> --event <id>

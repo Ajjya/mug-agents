@@ -375,7 +375,7 @@ describe('1.1 candidates: metadata only, never a body, never a model', () => {
     expect((await h.service.listCandidates()).map((c) => c.threadId)).not.toContain('th-300');
   });
 
-  it('DECISION: a dismissed candidate that you later label mug-agents by hand is admitted (a later, stronger human decision); an exclusion is the hard stop', async () => {
+  it('DECISION (confirmed 2026-11-18): a dismissed candidate that you later label mug-agents by hand is admitted (a later, stronger human decision); an exclusion is the hard stop', async () => {
     // Dismissal refuses the LOOSE label for good. Applying the strong label afterwards is a deliberate
     // human act, the same one that admits any thread; to refuse a thread against even that, exclude it.
     const h = buildInboxHarness();
