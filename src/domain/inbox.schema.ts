@@ -57,6 +57,7 @@ export const TriageSummarySchema = z
     model: nonEmpty,
   })
   .strict();
+export type Mentions = z.infer<typeof MentionsSchema>;
 export type TriageSummary = z.infer<typeof TriageSummarySchema>;
 
 // ---- inbound_messages ----
