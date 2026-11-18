@@ -7,6 +7,7 @@ import type { EventsRepository } from '../../src/repositories/events.repository.
 import type { OrganisationsRepository } from '../../src/repositories/organisations.repository.js';
 import type { SpeakersRepository } from '../../src/repositories/speakers.repository.js';
 import type { TasksRepository } from '../../src/repositories/tasks.repository.js';
+import type { GmailClient } from '../../src/inbox/gmail.transport.js';
 import { FakeGmail } from './fake-gmail.js';
 import {
   InMemoryAdmittedThreadsRepository,
@@ -91,6 +92,8 @@ export interface InboxHarness {
 
 export interface InboxHarnessOptions {
   gmail?: FakeGmail;
+  /** A different client for the service to use (the real adapter over a stub API), while `gmail` stays the lever-bearing fake. */
+  client?: GmailClient;
   config?: Partial<InboxConfig>;
   /** Repositories shared with another harness (the Speakers agent's), so a reply the inbox links is seen by it. */
   shared?: {
@@ -128,7 +131,7 @@ export function buildInboxHarness(options: InboxHarnessOptions = {}): InboxHarne
       logger: { log: () => undefined, warn: () => undefined },
     });
   const deps: InboxDeps = {
-    gmail,
+    gmail: options.client ?? gmail,
     inbound: repos.inbound,
     admitted: repos.admitted,
     excluded: repos.excluded,
