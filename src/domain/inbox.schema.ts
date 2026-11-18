@@ -240,6 +240,13 @@ export const InboxCursorInputSchema = z
     key: z.literal('gmail'),
     /** `users.getProfile` historyId captured BEFORE the last sweep, so nothing slips between. */
     historyId: nonEmpty.optional(),
+    /**
+     * The Gmail label IDS the two configured names resolved to on the first real poll. Names can be
+     * renamed or recreated, and a different label could then carry the name (a candidate label renamed to
+     * the strong one would admit every candidate): a change is refused until the human confirms it.
+     */
+    labelId: nonEmpty.optional(),
+    candidateLabelId: nonEmpty.optional(),
     lastPollAt: isoDate.optional(),
     lastHistoryExpiredAt: isoDate.optional(),
   })

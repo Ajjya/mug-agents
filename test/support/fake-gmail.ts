@@ -138,6 +138,21 @@ export class FakeGmail implements GmailClient {
     this.injected.set(this.labelId(labelName), messageIds);
   }
 
+  /** The label with this NAME now has a different id (renamed, or deleted and recreated). Messages keep their old ids. */
+  reassignLabelId(labelName: string, newId: string): void {
+    const l = this.labels.find((x) => x.name.toLowerCase() === labelName.toLowerCase());
+    if (!l) throw new Error(`no label ${labelName}`);
+    l.id = newId;
+  }
+
+  /** Two label names swap ids (a candidate label renamed to the strong name, and the reverse). */
+  swapLabelIds(a: string, b: string): void {
+    const x = this.labels.find((l) => l.name === a);
+    const y = this.labels.find((l) => l.name === b);
+    if (!x || !y) throw new Error('no such labels');
+    [x.id, y.id] = [y.id, x.id];
+  }
+
   /** A history record will report these label ids for the message, whatever it carries. */
   claimInHistory(messageId: string, labelIds: string[]): void {
     this.historyClaims.set(messageId, labelIds);

@@ -56,6 +56,8 @@ export interface PollOptions {
   /** Report what would be stored: reads headers only, fetches no body, calls no model, writes nothing. */
   dryRun?: boolean;
   now?: Date;
+  /** Accept that the configured label names now resolve to different Gmail labels, and pin the new ids. */
+  repinLabels?: boolean;
 }
 
 export interface PollReport {
@@ -87,6 +89,19 @@ export class InboxLabelMissingError extends Error {
       `The Gmail label "${label}" does not exist. Create it in Gmail first: an absent label is an error, never "everything".`,
     );
     this.name = 'InboxLabelMissingError';
+  }
+}
+
+/** A configured label name now resolves to a different Gmail label than the one this mailbox was pinned to. */
+export class InboxLabelChangedError extends Error {
+  constructor(
+    public readonly labelName: string,
+    which: 'GMAIL_LABEL' | 'GMAIL_CANDIDATE_LABEL',
+  ) {
+    super(
+      `The Gmail label "${labelName}" (${which}) is a different label than the one this mailbox was first polled with: it was renamed or recreated. Nothing was listed. If that is intended, run "inbox poll --repin-labels"; if not, fix the labels in Gmail.`,
+    );
+    this.name = 'InboxLabelChangedError';
   }
 }
 
@@ -216,6 +231,14 @@ export class InboxService {
     if (candidateId === null) throw new InboxLabelMissingError(config.candidateLabel);
 
     const cursor = await this.deps.cursor.get();
+    // Pinned by ID, checked BEFORE anything is listed: a label renamed or recreated since the first poll
+    // must not quietly give another label the admitting (or the candidate) role.
+    if (!options.repinLabels) {
+      if (cursor?.labelId && cursor.labelId !== labelId)
+        throw new InboxLabelChangedError(config.label, 'GMAIL_LABEL');
+      if (cursor?.candidateLabelId && cursor.candidateLabelId !== candidateId)
+        throw new InboxLabelChangedError(config.candidateLabel, 'GMAIL_CANDIDATE_LABEL');
+    }
     const headHistoryId = await gmail.getCurrentHistoryId();
     const after = options.since ? gmailDate(options.since) : undefined;
     const scope = new Scope(this.deps, dry, now);
@@ -242,11 +265,11 @@ export class InboxService {
     }
 
     // ---- 6: later replies in admitted threads ----
-    await this.processAdmittedThreads(ctx);
+    await this.processAdmittedThreads(ctx, report.historyExpired);
 
     if (!dry) {
       await this.triagePending(report);
-      await this.saveCursor(headHistoryId, now, report.historyExpired);
+      await this.saveCursor(headHistoryId, now, report.historyExpired, { labelId, candidateId });
     }
     this.deps.log('inbox poll', {
       stored: report.stored.length,
@@ -405,7 +428,7 @@ export class InboxService {
   }
 
   /** Admitted threads with recent activity are checked for later replies that carry no label. */
-  private async processAdmittedThreads(ctx: PollCtx): Promise<void> {
+  private async processAdmittedThreads(ctx: PollCtx, ignoreWindow: boolean): Promise<void> {
     const { config } = this.deps;
     const cutoff = ctx.now.getTime() - config.threadSweepDays * DAY_MS;
     const activity = new Map<string, number>();
@@ -416,7 +439,9 @@ export class InboxService {
     }
     for (const id of ctx.scope.wouldAdmitThreads()) activity.set(id, ctx.now.getTime());
     const threads = [...activity.entries()]
-      .filter(([, last]) => last >= cutoff)
+      // With a lost history cursor nothing else would find a late reply in a quiet thread, so the
+      // recency window is set aside (the per-poll count limit still bounds it).
+      .filter(([, last]) => ignoreWindow || last >= cutoff)
       .sort((a, b) => b[1] - a[1])
       .slice(0, config.threadSweepMax)
       .map(([id]) => id);
@@ -644,10 +669,17 @@ export class InboxService {
     });
   }
 
-  private async saveCursor(historyId: string, now: Date, expired: boolean): Promise<void> {
+  private async saveCursor(
+    historyId: string,
+    now: Date,
+    expired: boolean,
+    pins: { labelId: string; candidateId: string },
+  ): Promise<void> {
     const current = await this.deps.cursor.get();
     const patch = {
       historyId,
+      labelId: pins.labelId,
+      candidateLabelId: pins.candidateId,
       lastPollAt: now.toISOString(),
       ...(expired ? { lastHistoryExpiredAt: now.toISOString() } : {}),
     };

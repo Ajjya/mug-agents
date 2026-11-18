@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { InboxLabelChangedError } from '../../src/inbox/inbox.service.js';
 import { ProviderError } from '../../src/llm/model.types.js';
 import { type FixtureMessage, FakeGmail } from '../support/fake-gmail.js';
 import { type InboxHarness, buildInboxHarness } from '../support/inbox-harness.js';
@@ -660,6 +661,78 @@ describe('our own sent mail is not inbound: its body is never fetched (review: i
     );
     await h.service.poll({ now: NOW });
     expect(h.gmail.calls.full.slice(fullBefore)).toEqual([]);
+  });
+});
+
+describe('labels are pinned by ID, not trusted by name (review)', () => {
+  it('a candidate label renamed to the strong name is refused before anything is listed', async () => {
+    const h = buildInboxHarness();
+    await h.service.poll({ now: NOW });
+    expect((await h.repos.cursor.get())?.labelId).toBe('Label_1'); // pinned on the first real poll
+    expect((await h.repos.cursor.get())?.candidateLabelId).toBe('Label_2');
+
+    h.gmail.swapLabelIds('mug-agents', 'mug-maybe'); // the names now point at each other's labels
+    const listsBefore = h.gmail.calls.list.length;
+    const fullBefore = h.gmail.calls.full.length;
+    await expect(h.service.poll({ now: NOW })).rejects.toBeInstanceOf(InboxLabelChangedError);
+    expect(h.gmail.calls.list.length).toBe(listsBefore); // nothing listed
+    expect(h.gmail.calls.full.length).toBe(fullBefore); // nothing fetched: the candidates were NOT admitted
+    expect(await h.repos.inbound.findByGmailId('m-004')).toBeNull();
+  });
+
+  it('a deleted and recreated label is refused too, with a message that says how to confirm it', async () => {
+    const h = buildInboxHarness();
+    await h.service.poll({ now: NOW });
+    h.gmail.reassignLabelId('mug-agents', 'Label_99');
+    await expect(h.service.poll({ now: NOW })).rejects.toThrow(/--repin-labels/);
+  });
+
+  it('a change to the CANDIDATE label alone is refused as well (and names that setting)', async () => {
+    const h = buildInboxHarness();
+    await h.service.poll({ now: NOW });
+    h.gmail.reassignLabelId('mug-maybe', 'Label_88');
+    await expect(h.service.poll({ now: NOW })).rejects.toThrow(/GMAIL_CANDIDATE_LABEL/);
+  });
+
+  it('--repin-labels accepts the change and pins the new ids; a dry run pins nothing', async () => {
+    const h = buildInboxHarness();
+    await h.service.poll({ now: NOW });
+    h.gmail.reassignLabelId('mug-agents', 'Label_99');
+    await h.service.poll({ now: NOW, dryRun: true, repinLabels: true });
+    expect((await h.repos.cursor.get())?.labelId).toBe('Label_1'); // dry run wrote nothing
+    await h.service.poll({ now: NOW, repinLabels: true });
+    expect((await h.repos.cursor.get())?.labelId).toBe('Label_99');
+    await expect(h.service.poll({ now: NOW })).resolves.toBeDefined(); // and the next ordinary poll is fine
+  });
+
+  it('a dry run on a first poll pins nothing', async () => {
+    const h = buildInboxHarness();
+    await h.service.poll({ now: NOW, dryRun: true });
+    expect(await h.repos.cursor.get()).toBeNull();
+  });
+});
+
+describe('a lost history cursor also widens the admitted-thread sweep (review)', () => {
+  const LATER = new Date('2027-03-01T12:00:00.000Z'); // 120 days after the first poll: outside the 60-day window
+
+  it('a late unlabelled reply in a QUIET admitted thread is found when the cursor expired', async () => {
+    const h = buildInboxHarness();
+    await h.service.poll({ now: NOW });
+    h.gmail.receive(message({ id: 'm-900', threadId: 'th-005', body: 'A very late reply.' }));
+    h.gmail.expireHistory(); // history can no longer say it; the 60-day window would skip th-005
+    const report = await h.service.poll({ now: LATER });
+    expect(report.historyExpired).toBe(true);
+    expect(report.stored).toEqual(['m-900']);
+    expect(h.gmail.calls.thread).toContain('th-005');
+  });
+
+  it('with a good cursor the window still applies: a quiet thread is not re-listed', async () => {
+    const h = buildInboxHarness();
+    await h.service.poll({ now: NOW });
+    const threadsBefore = h.gmail.calls.thread.length;
+    const report = await h.service.poll({ now: LATER });
+    expect(report.historyExpired).toBe(false);
+    expect(h.gmail.calls.thread.slice(threadsBefore)).toEqual([]);
   });
 });
 

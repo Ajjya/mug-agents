@@ -17,6 +17,7 @@ import { GMAIL_SCOPES } from '../src/inbox/inbox.config.js';
 import { INBOX_CONFIG, InboxModule, TRIAGER } from '../src/inbox/inbox.module.js';
 import {
   InboxInputError,
+  InboxLabelChangedError,
   InboxLabelMissingError,
   InboxService,
 } from '../src/inbox/inbox.service.js';
@@ -44,7 +45,8 @@ const USAGE = `Usage: npm run inbox -- <command> [options]
 
 READ-ONLY. Nothing here sends, drafts or changes anything in Gmail: only gmail.readonly is ever requested.
 
-  poll [--since <date>] [--dry-run]       sweep the mug-agents label, store, triage, link.
+  poll [--since <date>] [--dry-run] [--repin-labels]
+                                          sweep the mug-agents label, store, triage, link.
                                           --dry-run prints what it WOULD store (headers only: no body is
                                           fetched, no model is called, nothing is written)
   candidates                              threads carrying only the loose label: subject, sender, date,
@@ -73,6 +75,7 @@ const { values, positionals } = parseArgs({
   options: {
     since: { type: 'string' },
     'dry-run': { type: 'boolean' },
+    'repin-labels': { type: 'boolean' },
     by: { type: 'string' },
     reason: { type: 'string' },
     limit: { type: 'string' },
@@ -204,7 +207,11 @@ async function runAuth(): Promise<number> {
 }
 
 const handle = (err: unknown): number | undefined => {
-  if (err instanceof InboxLabelMissingError || err instanceof InboxInputError) {
+  if (
+    err instanceof InboxLabelMissingError ||
+    err instanceof InboxLabelChangedError ||
+    err instanceof InboxInputError
+  ) {
     console.error(err.message);
     return 2;
   }
@@ -258,6 +265,7 @@ if (command === 'auth') {
           const r = await inbox.poll({
             ...(values.since ? { since: values.since } : {}),
             dryRun: values['dry-run'] === true,
+            ...(values['repin-labels'] ? { repinLabels: true } : {}),
           });
           if (values['dry-run']) {
             console.log(
