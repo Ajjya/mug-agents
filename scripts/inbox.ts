@@ -21,8 +21,10 @@ import {
 } from '../src/inbox/inbox.service.js';
 import {
   CONTACTS_REPOSITORY,
+  EXCLUDED_THREADS_REPOSITORY,
   INBOUND_MESSAGES_REPOSITORY,
   type ContactsRepository,
+  type ExcludedThreadsRepository,
   type InboundMessagesRepository,
 } from '../src/inbox/repositories.js';
 import type { Triager } from '../src/inbox/triage.js';
@@ -386,6 +388,9 @@ if (command === 'auth') {
                 strict: false,
               }),
               contacts: app.get<ContactsRepository>(CONTACTS_REPOSITORY, { strict: false }),
+              excluded: app.get<ExcludedThreadsRepository>(EXCLUDED_THREADS_REPOSITORY, {
+                strict: false,
+              }),
               triager: app.get<Triager>(TRIAGER, { strict: false }),
             },
             {
@@ -395,7 +400,7 @@ if (command === 'auth') {
             },
           );
           console.log(
-            `Wrote ${String(r.written.length)} golden file(s) to ${values.out}; already exported ${String(r.skippedAlreadyExported)}; left alone (exist) ${String(r.skippedExisting)}.`,
+            `Wrote ${String(r.written.length)} golden file(s) to ${values.out}; already exported ${String(r.skippedAlreadyExported)}; left alone (exist) ${String(r.skippedExisting)}; skipped (excluded threads) ${String(r.skippedExcluded)}.`,
           );
           console.log(
             `Every label is "unverified". Correct the files, mark each field "verified", then: npm run inbox -- check-golden ${values.out}`,

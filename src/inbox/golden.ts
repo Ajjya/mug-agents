@@ -13,7 +13,11 @@ import type { SpeakersRepository } from '../repositories/speakers.repository.js'
 import type { OrganisationsRepository } from '../repositories/organisations.repository.js';
 import { allPages } from '../agents/planner/plan-persistence.js';
 import { PseudonymMapSchema, Pseudonymiser, emptyMap } from './anonymise.js';
-import type { ContactsRepository, InboundMessagesRepository } from './repositories.js';
+import type {
+  ContactsRepository,
+  ExcludedThreadsRepository,
+  InboundMessagesRepository,
+} from './repositories.js';
 import type { Triager } from './triage.js';
 
 /**
@@ -180,6 +184,8 @@ export interface ExportDeps {
   speakers: SpeakersRepository;
   organisations: OrganisationsRepository;
   contacts: ContactsRepository;
+  /** Excluded threads are not exported: nothing further from them is read, triaged or copied. */
+  excluded: ExcludedThreadsRepository;
   triager: Triager;
 }
 
@@ -195,6 +201,7 @@ export interface ExportReport {
   written: string[];
   skippedExisting: number;
   skippedAlreadyExported: number;
+  skippedExcluded: number;
 }
 
 const extOf = (filename: string): string => /\.[A-Za-z0-9]{1,8}$/.exec(filename)?.[0] ?? '';
@@ -238,11 +245,20 @@ export async function exportGolden(
     pseud.address(c.address);
   }
 
-  const report: ExportReport = { written: [], skippedExisting: 0, skippedAlreadyExported: 0 };
+  const report: ExportReport = {
+    written: [],
+    skippedExisting: 0,
+    skippedAlreadyExported: 0,
+    skippedExcluded: 0,
+  };
   let counter = Object.keys(stored.exported).length;
   for (const m of await deps.inbound.findRecent(options.limit ?? 500)) {
     if (stored.exported[m.gmailId]) {
       report.skippedAlreadyExported++;
+      continue;
+    }
+    if ((await deps.excluded.findByThreadId(m.threadId))?.status === 'excluded') {
+      report.skippedExcluded++;
       continue;
     }
     const raw = await deps.inbound.getRawBody(m._id);

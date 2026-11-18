@@ -71,6 +71,8 @@ export interface PollReport {
   triageFailed: number;
   /** Left pending because the provider was unavailable; retried on the next poll. */
   triagePending: number;
+  /** Pending messages left alone because their thread has been excluded since they were stored. */
+  triageSkippedExcluded: number;
   historyUsed: boolean;
   historyExpired: boolean;
   /** The label sweep hit GMAIL_SWEEP_MAX_PAGES: older labelled mail may not have been listed. */
@@ -105,6 +107,7 @@ const emptyReport = (): PollReport => ({
   triaged: 0,
   triageFailed: 0,
   triagePending: 0,
+  triageSkippedExcluded: 0,
   historyUsed: false,
   historyExpired: false,
   sweepTruncated: false,
@@ -531,8 +534,15 @@ export class InboxService {
   // =============================================================================================
 
   /** Triages whatever is pending. The model sees the REDACTED body, which is what is stored. */
-  private async triagePending(report: PollReport): Promise<void> {
-    for (const m of await this.deps.inbound.findByTriageState('pending', 200)) {
+  private async triagePending(report: PollReport, only?: readonly InboundMessage[]): Promise<void> {
+    for (const m of only ?? (await this.deps.inbound.findByTriageState('pending', 200))) {
+      // Exclusion is checked HERE, at the moment of the provider call, not when the message was stored:
+      // a thread excluded after its messages were stored (while the provider was down, say) must not
+      // have its body sent afterwards. The message stays as it is; lifting the exclusion lets it proceed.
+      if ((await this.deps.excluded.findByThreadId(m.threadId))?.status === 'excluded') {
+        report.triageSkippedExcluded++;
+        continue;
+      }
       try {
         const out = await this.deps.triager.run(m.bodyRedacted, m.attachments);
         const triagedAt = new Date().toISOString();
@@ -733,8 +743,14 @@ export class InboxService {
     if (!message) throw new InboxInputError(`No inbound message ${messageId}`);
     if (message.triageState === 'done')
       throw new InboxInputError('Triage already succeeded for this message.');
-    await this.deps.inbound.update(messageId, { triageState: 'pending' });
-    await this.triagePending(emptyReport());
+    if ((await this.deps.excluded.findByThreadId(message.threadId))?.status === 'excluded') {
+      throw new InboxInputError(
+        `Thread ${message.threadId} is excluded: nothing from it is triaged. Run include-thread first.`,
+      );
+    }
+    const pending = await this.deps.inbound.update(messageId, { triageState: 'pending' });
+    // Only this message: a retry does not re-triage everything else that happens to be pending.
+    await this.triagePending(emptyReport(), [pending ?? message]);
     return (await this.deps.inbound.findById(messageId)) ?? message;
   }
 }

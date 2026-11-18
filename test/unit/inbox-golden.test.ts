@@ -17,6 +17,7 @@ import type { Triager } from '../../src/inbox/triage.js';
 import { inboundInput } from '../support/inbox-fixtures.js';
 import {
   InMemoryContactsRepository,
+  InMemoryExcludedThreadsRepository,
   InMemoryInboundMessagesRepository,
   InMemoryOrganisationsRepository,
   InMemorySpeakersRepository,
@@ -214,6 +215,7 @@ describe('export-golden', () => {
     const speakers = new InMemorySpeakersRepository();
     const organisations = new InMemoryOrganisationsRepository();
     const contacts = new InMemoryContactsRepository();
+    const excluded = new InMemoryExcludedThreadsRepository();
     await speakers.insert({
       name: 'Rui Alves',
       email: 'rui@real-speakers.com',
@@ -249,7 +251,7 @@ describe('export-golden', () => {
         triageState: 'pending',
       }),
     );
-    return { inbound, speakers, organisations, contacts };
+    return { inbound, speakers, organisations, contacts, excluded };
   }
 
   it('writes anonymised files with every label unverified, the seeding model, and no real name or address', async () => {
@@ -343,6 +345,24 @@ describe('export-golden', () => {
     expect(calls.join()).not.toContain('Tel +351');
   });
 
+  it('an EXCLUDED thread is not exported: not read, not triaged, not copied (review finding)', async () => {
+    const w = await world();
+    await w.excluded.insert({
+      threadId: 't-1',
+      reason: 'not MUG',
+      excludedAt: '2026-11-01T00:00:00.000Z',
+      status: 'excluded',
+    });
+    const calls: string[] = [];
+    const out = tmp();
+    const report = await exportGolden({ ...w, triager: stubTriager(calls) }, { outDir: out });
+    expect(report.skippedExcluded).toBe(1);
+    expect(report.written).toHaveLength(1); // only t-2
+    expect(calls).toHaveLength(1);
+    expect(calls.join()).not.toContain('Real Employer'); // t-1's text never reached the triager
+    expect(w.inbound.rawBodyReads).toHaveLength(1); // and its raw body was never even read
+  });
+
   it('with no proposal at all, the safe proposal is "a human should look"', async () => {
     const w = await world();
     const failing = {
@@ -377,6 +397,7 @@ describe('real mail is only written where git ignores it', () => {
       speakers: new InMemorySpeakersRepository(),
       organisations: new InMemoryOrganisationsRepository(),
       contacts: new InMemoryContactsRepository(),
+      excluded: new InMemoryExcludedThreadsRepository(),
       triager: { run: () => Promise.reject(new Error('must not run')) } as unknown as Triager,
     };
     await expect(exportGolden(w, { outDir: 'src/zz-golden-output' })).rejects.toBeInstanceOf(

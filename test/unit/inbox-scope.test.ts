@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { ProviderError } from '../../src/llm/model.types.js';
 import { type FixtureMessage, FakeGmail } from '../support/fake-gmail.js';
 import { type InboxHarness, buildInboxHarness } from '../support/inbox-harness.js';
 
@@ -275,6 +276,50 @@ describe('1a scope is the thread, not the message', () => {
     expect(h.gmail.calls.metadata).not.toContain('m-123'); // not even headers
     expect(h.gmail.calls.thread.slice(threadsBefore)).not.toContain('th-001'); // thread not listed
     expect(h.model.calls).toBe(modelBefore);
+  });
+
+  it('a message stored while the provider was DOWN is not triaged once its thread is excluded', async () => {
+    // The failing input from the review: the body is stored, triage stays pending, you exclude the thread,
+    // and the next poll used to send its redacted body to the provider.
+    const h = buildInboxHarness();
+    h.model.fail = new ProviderError('unavailable', 'HTTP 503', 503);
+    await h.service.poll({ now: NOW });
+    expect((await h.repos.inbound.findByTriageState('pending', 50)).length).toBe(3);
+
+    await h.service.excludeThread('th-001', 'not MUG business after all'); // m-001 and m-006 are in th-001
+    h.model.fail = undefined;
+    const promptsBefore = h.model.prompts.length;
+    const report = await h.service.poll({ now: NOW });
+
+    const sent = h.model.prompts.slice(promptsBefore).join('\n');
+    expect(sent).not.toContain('Yes, I would love to speak'); // m-001's body: COUNTED, never sent
+    expect(sent).not.toContain('Here are my bio and photo'); // m-006's
+    expect(sent).toContain('Kettle Room is free'); // m-005 (th-005) is not excluded and IS triaged
+    expect(h.model.prompts.length - promptsBefore).toBe(1);
+    expect(report.triageSkippedExcluded).toBe(2);
+    // They stay pending, untouched; lifting the exclusion lets them proceed.
+    expect((await h.repos.inbound.findByGmailId('m-001'))?.triageState).toBe('pending');
+    await h.service.includeThread('th-001');
+    expect((await h.service.poll({ now: NOW })).triaged).toBe(2);
+  });
+
+  it('retry-triage refuses an excluded thread, and re-triages only the message asked for', async () => {
+    const h = buildInboxHarness();
+    h.model.queue = Array.from({ length: 12 }, () => () => 'not json'); // every first-poll triage fails
+    await h.service.poll({ now: NOW });
+    const failed = await h.repos.inbound.findByTriageState('failed', 50);
+    expect(failed.length).toBe(3);
+    const target = failed.find((m) => m.gmailId === 'm-005');
+    const other = failed.find((m) => m.gmailId === 'm-001');
+
+    await h.service.excludeThread('th-001', 'no');
+    await expect(h.service.retryTriage(other?._id ?? '')).rejects.toThrow(/excluded/);
+
+    h.model.queue = []; // the model behaves again: one attempt per retried message
+    const before = h.model.prompts.length;
+    await h.service.retryTriage(target?._id ?? '');
+    expect(h.model.prompts.length - before).toBe(1); // one message, not "everything pending"
+    expect(h.model.prompts.slice(before).join('')).not.toContain('Yes, I would love to speak');
   });
 
   it('lifting the exclusion brings the thread back, and says so in the record (nothing deleted)', async () => {
