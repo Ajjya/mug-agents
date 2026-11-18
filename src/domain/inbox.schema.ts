@@ -88,7 +88,7 @@ export const InboundMessageInputSchema = z
     from: AddressSchema,
     to: z.array(AddressSchema),
     subject: z.string(),
-    /** The full body. Reachable ONLY through InboundMessagesRepository.getRawBody. */
+    /** The full body. Reachable only through the inbox repository's one explicit raw-body accessor. */
     bodyText: z.string(),
     /** Exactly what the provider received (redacted, bounded). */
     bodyRedacted: z.string(),
