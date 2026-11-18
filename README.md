@@ -592,6 +592,13 @@ pair fails the inbox's boot):
   `GMAIL_SWEEP_MAX_PAGES` (500 ids a page), and the unique `gmailId` absorbs the repeats. `history.list` is an
   optimisation for later unlabelled replies; an expired history id (HTTP 404) falls back to the bounded label sweep,
   never to the mailbox. Cost: one id-list call per 500 labelled messages per poll.
+- **Labels are pinned by Gmail id** on the first real poll. If a configured name later resolves to a different label (a
+  `mug-maybe` renamed to `mug-agents` would otherwise admit every candidate), the poll is refused before listing anything:
+  confirm with `npm run inbox -- poll --repin-labels`.
+- **Unverified against a real mailbox** (asserted from the docs and the code, to be checked on your first dry-run): whether
+  `history.list` reports a snapshot of a message's labels or the current ones (the code no longer depends on it: a label claim
+  admits nothing until the fetched body confirms it); whether `format=metadata` also returns a snippet (never read); and
+  whether European-Portuguese Gmail writes `No dia ... escreveu:` for a quoted reply (it is recognised, but I could not confirm it).
 - Raw mail is untrusted data. The full body is stored (`inbound_messages`, `personal`) behind **one** accessor that only
   the inbox module and its CLI may call; the triage call gets the **redacted** body, has no tools, and returns a strict
   schema. Nothing downstream reads a raw body. What leaves the machine is in [docs/data-handling.md](docs/data-handling.md).

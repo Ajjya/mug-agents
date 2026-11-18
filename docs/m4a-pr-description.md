@@ -71,6 +71,10 @@ What this does and does not say:
   production a failed triage still stores the message, sets `lastInboundAt`, and raises a task: the failure costs a human
   glance, never a chase.
 - **No fabricated spans from any model** (0 spans outside the text), so the production refusal-and-retry rule was not exercised here.
+- **The numbers do not reproduce exactly between runs.** A reviewer's re-run gave gpt-oss:20b intent 70% where mine gave 80%
+  (a one-case difference). Temperature is 0, but the cloud is not deterministic, and with 10 messages one case is 10%.
+  Read these as "same order of magnitude", not as two decimal places. A re-run also overwrote the committed report, so
+  the runner now writes to the next free name (`report-<date>-2.md`) instead of replacing one.
 - **Fictional, hand-labelled, 10 messages.** The real number comes from your set, built with `export-golden`: that will be
   anchored on whichever model seeds it, which is why every field must be verified and other models measured against it.
 
@@ -104,6 +108,52 @@ What this does and does not say:
     retries; the eval counts it on the first valid answer, so it shows what the model does on its own.
 11. **`inbox auth` is an addition** (the first real run needs a refresh token). It prints the token once to the terminal and
     never logs it.
+
+## Review round (all findings fixed, one commit each)
+
+An independent review found four blocking issues in section 1 territory, plus medium and small ones. Every one has a test
+that fails without its fix; each fix was mutation-checked, and where a first mutation silently did not apply (Prettier had
+reflowed the line) I redid it against the real text.
+
+**Blocking**
+
+1. **An excluded thread's body still reached the model.** Triage, `retry-triage` and `export-golden` never checked
+   exclusion. A message stored while the provider was down stayed pending, you ran `exclude-thread`, and the next poll sent
+   its redacted body anyway; `data-handling.md` said otherwise. Exclusion is now checked at the moment of the provider call;
+   `retry-triage` refuses an excluded thread (and no longer re-triages everything pending); `export-golden` skips them.
+2. **A history record's label claim admitted a thread** before anything checked the message. Reproduced: the thread was
+   admitted, the body fetched and stored, and the full body sent to the model. Claims now go through the same verified path
+   as the sweep. **4.** The spec 1.3 post-fetch re-check was **circular** (the thread was admitted just before it, so it
+   passed trivially) and untested. A thread is now admitted by the label only _after_ the body confirms it, and a test where
+   the label is gone by the fetch proves the check has teeth.
+3. **A candidate body fetch through the history path was untested.** Testing it properly turned up a real hole: **the
+   candidate path trusted its listing**, so a wrong candidate query (or a stale history claim) recorded a private message's
+   _subject and sender_ in `candidate_threads`. The earlier wrong-query test never saw it (the strong-label pass happened to mark
+   those ids as seen first). The candidate label is now verified in the message's own headers; proved red before fixing.
+   Each path to a body now has its own test; the pass-2 drop that one test protected is caught by three.
+
+**Medium**
+
+- **Secrets in thrown errors** (spec 4): a failed token exchange put the refresh token in the error's inspected properties.
+  Errors are now rebuilt from scratch (operation, HTTP status, scrubbed message); every client call and the `auth` exchange
+  go through it. The test serialises message, stack, `util.inspect` with hidden properties and JSON.
+- **Redaction missed quote markers** (each leaks a whole quoted thread): `No dia ... escreveu:`, German `schrieb`, Dutch
+  `schreef`, Italian, `-----Mensagem Original-----`, forwarded-message lines, bold `**De:**` and German header blocks.
+  Eleven cases red first; a test lists prose that resembles a marker and must not be cut.
+- **Reply threading data for M4b**: `References`, `In-Reply-To`, `Reply-To` and `Cc` are now requested and stored.
+- **Own sent mail was fetched on every poll** (and discarded): skipped before any body fetch.
+
+**Small**
+
+- Labels are **pinned by Gmail id** (a renamed or recreated label is refused until `--repin-labels`).
+- An **expired history cursor widens the admitted-thread sweep** (a late reply in a quiet thread was missed for good).
+- The scope guarantee is now **also counted at the real client layer** (a stub of the Gmail API itself under the real
+  adapter). Shown to matter: an adapter bug that asks for `format=full` on a metadata call is caught only there.
+- **`poll --dry-run` output is under test** (it prints no private subject, sender or address; what was set aside is a count).
+
+**Still unverified against a real mailbox** (stated, not asserted): history snapshot vs current labels, whether a metadata
+fetch returns a snippet, how the history 404's body looks, and whether pt-PT Gmail writes `No dia ... escreveu:`. The
+first dry-run is where these get checked.
 
 ## Tests, and what the mutations said
 

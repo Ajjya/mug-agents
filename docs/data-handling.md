@@ -50,6 +50,18 @@ What this means for the provider:
   lines), the signature after `-- `, phone numbers, postal-address lines and email addresses. The text is then bounded
   to `TRIAGE_MAX_CHARS`, cut from the end with a marker. The redacted text is stored beside the full body, so the
   eval and any dispute can see exactly what the model was given.
+- **Exclusion holds at the moment of the provider call.** A message stored while the provider was down stays pending;
+  if its thread is excluded afterwards, it is not triaged (the check is made when the call would be made, not when the
+  message was stored), `retry-triage` refuses it, and `export-golden` skips it. Tested by counting model calls.
+- **Admission needs a confirmed label.** A thread is admitted by the label only after the body that comes back
+  confirms it (or by an earlier admission). A label _claimed_ by a listing or a history record, or seen in the headers and
+  gone by the fetch, admits nothing. The candidate label is verified in the message's own headers too: a wrong listing
+  cannot put a private message's subject or sender into `candidate_threads`.
+- **Labels are pinned by Gmail id** on the first real poll; a name that later resolves to a different label (renamed,
+  recreated, swapped) is refused before anything is listed, until you confirm with `--repin-labels`.
+- **Our own sent mail** (`SENT`, `DRAFT`) is skipped before any body fetch.
+- **Errors:** a failed Gmail or OAuth call throws a fresh error with an operation, an HTTP status and a scrubbed message
+  (known secrets and token shapes removed); the original, which carries the request, is never attached.
 - **Not stripped:** the substance. "I can't make it, I'm having surgery that week" is exactly what triage is for, and
   cannot be removed and still classified. Redaction is hygiene, not a guarantee; the guarantee is that you choose
   what the system sees.

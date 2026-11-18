@@ -1,4 +1,5 @@
 import 'reflect-metadata';
+import { existsSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
@@ -145,14 +146,20 @@ async function main(): Promise<number> {
     baselines: baselines(golden),
     scores,
   });
-  const out =
-    values.out ??
-    fileURLToPath(
-      new URL(
-        `../../../evals/triage/report-${date}${values.real ? '-real' : ''}.md`,
-        import.meta.url,
-      ),
-    );
+  // A report that exists is never overwritten (a re-run, or a reviewer's, must not replace the committed one):
+  // the next free name is used instead (report-<date>-2.md, -3, ...).
+  const base = fileURLToPath(
+    new URL(`../../../evals/triage/report-${date}${values.real ? '-real' : ''}`, import.meta.url),
+  );
+  let out = values.out ?? `${base}.md`;
+  for (let n = 2; !values.out && existsSync(out); n++) out = `${base}-${String(n)}.md`;
+
+  fileURLToPath(
+    new URL(
+      `../../../evals/triage/report-${date}${values.real ? '-real' : ''}.md`,
+      import.meta.url,
+    ),
+  );
   await writeFile(out, report);
   console.log(`\n${report}\nWritten to ${out}`);
   return 0;
