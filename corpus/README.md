@@ -18,11 +18,20 @@ Both roots have the same layout; every command takes the root as an argument (`-
 ## manifest.json
 
 ```json
-{ "documents": [
-  { "path": "abstracts/x.md", "kind": "abstract", "classification": "public",
-    "date": "2026-03-12", "speaker": "zara-quillfeather", "sourceUrl": "https://...",
-    "eventId": "...", "organisationId": "..." }
-] }
+{
+  "documents": [
+    {
+      "path": "abstracts/x.md",
+      "kind": "abstract",
+      "classification": "public",
+      "date": "2026-03-12",
+      "speaker": "zara-quillfeather",
+      "sourceUrl": "https://...",
+      "eventId": "...",
+      "organisationId": "..."
+    }
+  ]
+}
 ```
 
 - `kind`: `event | post | abstract | note | host_note`.
@@ -36,3 +45,13 @@ Both roots have the same layout; every command takes the root as an argument (`-
 `{ "speakers": [ { "handle", "name", "topics", "links", "perEvent" } ] }`. No email addresses in git.
 Seeded by `npm run seed-speakers -- --corpus <root>`, idempotent by handle. Seeding fails if the manifest
 references a handle the seed does not define.
+
+## inbox-golden/ (a different dataset, not corpus documents)
+
+`corpus/sample/inbox-golden/` holds ten **fictional** emails with hand-written, verified labels for the inbox triage
+eval (`npm run inbox -- check-golden corpus/sample/inbox-golden`, `npm run eval:triage`). They are JSON, not markdown,
+so ingestion ignores them, and nothing here is ever indexed. Every name, company and address is invented, the bodies
+keep quoted history, signatures, phone numbers and postal lines on purpose (the eval runs the real redaction on them),
+and the labels were written by hand, not seeded by a model. Your real set (anonymised mail you have corrected) goes in
+`corpus/private/inbox-golden/`, which git ignores. Do not add a `.md` file under `corpus/`: the loader requires every
+one to have a manifest entry.
