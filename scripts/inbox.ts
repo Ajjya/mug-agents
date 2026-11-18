@@ -13,6 +13,7 @@ import {
   checkGolden,
   exportGolden,
 } from '../src/inbox/golden.js';
+import { formatPollReport } from '../src/inbox/format.js';
 import { GMAIL_SCOPES } from '../src/inbox/inbox.config.js';
 import { INBOX_CONFIG, InboxModule, TRIAGER } from '../src/inbox/inbox.module.js';
 import {
@@ -267,26 +268,12 @@ if (command === 'auth') {
             dryRun: values['dry-run'] === true,
             ...(values['repin-labels'] ? { repinLabels: true } : {}),
           });
-          if (values['dry-run']) {
-            console.log(
-              `DRY RUN: nothing stored, no body fetched, no model called.\n\nWOULD STORE AND TRIAGE (${String(r.wouldStore.length)}), label "${label.label}":`,
-            );
-            for (const w of r.wouldStore) {
-              console.log(
-                `  ${w.receivedAt.slice(0, 10)}  thread ${w.threadId}  ${w.subject || '(no subject)'}`,
-              );
-            }
-          } else {
-            console.log(
-              `Stored ${String(r.stored.length)}; already stored ${String(r.alreadyStored)}; triaged ${String(r.triaged)}; triage failed ${String(r.triageFailed)}; triage pending ${String(r.triagePending)}.`,
-            );
+          for (const line of formatPollReport(r, {
+            dryRun: values['dry-run'] === true,
+            label: label.label,
+          })) {
+            console.log(line);
           }
-          console.log(
-            `Dropped (not in scope, nothing stored or fetched): ${String(r.dropped)}; excluded threads: ${String(r.droppedExcluded)}; new candidate threads: ${String(r.candidatesRecorded)}; own sent mail skipped: ${String(r.skippedOutbound)}.`,
-          );
-          console.log(
-            `History: ${r.historyExpired ? 'EXPIRED, fell back to the bounded label sweep' : r.historyUsed ? 'used' : 'no cursor yet'}.${r.sweepTruncated ? ' The label sweep hit its page limit (GMAIL_SWEEP_MAX_PAGES): older labelled mail may not have been listed.' : ''}`,
-          );
           return 0;
         }
         case 'candidates': {
