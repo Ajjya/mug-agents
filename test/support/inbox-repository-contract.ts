@@ -120,7 +120,7 @@ export function candidateThreadsContract(create: () => Promise<CandidateThreadsR
         state: 'pending' as const,
       };
       for (const extra of ['body', 'bodyText', 'snippet', 'bodySnippet', 'text']) {
-        await expect(repo.insert({ ...input, [extra]: 'leak' } as never)).rejects.toBeInstanceOf(
+        await expect(repo.insert({ ...input, [extra]: 'leak' })).rejects.toBeInstanceOf(
           z.ZodError,
         );
       }
