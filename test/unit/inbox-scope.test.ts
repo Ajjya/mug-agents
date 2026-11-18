@@ -253,6 +253,30 @@ describe('1a scope is the thread, not the message', () => {
     expect(await h.repos.inbound.findByGmailId('m-001')).not.toBeNull();
   });
 
+  it('an UNLABELLED reply in an excluded thread: the thread is not listed and no body is fetched', async () => {
+    // The previous test applies a label, which other guards catch first. This one isolates the
+    // admitted-thread sweep and the history path: the only thing between this reply and a body fetch
+    // is the exclusion.
+    const h = buildInboxHarness();
+    await h.service.poll({ now: NOW });
+    await h.service.excludeThread('th-001', 'not MUG business after all');
+    const fullBefore = [...h.gmail.calls.full];
+    const threadsBefore = h.gmail.calls.thread.length;
+    const modelBefore = h.model.calls;
+
+    h.gmail.receive(
+      message({ id: 'm-123', threadId: 'th-001', body: 'An unlabelled reply after exclusion.' }),
+    );
+    const report = await h.service.poll({ now: NOW });
+
+    expect(report.stored).toEqual([]);
+    expect(report.droppedExcluded).toBeGreaterThanOrEqual(1); // history named it; dropped on its thread
+    expect(h.gmail.calls.full).toEqual(fullBefore); // COUNTED: no body
+    expect(h.gmail.calls.metadata).not.toContain('m-123'); // not even headers
+    expect(h.gmail.calls.thread.slice(threadsBefore)).not.toContain('th-001'); // thread not listed
+    expect(h.model.calls).toBe(modelBefore);
+  });
+
   it('lifting the exclusion brings the thread back, and says so in the record (nothing deleted)', async () => {
     const h = buildInboxHarness();
     await h.service.poll({ now: NOW });
