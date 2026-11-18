@@ -32,6 +32,12 @@ export interface PipelineSpeaker {
   status: SpeakerStatus;
   /** When the status last changed (ISO). A reset to `idea` after a sent invitation re-approaches. */
   statusSince?: string;
+  /**
+   * When mail from this speaker last arrived for this event (set by the inbox, any inbound message,
+   * classified or not). A reply nobody has acted on pauses everything for the speaker: see
+   * {@link unhandledReply}.
+   */
+  lastInboundAt?: string;
   /** `speaker.bio` is filled in. The agent never writes it; a human does. */
   hasBio: boolean;
   /** `speaker.photoUrl` is filled in. */
@@ -100,7 +106,8 @@ export interface SupersededItem {
 /** Why a kind that applies to a speaker produced nothing this run (for `speakers list`). */
 export interface WaitingItem {
   speakerId: string;
-  kind: MessageKind;
+  /** Absent for a speaker-level item (a reply arrived), present for one kind that is not due yet. */
+  kind?: MessageKind;
   /** Due from this day, when it is a date that is not reached yet. */
   dueOn?: string;
   why: string;
@@ -163,6 +170,23 @@ const KIND_ORDER: readonly MessageKind[] = [
 ];
 
 const PENDING: readonly MessageStatus[] = ['draft', 'approved'];
+
+/**
+ * A reply that nobody has acted on: it arrived AFTER the last thing we sent this speaker for the event
+ * and AFTER the last status change. Acting means sending something (marked `sent`, recorded sends
+ * included) or changing the status; either resumes the pipeline. A reply the machine did not
+ * understand is still a reply, and chasing someone who has written back is the worst failure this
+ * system can produce, so this does not depend on triage at all.
+ */
+export function unhandledReply(
+  speaker: Pick<PipelineSpeaker, 'lastInboundAt' | 'statusSince'>,
+  messages: readonly PipelineMessage[],
+): boolean {
+  if (speaker.lastInboundAt === undefined) return false;
+  const lastSent = latestSent(messages)?.sentAt ?? '';
+  const lastStatus = speaker.statusSince ?? '';
+  return speaker.lastInboundAt > lastSent && speaker.lastInboundAt > lastStatus;
+}
 
 const latestSent = (msgs: readonly PipelineMessage[]): PipelineMessage | undefined =>
   msgs
@@ -239,6 +263,23 @@ export function decideActions(input: PipelineInput): Decision {
       });
     }
     if (!hasDate) continue;
+
+    // A reply nobody has acted on pauses EVERYTHING for this speaker: no message of any kind, no
+    // chase-limit task. Pending unsent chases and invitations are superseded so the send queue cannot
+    // contain a message to someone who has just written back.
+    if (unhandledReply(speaker, mine)) {
+      for (const m of mine) {
+        if (!PENDING.includes(m.status) || m.kind === 'thank_you') continue;
+        if (!out.supersede.some((x) => x.messageId === m.id)) {
+          out.supersede.push({ messageId: m.id, reason: 'a reply arrived: not sending this' });
+        }
+      }
+      out.waiting.push({
+        speakerId: speaker.id,
+        why: `a reply arrived ${(speaker.lastInboundAt ?? '').slice(0, 10)} and needs your attention: nothing more is drafted for this speaker until you act (send something, or change their status)`,
+      });
+      continue;
+    }
     const lastDraftDay = eventDay - (MIN_NOTICE_DAYS + 1) * DAY_MS;
 
     for (const rule of RULES.filter((r) => r.status === speaker.status)) {

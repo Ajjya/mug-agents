@@ -673,3 +673,165 @@ describe('decideActions: a rejection blocks the kind until a human acts', () => 
     expect(d.blocked.map((b) => b.why)).toEqual(['no_time']);
   });
 });
+
+describe('decideActions: a reply nobody has acted on pauses everything (M4a spec 6.3)', () => {
+  const REPLY = '2026-11-20T10:00:00.000Z';
+
+  // Every status, on a day when something would otherwise be due.
+  const DUE: [string, SpeakerStatus, string, PipelineMessage[], MessageKind][] = [
+    ['idea', 'idea', '2026-11-20', [], 'invitation'],
+    ['invited', 'invited', '2026-11-20', [msg('invitation', 'sent', '2026-11-01')], 'chase_reply'],
+    ['confirmed', 'confirmed', '2026-11-20', [], 'chase_abstract'],
+    ['abstract_received', 'abstract_received', '2026-12-06', [], 'chase_slides'],
+    ['slides_received', 'slides_received', '2026-12-13', [], 'thank_you'],
+  ];
+
+  it.each(DUE)('%s: due without a reply, nothing with one', (_name, status, day, msgs, kind) => {
+    const without = decide(day, speaker(status), msgs);
+    expect(planned(without).map((a) => a.split('#')[0])).toContain(kind);
+    const withReply = decide(
+      day,
+      speaker(status, {
+        lastInboundAt: day < REPLY ? '2026-11-19T10:00:00.000Z' : `${day}T08:00:00.000Z`,
+      }),
+      msgs,
+    );
+    expect(planned(withReply)).toEqual([]);
+    expect(withReply.blocked).toEqual([]);
+    expect(withReply.waiting.map((w) => [w.kind, w.why])).toEqual([
+      [
+        undefined,
+        expect.stringMatching(/^a reply arrived \d{4}-\d{2}-\d{2} and needs your attention/),
+      ],
+    ]);
+  });
+
+  it('a reply the machine did not classify is exactly the same: only lastInboundAt matters', () => {
+    // decideActions never sees triage. There is nothing else to pass; this is the point.
+    const d = decide('2026-11-20', speaker('confirmed', { lastInboundAt: REPLY }));
+    expect(planned(d)).toEqual([]);
+    expect(d.waiting[0]?.why).toContain('2026-11-20');
+  });
+
+  it('the chase-limit task is suppressed too: they have written back', () => {
+    const sent = [
+      msg('invitation', 'sent', '2026-10-31'),
+      msg('chase_reply', 'sent', '2026-11-07', 1),
+      msg('chase_reply', 'sent', '2026-11-14', 2),
+    ];
+    expect(decide('2026-11-21', speaker('invited'), sent).blocked).toHaveLength(1);
+    const withReply = decide(
+      '2026-11-21',
+      speaker('invited', { lastInboundAt: '2026-11-20T10:00:00.000Z' }),
+      sent,
+    );
+    expect(withReply.blocked).toEqual([]);
+    expect(planned(withReply)).toEqual([]);
+  });
+
+  describe('acting resumes it: boundaries', () => {
+    const sent1 = msg('invitation', 'sent', '2026-11-01');
+    it('a reply AFTER our last sent message pauses; a reply BEFORE it does not', () => {
+      expect(
+        planned(
+          decide('2026-11-10', speaker('invited', { lastInboundAt: '2026-11-02T12:00:00.000Z' }), [
+            sent1,
+          ]),
+        ),
+      ).toEqual([]);
+      // We sent (a chase, 5 Nov) after they replied (2 Nov): handled; the clock runs from our send.
+      const handled = [sent1, msg('chase_reply', 'sent', '2026-11-05', 1)];
+      const r = decide(
+        '2026-11-12',
+        speaker('invited', { lastInboundAt: '2026-11-02T12:00:00.000Z' }),
+        handled,
+      );
+      expect(planned(r)).toEqual(['chase_reply#2']);
+    });
+
+    it('a tie goes to "handled": a reply at the very instant of our send does not pause', () => {
+      const same = '2026-11-01T16:00:00.000Z'; // msg() stamps sentAt T16:00:00.000Z
+      expect(
+        planned(decide('2026-11-08', speaker('invited', { lastInboundAt: same }), [sent1])),
+      ).toEqual(['chase_reply#1']);
+    });
+
+    it('a status change AFTER the reply resumes it; one BEFORE does not', () => {
+      const reply = '2026-11-20T10:00:00.000Z';
+      expect(
+        planned(
+          decide(
+            '2026-11-20',
+            speaker('confirmed', { lastInboundAt: reply, statusSince: '2026-11-21T00:00:00.000Z' }),
+          ),
+        ),
+      ).toEqual(['chase_abstract#1']);
+      expect(
+        planned(
+          decide(
+            '2026-11-22',
+            speaker('confirmed', { lastInboundAt: reply, statusSince: '2026-11-19T00:00:00.000Z' }),
+          ),
+        ),
+      ).toEqual([]);
+    });
+
+    it('a send recorded outside the system counts as acting', () => {
+      const recorded: PipelineMessage = {
+        ...msg('chase_abstract', 'sent', '2026-11-21'),
+        sentAt: '2026-11-21T12:00:00.000Z',
+      };
+      const d = decide(
+        '2026-11-22',
+        speaker('confirmed', { lastInboundAt: '2026-11-20T10:00:00.000Z' }),
+        [recorded],
+      );
+      expect(d.waiting.filter((w) => w.kind === undefined)).toEqual([]);
+    });
+  });
+
+  it('a pending unsent chase is superseded, so the send queue holds nothing for someone who wrote back', () => {
+    const pending = msg('chase_abstract', 'approved');
+    const d = decide(
+      '2026-11-20',
+      speaker('confirmed', { lastInboundAt: '2026-11-20T10:00:00.000Z' }),
+      [pending],
+    );
+    expect(d.supersede).toEqual([
+      { messageId: pending.id, reason: 'a reply arrived: not sending this' },
+    ]);
+    // Without a reply the same draft is simply waiting to be marked sent.
+    expect(decide('2026-11-20', speaker('confirmed'), [pending]).supersede).toEqual([]);
+  });
+
+  it('a pending invitation to someone who has replied is superseded too', () => {
+    const pending = msg('invitation', 'draft');
+    const d = decide('2026-11-20', speaker('idea', { lastInboundAt: '2026-11-20T10:00:00.000Z' }), [
+      pending,
+    ]);
+    expect(d.supersede.map((x) => x.reason)).toEqual(['a reply arrived: not sending this']);
+  });
+
+  it('a pending thank-you is NOT superseded by a reply (it is not a chase)', () => {
+    const pending = msg('thank_you', 'draft');
+    const d = decide(
+      '2026-12-14',
+      speaker('slides_received', { lastInboundAt: '2026-12-14T08:00:00.000Z' }),
+      [pending],
+    );
+    expect(d.supersede).toEqual([]);
+    expect(planned(d)).toEqual([]); // but nothing NEW is drafted until the reply is handled
+  });
+
+  it('one speaker paused does not pause another', () => {
+    const other = { ...speaker('confirmed'), id: 'o'.repeat(24) };
+    const d = decideActions({
+      now: at('2026-11-20'),
+      eventDate: EVENT,
+      policy: POLICY,
+      messages: [],
+      speakers: [speaker('confirmed', { lastInboundAt: '2026-11-20T10:00:00.000Z' }), other],
+    });
+    expect(d.actions.map((a) => a.speakerId)).toEqual([other.id]);
+  });
+});

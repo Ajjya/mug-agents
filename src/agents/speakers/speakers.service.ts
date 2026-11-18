@@ -193,7 +193,9 @@ export class SpeakersService {
           .map((b) => `${b.kind}: chase limit, call them`),
         ...d.waiting
           .filter((w) => w.speakerId === s._id)
-          .map((w) => `${w.kind}: ${w.why}${w.dueOn ? ` (${w.dueOn})` : ''}`),
+          .map(
+            (w) => `${w.kind ? `${w.kind}: ` : 'reply: '}${w.why}${w.dueOn ? ` (${w.dueOn})` : ''}`,
+          ),
       ];
       return {
         speakerId: s._id,
