@@ -1,0 +1,109 @@
+{
+  "note": "A fictional mailbox for tests. Every name, address and body is invented. The PRIVATE-MARKER and CANDIDATE-BODY-MARKER strings exist only so a test can prove they never reach a database or a provider.",
+  "self": "organiser@mug.invalid",
+  "labels": [
+    { "id": "Label_1", "name": "mug-agents" },
+    { "id": "Label_2", "name": "mug-maybe" }
+  ],
+  "messages": [
+    {
+      "id": "m-001",
+      "threadId": "th-001",
+      "labels": ["INBOX", "Label_1"],
+      "receivedAt": "2026-10-20T09:00:00.000Z",
+      "from": "Wendeline Gooseberry <wendeline@speakers.invalid>",
+      "to": "MUG Organiser <organiser@mug.invalid>",
+      "subject": "Re: Speaking at the Winter Meetup",
+      "messageId": "<m001@speakers.invalid>",
+      "body": "Hi,\n\nYes, I would love to speak at the Winter Meetup on 12 December. I will send my abstract and bio by Friday.\n\nThanks,\nWendeline\n\nOn Mon, 19 Oct 2026, MUG Organiser wrote:\n> Would you speak at the Winter Meetup?\n> The MUG organisers",
+      "attachments": []
+    },
+    {
+      "id": "m-002",
+      "threadId": "th-002",
+      "labels": ["INBOX"],
+      "receivedAt": "2026-10-21T10:00:00.000Z",
+      "from": "Fictional Bank <alerts@bank.invalid>",
+      "to": "organiser@mug.invalid",
+      "subject": "PRIVATE-MARKER-BANK your statement",
+      "messageId": "<m002@bank.invalid>",
+      "body": "PRIVATE-MARKER-BANK Your balance is 1,234.56. Account 0000-1111-2222.",
+      "attachments": []
+    },
+    {
+      "id": "m-003",
+      "threadId": "th-003",
+      "labels": ["INBOX"],
+      "receivedAt": "2026-10-22T11:00:00.000Z",
+      "from": "Recruiter Person <jobs@employer.invalid>",
+      "to": "organiser@mug.invalid",
+      "subject": "PRIVATE-MARKER-JOB your application",
+      "messageId": "<m003@employer.invalid>",
+      "body": "PRIVATE-MARKER-JOB We would like to invite you to a second interview. Salary range 70k.",
+      "attachments": []
+    },
+    {
+      "id": "m-004",
+      "threadId": "th-004",
+      "labels": ["INBOX", "Label_2"],
+      "receivedAt": "2026-10-23T08:00:00.000Z",
+      "from": "Database Weekly <news@vendor.invalid>",
+      "to": "organiser@mug.invalid",
+      "subject": "Database Weekly: issue 412",
+      "messageId": "<m004@vendor.invalid>",
+      "body": "CANDIDATE-BODY-MARKER This week in databases: a new release, three tutorials.",
+      "attachments": []
+    },
+    {
+      "id": "m-005",
+      "threadId": "th-005",
+      "labels": ["INBOX", "Label_1"],
+      "receivedAt": "2026-10-24T12:00:00.000Z",
+      "from": "Cogwheel Facilities <facilities@cogwheel.invalid>",
+      "to": "organiser@mug.invalid",
+      "subject": "Kettle Room booking",
+      "messageId": "<m005@cogwheel.invalid>",
+      "body": "The Kettle Room is free on 12 December. Please confirm the numbers by 9 December.\n\n-- \nCogwheel Facilities\nTel +351 210 000 000\n1 Bramble Lane, 1000-001 Sample City",
+      "attachments": []
+    },
+    {
+      "id": "m-006",
+      "threadId": "th-001",
+      "labels": ["INBOX"],
+      "receivedAt": "2026-10-27T09:30:00.000Z",
+      "from": "Wendeline Gooseberry <wendeline@speakers.invalid>",
+      "to": "MUG Organiser <organiser@mug.invalid>",
+      "subject": "Re: Speaking at the Winter Meetup",
+      "messageId": "<m006@speakers.invalid>",
+      "body": "Here are my bio and photo, as promised.",
+      "attachments": [
+        { "filename": "bio.txt", "mimeType": "text/plain", "sizeBytes": 812 },
+        { "filename": "wendeline.jpg", "mimeType": "image/jpeg", "sizeBytes": 245000 }
+      ]
+    },
+    {
+      "id": "m-007",
+      "threadId": "th-006",
+      "labels": ["INBOX"],
+      "receivedAt": "2026-09-01T09:00:00.000Z",
+      "from": "Ignatius Fogwhistle <ignatius@speakers.invalid>",
+      "to": "organiser@mug.invalid",
+      "subject": "Workshop idea",
+      "messageId": "<m007@speakers.invalid>",
+      "body": "I could run an aggregation workshop if you are still looking.",
+      "attachments": []
+    },
+    {
+      "id": "m-008",
+      "threadId": "th-007",
+      "labels": ["INBOX"],
+      "receivedAt": "2026-10-25T07:00:00.000Z",
+      "from": "Clinic <appointments@clinic.invalid>",
+      "to": "organiser@mug.invalid",
+      "subject": "PRIVATE-MARKER-MEDICAL appointment",
+      "messageId": "<m008@clinic.invalid>",
+      "body": "PRIVATE-MARKER-MEDICAL Your appointment about your test results is on Thursday.",
+      "attachments": []
+    }
+  ]
+}
