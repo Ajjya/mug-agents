@@ -78,6 +78,14 @@ function redactLine(line: string): string {
   return line.replace(EMAIL, '[email]').replace(PHONE, (m) => (isPhone(m) ? '[phone]' : m));
 }
 
+/**
+ * Masks emails, phone numbers and postal-address lines WITHOUT stripping quoted history or the
+ * signature. The golden set stores bodies this way, so the eval still exercises the real redaction.
+ */
+export function maskPersonalData(text: string): string {
+  return text.replace(/\r\n?/g, '\n').split('\n').map(redactLine).join('\n');
+}
+
 export function redactForTriage(body: string, maxChars: number): string {
   if (!Number.isInteger(maxChars) || maxChars <= TRUNCATION_MARKER.length) {
     throw new RangeError('maxChars must be an integer larger than the truncation marker');
