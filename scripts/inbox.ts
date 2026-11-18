@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { loadConfig } from '../src/config/config.module.js';
 import { ConfigError } from '../src/config/env.schema.js';
 import { buildAuthUrl, parseCallback } from '../src/inbox/gmail.auth.js';
+import { GmailTransportError, sanitizeTransportError } from '../src/inbox/gmail.errors.js';
 import {
   GoldenNotVerifiedError,
   UntrackedPathRequiredError,
@@ -177,7 +178,15 @@ async function runAuth(): Promise<number> {
     server.close();
   });
 
-  const { tokens } = await client.getToken({ code, codeVerifier });
+  // A failed exchange throws an error carrying the whole request (the code, the verifier, the client
+  // secret); only a scrubbed message and the status leave this function.
+  const { tokens } = await client.getToken({ code, codeVerifier }).catch((err: unknown) => {
+    throw sanitizeTransportError('token exchange', err, [
+      config.GMAIL_CLIENT_SECRET ?? '',
+      code,
+      codeVerifier,
+    ]);
+  });
   if (!tokens.refresh_token) {
     console.error(
       'Google returned no refresh token. Revoke this app at https://myaccount.google.com/permissions and run auth again (a refresh token is only issued on first consent).',
@@ -210,6 +219,10 @@ const handle = (err: unknown): number | undefined => {
   if (err instanceof ConfigError) {
     console.error(err.message);
     return 1;
+  }
+  if (err instanceof GmailTransportError) {
+    console.error(err.message);
+    return 3;
   }
   if (err instanceof ProviderUnavailableError) {
     console.error(`PROVIDER FAILURE (not a model failure): ${err.message}`);

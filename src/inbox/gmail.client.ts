@@ -13,6 +13,7 @@ import {
   type ListQuery,
   type MessageRef,
 } from './gmail.transport.js';
+import { sanitizeTransportError } from './gmail.errors.js';
 import type { GmailCredentials } from './inbox.config.js';
 
 /**
@@ -96,121 +97,155 @@ const isNotFound = (err: unknown): boolean => {
 };
 
 export class GoogleGmailClient implements GmailClient {
-  constructor(private readonly api: gmail_v1.Gmail) {}
+  /**
+   * `secrets` are the credential values this client was built with: scrubbed from anything a failed call
+   * throws. Every public method runs through {@link guard}, so no error leaves this class carrying a request.
+   */
+  constructor(
+    private readonly api: gmail_v1.Gmail,
+    private readonly secrets: readonly string[] = [],
+  ) {}
+
+  private async guard<T>(operation: string, run: () => Promise<T>): Promise<T> {
+    try {
+      return await run();
+    } catch (err) {
+      if (err instanceof HistoryExpiredError) throw err; // our own, carries nothing
+      throw sanitizeTransportError(operation, err, this.secrets);
+    }
+  }
 
   /** Builds the real client from credentials. The only place an OAuth client is constructed for reading. */
   static fromCredentials(creds: GmailCredentials): GoogleGmailClient {
     const auth = new OAuth2Client(creds.clientId, creds.clientSecret);
     auth.setCredentials({ refresh_token: creds.refreshToken });
-    return new GoogleGmailClient(createGmail({ version: 'v1', auth }));
+    return new GoogleGmailClient(createGmail({ version: 'v1', auth }), [
+      creds.clientId,
+      creds.clientSecret,
+      creds.refreshToken,
+    ]);
   }
 
   async resolveLabelId(name: string): Promise<string | null> {
-    const r = await this.api.users.labels.list({ userId: 'me' });
-    const found = r.data.labels?.find((l) => l.name?.toLowerCase() === name.toLowerCase());
-    return found?.id ?? null;
+    return await this.guard('labels.list', async () => {
+      const r = await this.api.users.labels.list({ userId: 'me' });
+      const found = r.data.labels?.find((l) => l.name?.toLowerCase() === name.toLowerCase());
+      return found?.id ?? null;
+    });
   }
 
   async listMessageRefs(query: ListQuery): Promise<{ refs: MessageRef[]; nextPageToken?: string }> {
-    const r = await this.api.users.messages.list({
-      userId: 'me',
-      labelIds: [query.labelId], // required by the type: there is no unscoped call here
-      ...(query.after ? { q: `after:${query.after}` } : {}),
-      maxResults: 500,
-      includeSpamTrash: false,
-      ...(query.pageToken ? { pageToken: query.pageToken } : {}),
+    return await this.guard('messages.list', async () => {
+      const r = await this.api.users.messages.list({
+        userId: 'me',
+        labelIds: [query.labelId], // required by the type: there is no unscoped call here
+        ...(query.after ? { q: `after:${query.after}` } : {}),
+        maxResults: 500,
+        includeSpamTrash: false,
+        ...(query.pageToken ? { pageToken: query.pageToken } : {}),
+      });
+      return {
+        refs: (r.data.messages ?? []).flatMap((m) =>
+          m.id && m.threadId ? [{ id: m.id, threadId: m.threadId }] : [],
+        ),
+        ...(r.data.nextPageToken ? { nextPageToken: r.data.nextPageToken } : {}),
+      };
     });
-    return {
-      refs: (r.data.messages ?? []).flatMap((m) =>
-        m.id && m.threadId ? [{ id: m.id, threadId: m.threadId }] : [],
-      ),
-      ...(r.data.nextPageToken ? { nextPageToken: r.data.nextPageToken } : {}),
-    };
   }
 
   /** Headers only (`format: metadata`): no body, and the snippet Gmail may add is not read. */
   async getMetadata(id: string): Promise<GmailMetadata> {
-    const r = await this.api.users.messages.get({
-      userId: 'me',
-      id,
-      format: 'metadata',
-      metadataHeaders: METADATA_HEADERS,
+    return await this.guard('messages.get (metadata)', async () => {
+      const r = await this.api.users.messages.get({
+        userId: 'me',
+        id,
+        format: 'metadata',
+        metadataHeaders: METADATA_HEADERS,
+      });
+      return {
+        id: r.data.id ?? id,
+        threadId: r.data.threadId ?? '',
+        labelIds: r.data.labelIds ?? [],
+        receivedAt: isoOf(r.data.internalDate),
+        headers: headersOf(r.data.payload),
+      };
     });
-    return {
-      id: r.data.id ?? id,
-      threadId: r.data.threadId ?? '',
-      labelIds: r.data.labelIds ?? [],
-      receivedAt: isoOf(r.data.internalDate),
-      headers: headersOf(r.data.payload),
-    };
   }
 
   async getThreadRefs(threadId: string): Promise<GmailThreadRefs> {
-    const r = await this.api.users.threads.get({ userId: 'me', id: threadId, format: 'minimal' });
-    return {
-      threadId,
-      messages: (r.data.messages ?? []).flatMap((m) =>
-        m.id ? [{ id: m.id, labelIds: m.labelIds ?? [] }] : [],
-      ),
-    };
+    return await this.guard('threads.get', async () => {
+      const r = await this.api.users.threads.get({ userId: 'me', id: threadId, format: 'minimal' });
+      return {
+        threadId,
+        messages: (r.data.messages ?? []).flatMap((m) =>
+          m.id ? [{ id: m.id, labelIds: m.labelIds ?? [] }] : [],
+        ),
+      };
+    });
   }
 
   async getCurrentHistoryId(): Promise<string> {
-    const r = await this.api.users.getProfile({ userId: 'me' });
-    if (!r.data.historyId) throw new Error('Gmail did not return a history id');
-    return r.data.historyId;
+    return await this.guard('getProfile', async () => {
+      const r = await this.api.users.getProfile({ userId: 'me' });
+      if (!r.data.historyId) throw new Error('Gmail did not return a history id');
+      return r.data.historyId;
+    });
   }
 
   async listHistory(startHistoryId: string, pageToken?: string): Promise<HistoryPage> {
-    try {
-      const r = await this.api.users.history.list({
-        userId: 'me',
-        startHistoryId,
-        historyTypes: ['messageAdded', 'labelAdded'],
-        maxResults: 500,
-        ...(pageToken ? { pageToken } : {}),
-      });
-      const records: HistoryRecord[] = [];
-      for (const h of r.data.history ?? []) {
-        const messages = [
-          ...(h.messagesAdded ?? []).map((x) => x.message),
-          ...(h.labelsAdded ?? []).map((x) => x.message),
-        ];
-        for (const m of messages) {
-          if (m?.id && m.threadId) {
-            records.push({ messageId: m.id, threadId: m.threadId, labelIds: m.labelIds ?? [] });
+    return await this.guard('history.list', async () => {
+      try {
+        const r = await this.api.users.history.list({
+          userId: 'me',
+          startHistoryId,
+          historyTypes: ['messageAdded', 'labelAdded'],
+          maxResults: 500,
+          ...(pageToken ? { pageToken } : {}),
+        });
+        const records: HistoryRecord[] = [];
+        for (const h of r.data.history ?? []) {
+          const messages = [
+            ...(h.messagesAdded ?? []).map((x) => x.message),
+            ...(h.labelsAdded ?? []).map((x) => x.message),
+          ];
+          for (const m of messages) {
+            if (m?.id && m.threadId) {
+              records.push({ messageId: m.id, threadId: m.threadId, labelIds: m.labelIds ?? [] });
+            }
           }
         }
+        return {
+          records,
+          historyId: r.data.historyId ?? startHistoryId,
+          ...(r.data.nextPageToken ? { nextPageToken: r.data.nextPageToken } : {}),
+        };
+      } catch (err) {
+        if (isNotFound(err)) throw new HistoryExpiredError();
+        throw err;
       }
-      return {
-        records,
-        historyId: r.data.historyId ?? startHistoryId,
-        ...(r.data.nextPageToken ? { nextPageToken: r.data.nextPageToken } : {}),
-      };
-    } catch (err) {
-      if (isNotFound(err)) throw new HistoryExpiredError();
-      throw err;
-    }
+    });
   }
 
   /** The ONLY body fetch in the adapter (`format: full`), reached only through GmailClient. */
   async getFull(id: string): Promise<GmailFullMessage> {
-    const r = await this.api.users.messages.get({ userId: 'me', id, format: 'full' });
-    const walked = walk(r.data.payload, { plain: [], html: [], attachments: [] });
-    const text =
-      walked.plain.length > 0 ? walked.plain.join('\n') : stripHtml(walked.html.join('\n'));
-    return {
-      id: r.data.id ?? id,
-      threadId: r.data.threadId ?? '',
-      labelIds: r.data.labelIds ?? [],
-      receivedAt: isoOf(r.data.internalDate),
-      headers: headersOf(r.data.payload),
-      bodyText:
-        text.length > MAX_BODY_CHARS
-          ? `${text.slice(0, MAX_BODY_CHARS)}\n[... body truncated]`
-          : text,
-      attachments: walked.attachments,
-    };
+    return await this.guard('messages.get (full)', async () => {
+      const r = await this.api.users.messages.get({ userId: 'me', id, format: 'full' });
+      const walked = walk(r.data.payload, { plain: [], html: [], attachments: [] });
+      const text =
+        walked.plain.length > 0 ? walked.plain.join('\n') : stripHtml(walked.html.join('\n'));
+      return {
+        id: r.data.id ?? id,
+        threadId: r.data.threadId ?? '',
+        labelIds: r.data.labelIds ?? [],
+        receivedAt: isoOf(r.data.internalDate),
+        headers: headersOf(r.data.payload),
+        bodyText:
+          text.length > MAX_BODY_CHARS
+            ? `${text.slice(0, MAX_BODY_CHARS)}\n[... body truncated]`
+            : text,
+        attachments: walked.attachments,
+      };
+    });
   }
 }
 
