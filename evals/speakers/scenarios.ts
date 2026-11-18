@@ -7,6 +7,8 @@ import {
   buildSpeakersHarness,
   inMemorySpeakerRepos,
 } from '../../test/support/speakers-harness.js';
+import { FakeGmail } from '../../test/support/fake-gmail.js';
+import { NEUTRAL_ANSWER, buildInboxHarness } from '../../test/support/inbox-harness.js';
 import { day, seed } from '../../test/support/speakers-workflow-suite.js';
 
 /**
@@ -290,6 +292,81 @@ export async function abstractChaseInClosingWindow(): Promise<ScenarioResult> {
   );
 }
 
+/**
+ * A reply arrives through the REAL inbox pipeline (stored, linked by address, triaged or not) in the
+ * middle of a chase, and the Speakers agent then runs. Without the pause, 14 Nov would be the second
+ * reply chase. `classifiable: false` makes the model unable to hold the schema: the machine does not
+ * understand the reply, and that confusion must not turn into another chase.
+ */
+async function replyMidChase(name: string, classifiable: boolean): Promise<ScenarioResult> {
+  const ctx = await setup([{ name: 'Wendeline Gooseberry', status: 'idea' }]);
+  const sp = ctx.speakers['Wendeline Gooseberry'] ?? '';
+  await step(ctx, '2026-10-31', { approve: true, sendAll: true });
+  await step(ctx, '2026-11-07', { sendAll: true });
+  const sentBefore = (await ctx.h.repos.messages.findByEventId(ctx.eventId)).items.length;
+
+  const gmail = FakeGmail.empty();
+  gmail.receive({
+    id: 'm-900',
+    threadId: 'th-900',
+    labels: ['INBOX', 'Label_1'],
+    receivedAt: '2026-11-10T09:00:00.000Z',
+    from: 'Wendeline <wendeline.gooseberry@speakers.invalid>',
+    to: 'organiser@mug.invalid',
+    subject: 'Re: the Winter Meetup',
+    messageId: '<m900@speakers.invalid>',
+    body: classifiable
+      ? "Sorry, something has come up and I can't make it after all."
+      : 'ok. but. also?? see attached (not attached)',
+    attachments: [],
+  });
+  const inbox = buildInboxHarness({ gmail, shared: ctx.h.repos });
+  if (classifiable) {
+    inbox.model.queue = [
+      () =>
+        JSON.stringify({
+          ...JSON.parse(NEUTRAL_ANSWER),
+          intent: 'speaker_reply',
+          sentiment_decision: 'declines',
+          confidence: 'high',
+        }),
+    ];
+  } else {
+    inbox.model.queue = Array.from({ length: 12 }, () => () => 'I am not sure what to say');
+  }
+  await inbox.service.poll({ now: day('2026-11-10') });
+  const stored = await inbox.repos.inbound.findByGmailId('m-900');
+
+  await step(ctx, '2026-11-14');
+  await step(ctx, '2026-11-21');
+  const messages = (await ctx.h.repos.messages.findByEventId(ctx.eventId)).items;
+  const status = await ctx.h.store.currentStatus(sp, ctx.eventId);
+  const listed = await ctx.h.service.list(ctx.eventId, day('2026-11-21'));
+  return result(name, ['10-31 invitation#1', '11-07 chase_reply#1', '11-14 -', '11-21 -'], ctx, [
+    {
+      what: 'the reply was stored and linked to her by address',
+      ok: stored?.linkedSpeakerId === sp,
+    },
+    {
+      what: classifiable ? 'triage understood it (declines)' : 'triage could NOT classify it',
+      ok: classifiable
+        ? stored?.triage?.sentiment_decision === 'declines'
+        : stored?.triageState === 'failed',
+    },
+    { what: 'no message of any kind after the reply', ok: messages.length === sentBefore },
+    { what: 'the status is unchanged (invited)', ok: status === 'invited' },
+    {
+      what: 'list says a reply arrived',
+      ok: /reply: a reply arrived 2026-11-10/.test(listed.rows[0]?.next ?? ''),
+    },
+  ]);
+}
+
+export const replyArrivesMidChase = (): Promise<ScenarioResult> =>
+  replyMidChase('A reply arrives mid-chase', true);
+export const unclassifiableReplyArrives = (): Promise<ScenarioResult> =>
+  replyMidChase('An unclassifiable reply arrives', false);
+
 export const SCENARIOS = [
   speakerNeverReplies,
   speakerConfirmsLate,
@@ -300,6 +377,8 @@ export const SCENARIOS = [
   slidesNeverArrive,
   fullPipeline,
   abstractChaseInClosingWindow,
+  replyArrivesMidChase,
+  unclassifiableReplyArrives,
 ];
 
 export async function runScenarios(): Promise<ScenarioResult[]> {

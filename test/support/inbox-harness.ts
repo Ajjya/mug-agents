@@ -3,6 +3,10 @@ import { type StructuredCall, callStructured } from '../../src/llm/structured.js
 import type { InboxConfig } from '../../src/inbox/inbox.config.js';
 import { InboxService, type InboxDeps } from '../../src/inbox/inbox.service.js';
 import { Triager } from '../../src/inbox/triage.js';
+import type { EventsRepository } from '../../src/repositories/events.repository.js';
+import type { OrganisationsRepository } from '../../src/repositories/organisations.repository.js';
+import type { SpeakersRepository } from '../../src/repositories/speakers.repository.js';
+import type { TasksRepository } from '../../src/repositories/tasks.repository.js';
 import { FakeGmail } from './fake-gmail.js';
 import {
   InMemoryAdmittedThreadsRepository,
@@ -74,10 +78,10 @@ export interface InboxHarness {
     candidates: InMemoryCandidateThreadsRepository;
     contacts: InMemoryContactsRepository;
     cursor: InMemoryInboxCursorRepository;
-    speakers: InMemorySpeakersRepository;
-    events: InMemoryEventsRepository;
-    organisations: InMemoryOrganisationsRepository;
-    tasks: InMemoryTasksRepository;
+    speakers: SpeakersRepository;
+    events: EventsRepository;
+    organisations: OrganisationsRepository;
+    tasks: TasksRepository;
   };
   service: InboxService;
   /** Everything the service logged, flattened to one string per line. */
@@ -88,6 +92,13 @@ export interface InboxHarness {
 export interface InboxHarnessOptions {
   gmail?: FakeGmail;
   config?: Partial<InboxConfig>;
+  /** Repositories shared with another harness (the Speakers agent's), so a reply the inbox links is seen by it. */
+  shared?: {
+    speakers: SpeakersRepository;
+    events: EventsRepository;
+    organisations: OrganisationsRepository;
+    tasks: TasksRepository;
+  };
 }
 
 /** The real service over the fake Gmail, in-memory repositories and a counting model. */
@@ -103,10 +114,10 @@ export function buildInboxHarness(options: InboxHarnessOptions = {}): InboxHarne
     candidates: new InMemoryCandidateThreadsRepository(),
     contacts: new InMemoryContactsRepository(),
     cursor: new InMemoryInboxCursorRepository(),
-    speakers: new InMemorySpeakersRepository(),
-    events: new InMemoryEventsRepository(),
-    organisations: new InMemoryOrganisationsRepository(),
-    tasks: new InMemoryTasksRepository(),
+    speakers: options.shared?.speakers ?? new InMemorySpeakersRepository(),
+    events: options.shared?.events ?? new InMemoryEventsRepository(),
+    organisations: options.shared?.organisations ?? new InMemoryOrganisationsRepository(),
+    tasks: options.shared?.tasks ?? new InMemoryTasksRepository(),
   };
   const call: StructuredCall = (schema, prompt, opts) =>
     callStructured(schema, prompt, opts, {

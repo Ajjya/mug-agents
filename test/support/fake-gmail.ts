@@ -78,6 +78,18 @@ export class FakeGmail implements GmailClient {
     for (const m of structuredClone(fixture.messages)) this.messages.set(m.id, m);
   }
 
+  /** A mailbox with the two labels and nothing in it: a test receives exactly the mail it cares about. */
+  static empty(): FakeGmail {
+    return new FakeGmail({
+      self: 'organiser@mug.invalid',
+      labels: [
+        { id: 'Label_1', name: 'mug-agents' },
+        { id: 'Label_2', name: 'mug-maybe' },
+      ],
+      messages: [],
+    });
+  }
+
   static fromFixture(path = 'test/fixtures/gmail/mailbox.json'): FakeGmail {
     return new FakeGmail(JSON.parse(readFileSync(path, 'utf8')) as Fixture);
   }
