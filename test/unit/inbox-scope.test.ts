@@ -212,6 +212,97 @@ describe('1.3 the re-check is not circular: a label CLAIM cannot admit a thread 
   });
 });
 
+describe('every path to a body is tested on its own, not only through the wrong-query test', () => {
+  it('a CANDIDATE-labelled message reported by the HISTORY feed: headers only, never a body, never a model (review finding 3)', async () => {
+    const h = buildInboxHarness();
+    await h.service.poll({ now: NOW });
+    const fullBefore = [...h.gmail.calls.full];
+    const modelBefore = h.model.calls;
+
+    h.gmail.receive(
+      message({
+        id: 'm-700',
+        threadId: 'th-700',
+        labels: ['INBOX', 'Label_2'],
+        subject: 'A conference mailing',
+        body: 'CANDIDATE-BODY-MARKER-HISTORY',
+      }),
+    );
+    const feed = await h.gmail.listHistory((await h.repos.cursor.get())?.historyId ?? '');
+    expect(feed.records.map((r) => r.messageId)).toContain('m-700'); // the history path IS the one that sees it
+    const report = await h.service.poll({ now: NOW });
+
+    expect(report.historyUsed).toBe(true);
+    expect(h.gmail.calls.full).toEqual(fullBefore); // COUNTED: no body, not even a discarded one
+    expect(h.model.calls).toBe(modelBefore);
+    expect((await h.service.listCandidates()).map((c) => [c.threadId, c.subject])).toContainEqual([
+      'th-700',
+      'A conference mailing',
+    ]);
+    expect(await storedEverything(h)).not.toContain('CANDIDATE-BODY-MARKER-HISTORY');
+  });
+
+  it('a WRONG query on the CANDIDATE label alone: private mail is not recorded as a candidate (subject and sender never stored)', async () => {
+    // Found while mutation-checking: the candidate path trusted its listing, so a wrong candidate query
+    // recorded private mail's SUBJECT and SENDER in candidate_threads. (The earlier wrong-query test never
+    // saw it: the strong-label pass happened to mark those ids as seen first.)
+    const h = buildInboxHarness();
+    h.gmail.ignoreScopeFor('mug-maybe');
+    const report = await h.service.poll({ now: NOW });
+
+    const candidates = JSON.stringify((await h.repos.candidates.findMany({ limit: 100 })).items);
+    expect(candidates).not.toMatch(
+      /PRIVATE-MARKER|bank\.invalid|employer\.invalid|clinic\.invalid/,
+    );
+    expect((await h.service.listCandidates()).map((c) => c.threadId)).toEqual(['th-004']); // only the real candidate
+    expect(report.dropped).toBeGreaterThanOrEqual(3);
+    expect([...h.gmail.calls.full].sort()).toEqual(IN_SCOPE_FIRST_POLL); // and no body, as ever
+    await expectNothingPrivateLeft(h);
+  });
+
+  it('a history record that CLAIMS the candidate label for an unlabelled private message: headers checked, nothing recorded, no body', async () => {
+    const h = buildInboxHarness();
+    await h.service.poll({ now: NOW });
+    const fullBefore = h.gmail.calls.full.length;
+    h.gmail.receive(
+      message({
+        id: 'm-710',
+        threadId: 'th-710',
+        subject: 'PRIVATE-MARKER-CLAIM',
+        body: 'PRIVATE-MARKER-CLAIM body',
+      }),
+    );
+    h.gmail.claimInHistory('m-710', ['INBOX', 'Label_2']);
+    await h.service.poll({ now: NOW });
+    expect(h.gmail.calls.full.slice(fullBefore)).toEqual([]);
+    expect(JSON.stringify((await h.repos.candidates.findMany({ limit: 100 })).items)).not.toContain(
+      'PRIVATE-MARKER-CLAIM',
+    );
+    expect(await h.repos.candidates.findByThreadId('th-710')).toBeNull();
+  });
+
+  it('ONE stray private id in the label listing: its headers are read, nothing else', async () => {
+    const h = buildInboxHarness();
+    h.gmail.injectIntoListing('mug-agents', ['m-002']); // the bank mail, returned by a listing that should not have it
+    const report = await h.service.poll({ now: NOW });
+    expect([...h.gmail.calls.full].sort()).toEqual(IN_SCOPE_FIRST_POLL);
+    expect(h.gmail.calls.metadata).toContain('m-002'); // read to find out it is not ours
+    expect(report.dropped).toBeGreaterThanOrEqual(1);
+    expect(h.model.calls).toBe(3);
+    await expectNothingPrivateLeft(h);
+  });
+
+  it('ONE candidate-labelled message in the strong label listing: recorded as a candidate, never fetched', async () => {
+    const h = buildInboxHarness();
+    h.gmail.injectIntoListing('mug-agents', ['m-004']);
+    const report = await h.service.poll({ now: NOW });
+    expect(h.gmail.calls.full).not.toContain('m-004');
+    expect(report.stored).not.toContain('m-004');
+    expect((await h.service.listCandidates()).map((c) => c.threadId)).toContain('th-004');
+    expect(h.model.prompts.join('\n')).not.toContain('CANDIDATE-BODY-MARKER');
+  });
+});
+
 describe('1.5 a lost or expired cursor degrades to a bounded backfill over the label', () => {
   it('an expired history id falls back to the label sweep, never to the whole mailbox', async () => {
     const h = buildInboxHarness();

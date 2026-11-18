@@ -12,6 +12,8 @@ import type { CandidateThreadsRepository } from './repositories.js';
  */
 
 export interface CandidateContext {
+  /** The id of the candidate label: a listing or a history record that names a message is only a claim. */
+  candidateLabelId: string;
   candidates: CandidateThreadsRepository;
   now: Date;
   dryRun: boolean;
@@ -29,7 +31,11 @@ export async function isKnownThread(
 export async function recordCandidate(
   meta: GmailMetadata,
   ctx: CandidateContext,
-): Promise<'recorded' | 'refreshed' | 'dismissed'> {
+): Promise<'recorded' | 'refreshed' | 'dismissed' | 'not_candidate'> {
+  // Verified against the message's OWN headers, like the strong label: a listing that returned too much
+  // (or a history record with a stale claim) must not put a private message's subject and sender into
+  // candidate_threads. Nothing is recorded and no body is involved.
+  if (!meta.labelIds.includes(ctx.candidateLabelId)) return 'not_candidate';
   const existing = await ctx.candidates.findByThreadId(meta.threadId);
   if (existing?.state === 'dismissed') return 'dismissed';
   if (ctx.dryRun) return existing ? 'refreshed' : 'recorded';
@@ -57,9 +63,10 @@ export async function observeCandidateRefs(
   refs: readonly MessageRef[],
   meta: GmailMetadataClient,
   ctx: CandidateContext,
-): Promise<{ recorded: number; skipped: number }> {
+): Promise<{ recorded: number; skipped: number; rejected: number }> {
   let recorded = 0;
   let skipped = 0;
+  let rejected = 0;
   const seenThreads = new Set<string>();
   for (const ref of refs) {
     if (seenThreads.has(ref.threadId) || (await isKnownThread(ctx.candidates, ref.threadId))) {
@@ -69,9 +76,10 @@ export async function observeCandidateRefs(
     seenThreads.add(ref.threadId);
     const outcome = await recordCandidate(await meta.getMetadata(ref.id), ctx);
     if (outcome === 'recorded') recorded++;
+    else if (outcome === 'not_candidate') rejected++;
     else skipped++;
   }
-  return { recorded, skipped };
+  return { recorded, skipped, rejected };
 }
 
 export type { CandidateThread };

@@ -73,6 +73,10 @@ export class FakeGmail implements GmailClient {
   private readonly historyClaims = new Map<string, string[]>();
   /** What a full fetch returns for a message's labels, when it differs from the headers (a label removed in between). */
   private readonly fullLabels = new Map<string, string[]>();
+  /** Extra ids a label's listing returns although the messages do not carry it (one stray result, not a whole wrong query). */
+  private readonly injected = new Map<string, string[]>();
+  /** Labels whose listing ignores the label (a wrong query for ONE label only). */
+  private readonly unscoped = new Set<string>();
   /** Simulates a WRONG QUERY: listings ignore the label and return every message in the mailbox. */
   ignoreLabelScope = false;
 
@@ -120,6 +124,16 @@ export class FakeGmail implements GmailClient {
     this.events.push({ historyId: ++this.historyId, type: 'messageAdded', messageId: message.id });
   }
 
+  /** The listing for THIS label alone ignores the label and returns the whole mailbox. */
+  ignoreScopeFor(labelName: string): void {
+    this.unscoped.add(this.labelId(labelName));
+  }
+
+  /** The listing for this label will ALSO return these message ids. */
+  injectIntoListing(labelName: string, messageIds: string[]): void {
+    this.injected.set(this.labelId(labelName), messageIds);
+  }
+
   /** A history record will report these label ids for the message, whatever it carries. */
   claimInHistory(messageId: string, labelIds: string[]): void {
     this.historyClaims.set(messageId, labelIds);
@@ -162,7 +176,10 @@ export class FakeGmail implements GmailClient {
   listMessageRefs(query: ListQuery): Promise<{ refs: MessageRef[]; nextPageToken?: string }> {
     this.calls.list.push({ ...query });
     let all = [...this.messages.values()];
-    if (!this.ignoreLabelScope) all = all.filter((m) => m.labels.includes(query.labelId));
+    if (!this.ignoreLabelScope && !this.unscoped.has(query.labelId)) {
+      const extra = new Set(this.injected.get(query.labelId) ?? []);
+      all = all.filter((m) => m.labels.includes(query.labelId) || extra.has(m.id));
+    }
     if (query.after) {
       const after = Date.parse(`${query.after.replaceAll('/', '-')}T00:00:00Z`);
       all = all.filter((m) => Date.parse(m.receivedAt) >= after);

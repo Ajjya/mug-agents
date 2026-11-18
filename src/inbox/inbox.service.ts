@@ -342,15 +342,18 @@ export class InboxService {
     }
     for (const ref of fresh) ctx.seen.add(ref.id);
     const r = await observeCandidateRefs(fresh, this.deps.gmail, {
+      candidateLabelId: ctx.candidateId,
       candidates: this.deps.candidates,
       now: ctx.now,
       dryRun: ctx.dry,
     });
     ctx.report.candidatesRecorded += r.recorded;
+    ctx.report.dropped += r.rejected; // listed as a candidate, but its own headers say otherwise
   }
 
   private async noteCandidate(meta: GmailMetadata, ctx: PollCtx): Promise<void> {
     const outcome = await recordCandidate(meta, {
+      candidateLabelId: ctx.candidateId,
       candidates: this.deps.candidates,
       now: ctx.now,
       dryRun: ctx.dry,
