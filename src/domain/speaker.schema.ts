@@ -24,6 +24,12 @@ export const SpeakerEventStatusSchema = z
     eventId: entityId,
     status: z.enum(SPEAKER_STATUSES),
     updatedAt: isoDate,
+    /**
+     * When mail from this speaker last arrived and was linked to this event (set by the inbox, never by
+     * the Speakers agent). Any inbound message counts, classified or not: it pauses chasing until a
+     * human acts. Independent of `updatedAt`, which dates the STATUS.
+     */
+    lastInboundAt: isoDate.optional(),
   })
   .strict();
 

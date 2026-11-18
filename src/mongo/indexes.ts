@@ -7,6 +7,12 @@ export const COLLECTIONS = {
   organisations: 'organisations',
   tasks: 'tasks',
   messages: 'messages',
+  inboundMessages: 'inbound_messages',
+  admittedThreads: 'admitted_threads',
+  excludedThreads: 'excluded_threads',
+  candidateThreads: 'candidate_threads',
+  contacts: 'contacts',
+  inboxCursor: 'inbox_cursor',
   approvalRequests: 'approval_requests',
   approvalDecisions: 'approval_decisions',
   // Operational data owned by the LangGraph MongoDB checkpointer (see src/graph).
@@ -39,6 +45,25 @@ export const INDEXES: Record<CollectionName, IndexDescription[]> = {
     { key: { eventId: 1, speakerId: 1 }, name: 'messages_eventId_speakerId' },
     { key: { speakerId: 1, status: 1 }, name: 'messages_speakerId_status' },
   ],
+  // The idempotency anchor: re-polling the same message is a no-op, not a duplicate.
+  inbound_messages: [
+    { key: { gmailId: 1 }, name: 'inbound_messages_gmailId_unique', unique: true },
+    { key: { threadId: 1 }, name: 'inbound_messages_threadId' },
+    { key: { linkedSpeakerId: 1, linkedEventId: 1 }, name: 'inbound_messages_linked' },
+    { key: { triageState: 1 }, name: 'inbound_messages_triageState' },
+  ],
+  admitted_threads: [
+    { key: { threadId: 1 }, name: 'admitted_threads_threadId_unique', unique: true },
+  ],
+  excluded_threads: [
+    { key: { threadId: 1 }, name: 'excluded_threads_threadId_unique', unique: true },
+  ],
+  candidate_threads: [
+    { key: { threadId: 1 }, name: 'candidate_threads_threadId_unique', unique: true },
+    { key: { state: 1 }, name: 'candidate_threads_state' },
+  ],
+  contacts: [{ key: { address: 1 }, name: 'contacts_address_unique', unique: true }],
+  inbox_cursor: [{ key: { key: 1 }, name: 'inbox_cursor_key_unique', unique: true }],
   // At most one request per (thread, run, node): a re-run node can never create a second one.
   approval_requests: [
     {

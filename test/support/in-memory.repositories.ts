@@ -443,3 +443,256 @@ export class InMemoryMessagesRepository
     );
   }
 }
+
+// ---- the inbox (M4a) ----------------------------------------------------------------------------
+
+import {
+  AdmittedThreadInputSchema,
+  AdmittedThreadPatchSchema,
+  AdmittedThreadSchema,
+  CandidateThreadInputSchema,
+  CandidateThreadPatchSchema,
+  CandidateThreadSchema,
+  ContactInputSchema,
+  ContactPatchSchema,
+  ContactSchema,
+  ExcludedThreadInputSchema,
+  ExcludedThreadPatchSchema,
+  ExcludedThreadSchema,
+  InboundMessageInputSchema,
+  InboundMessagePatchSchema,
+  InboundMessageViewSchema,
+  InboxCursorInputSchema,
+  InboxCursorPatchSchema,
+  InboxCursorSchema,
+  type AdmittedThread,
+  type CandidateThread,
+  type Contact,
+  type ExcludedThread,
+  type InboundMessage,
+  type InboundMessageInput,
+  type InboundMessagePatch,
+  type InboxCursor,
+} from '../../src/domain/inbox.schema.js';
+import type {
+  AdmittedThreadsRepository,
+  CandidateThreadsRepository,
+  ContactsRepository,
+  ExcludedThreadsRepository,
+  InboundMessagesRepository,
+  InboxCursorRepository,
+} from '../../src/inbox/repositories.js';
+
+const unique = (table: string, key: Record<string, 1>): never => {
+  throw new DuplicateKeyError(table, key);
+};
+
+export class InMemoryAdmittedThreadsRepository
+  extends InMemoryRepository<
+    typeof AdmittedThreadInputSchema,
+    typeof AdmittedThreadSchema,
+    typeof AdmittedThreadPatchSchema
+  >
+  implements AdmittedThreadsRepository
+{
+  constructor() {
+    super({
+      input: AdmittedThreadInputSchema,
+      doc: AdmittedThreadSchema,
+      patch: AdmittedThreadPatchSchema,
+    });
+  }
+  protected override beforeWrite(next: AdmittedThread, previous: AdmittedThread | undefined): void {
+    if (this.all().some((d) => d._id !== previous?._id && d.threadId === next.threadId))
+      unique('admitted_threads', { threadId: 1 });
+  }
+  async findByThreadId(threadId: string) {
+    return this.where((d) => d.threadId === threadId, { limit: 1 }).items[0] ?? null;
+  }
+  async findRecent(limit: number) {
+    return this.where(() => true, { limit, sort: 'desc' }).items;
+  }
+}
+
+export class InMemoryExcludedThreadsRepository
+  extends InMemoryRepository<
+    typeof ExcludedThreadInputSchema,
+    typeof ExcludedThreadSchema,
+    typeof ExcludedThreadPatchSchema
+  >
+  implements ExcludedThreadsRepository
+{
+  constructor() {
+    super({
+      input: ExcludedThreadInputSchema,
+      doc: ExcludedThreadSchema,
+      patch: ExcludedThreadPatchSchema,
+    });
+  }
+  protected override beforeWrite(next: ExcludedThread, previous: ExcludedThread | undefined): void {
+    if (this.all().some((d) => d._id !== previous?._id && d.threadId === next.threadId))
+      unique('excluded_threads', { threadId: 1 });
+  }
+  async findByThreadId(threadId: string) {
+    return this.where((d) => d.threadId === threadId, { limit: 1 }).items[0] ?? null;
+  }
+}
+
+export class InMemoryCandidateThreadsRepository
+  extends InMemoryRepository<
+    typeof CandidateThreadInputSchema,
+    typeof CandidateThreadSchema,
+    typeof CandidateThreadPatchSchema
+  >
+  implements CandidateThreadsRepository
+{
+  constructor() {
+    super({
+      input: CandidateThreadInputSchema,
+      doc: CandidateThreadSchema,
+      patch: CandidateThreadPatchSchema,
+    });
+  }
+  protected override beforeWrite(
+    next: CandidateThread,
+    previous: CandidateThread | undefined,
+  ): void {
+    if (this.all().some((d) => d._id !== previous?._id && d.threadId === next.threadId))
+      unique('candidate_threads', { threadId: 1 });
+  }
+  async findByThreadId(threadId: string) {
+    return this.where((d) => d.threadId === threadId, { limit: 1 }).items[0] ?? null;
+  }
+  async findByState(state: CandidateThread['state'], options?: FindManyOptions) {
+    const valid = CandidateThreadInputSchema.shape.state.parse(state);
+    return this.where((d) => d.state === valid, options);
+  }
+}
+
+export class InMemoryContactsRepository
+  extends InMemoryRepository<
+    typeof ContactInputSchema,
+    typeof ContactSchema,
+    typeof ContactPatchSchema
+  >
+  implements ContactsRepository
+{
+  constructor() {
+    super({ input: ContactInputSchema, doc: ContactSchema, patch: ContactPatchSchema });
+  }
+  protected override beforeWrite(next: Contact, previous: Contact | undefined): void {
+    if (this.all().some((d) => d._id !== previous?._id && d.address === next.address))
+      unique('contacts', { address: 1 });
+  }
+  async findByAddress(address: string) {
+    const normalised = ContactInputSchema.shape.address.safeParse(address.trim());
+    if (!normalised.success) return null;
+    return this.where((d) => d.address === normalised.data, { limit: 1 }).items[0] ?? null;
+  }
+}
+
+export class InMemoryInboxCursorRepository
+  extends InMemoryRepository<
+    typeof InboxCursorInputSchema,
+    typeof InboxCursorSchema,
+    typeof InboxCursorPatchSchema
+  >
+  implements InboxCursorRepository
+{
+  constructor() {
+    super({ input: InboxCursorInputSchema, doc: InboxCursorSchema, patch: InboxCursorPatchSchema });
+  }
+  protected override beforeWrite(next: InboxCursor, previous: InboxCursor | undefined): void {
+    if (this.all().some((d) => d._id !== previous?._id && d.key === (next.key as string)))
+      unique('inbox_cursor', { key: 1 });
+  }
+  async get() {
+    return this.where(() => true, { limit: 1 }).items[0] ?? null;
+  }
+}
+
+/**
+ * Same contract as the Mongo one: a unique gmailId, and no read returns the body. The bodies are kept
+ * in a separate map that only getRawBody touches, so a leak through a view is impossible here too.
+ */
+export class InMemoryInboundMessagesRepository implements InboundMessagesRepository {
+  private readonly docs = new Map<string, InboundMessage>();
+  private readonly bodies = new Map<string, string>();
+  /** For tests: how many times each body was read through getRawBody. */
+  readonly rawBodyReads: string[] = [];
+
+  async insert(input: InboundMessageInput): Promise<{ message: InboundMessage; created: boolean }> {
+    toStorage(InboundMessageInputSchema, input);
+    const existing = await this.findByGmailId(input.gmailId);
+    if (existing) return { message: existing, created: false };
+    const now = new Date().toISOString();
+    const { bodyText, ...rest } = input;
+    const view = fromStorage(
+      InboundMessageViewSchema,
+      toStorage(InboundMessageViewSchema, {
+        ...rest,
+        _id: newEntityId(),
+        version: 1,
+        createdAt: now,
+        updatedAt: now,
+      }),
+    );
+    if (!view.success) throw view.error;
+    this.docs.set(view.data._id, view.data);
+    this.bodies.set(view.data._id, bodyText);
+    return { message: structuredClone(view.data), created: true };
+  }
+  async findById(id: EntityId) {
+    const d = isEntityId(id) ? this.docs.get(id.toLowerCase()) : undefined;
+    return d ? structuredClone(d) : null;
+  }
+  async findByGmailId(gmailId: string) {
+    const d = [...this.docs.values()].find((x) => x.gmailId === gmailId);
+    return d ? structuredClone(d) : null;
+  }
+  async knownGmailIds(ids: readonly string[]) {
+    const have = new Set([...this.docs.values()].map((d) => d.gmailId));
+    return new Set(ids.filter((i) => have.has(i)));
+  }
+  private sorted(): InboundMessage[] {
+    return [...this.docs.values()].sort((a, b) => (a._id < b._id ? -1 : 1));
+  }
+  async findByThreadId(threadId: string) {
+    return structuredClone(this.sorted().filter((d) => d.threadId === threadId));
+  }
+  async findByTriageState(state: 'pending' | 'failed', limit: number) {
+    return structuredClone(
+      this.sorted()
+        .filter((d) => d.triageState === state)
+        .slice(0, limit),
+    );
+  }
+  async findRecent(limit: number) {
+    return structuredClone(this.sorted().slice(-limit));
+  }
+  async update(id: EntityId, patch: InboundMessagePatch) {
+    const current = isEntityId(id) ? this.docs.get(id.toLowerCase()) : undefined;
+    if (!current) return null;
+    toStorage(InboundMessagePatchSchema, patch); // validated like the Mongo one
+    const next = {
+      ...current,
+      ...Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined)),
+      version: current.version + 1,
+      updatedAt: new Date().toISOString(),
+    };
+    const checked = fromStorage(
+      InboundMessageViewSchema,
+      toStorage(InboundMessageViewSchema, next),
+    );
+    if (!checked.success) throw checked.error;
+    this.docs.set(current._id, checked.data);
+    return structuredClone(checked.data);
+  }
+  async getRawBody(id: EntityId) {
+    this.rawBodyReads.push(id);
+    return this.bodies.get(id.toLowerCase()) ?? null;
+  }
+  async count() {
+    return this.docs.size;
+  }
+}
