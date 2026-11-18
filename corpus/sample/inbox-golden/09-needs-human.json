@@ -1,0 +1,30 @@
+{
+  "id": "f09",
+  "source": "fictional",
+  "seededBy": "hand",
+  "attachments": [],
+  "body": "Hi,\n\nI might not be able to make it. I am dealing with a medical thing and I do not know yet how it will go. Can I tell you next week? Please keep this between us.\n\nPip Lanternfield\n\nOn Mon, 19 Oct 2026 at 10:00, MUG Organiser <organiser@mug.invalid> wrote:\n> Hello, would you speak at the MUG Sample City Winter Meetup on 12 December?\n> Thanks, the MUG organisers",
+  "expected": {
+    "intent": {
+      "value": "speaker_reply",
+      "status": "verified"
+    },
+    "sentiment_decision": {
+      "value": "unclear",
+      "status": "verified"
+    },
+    "materials": {
+      "value": {
+        "abstract": false,
+        "bio": false,
+        "photo": false,
+        "slides": false
+      },
+      "status": "verified"
+    },
+    "needs_human": {
+      "value": true,
+      "status": "verified"
+    }
+  }
+}

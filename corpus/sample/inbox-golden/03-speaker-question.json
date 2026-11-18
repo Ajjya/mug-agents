@@ -1,0 +1,30 @@
+{
+  "id": "f03",
+  "source": "fictional",
+  "seededBy": "hand",
+  "attachments": [],
+  "body": "Hi there,\n\nBefore I confirm: is the Kettle Room step-free, and will my talk be recorded? Also, how long is the slot?\n\nThanks,\nZara Quillfeather\n\n-- \nZara Quillfeather\nLantern Works\nTel +351 910 000 000\nRua das Amoreiras 12, 1000-001 Sample City",
+  "expected": {
+    "intent": {
+      "value": "speaker_reply",
+      "status": "verified"
+    },
+    "sentiment_decision": {
+      "value": "asks_question",
+      "status": "verified"
+    },
+    "materials": {
+      "value": {
+        "abstract": false,
+        "bio": false,
+        "photo": false,
+        "slides": false
+      },
+      "status": "verified"
+    },
+    "needs_human": {
+      "value": false,
+      "status": "verified"
+    }
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "id": "f05",
+  "source": "fictional",
+  "seededBy": "hand",
+  "attachments": [],
+  "body": "Good morning,\n\nThe Kettle Room is free on 12 December and we are happy to host. Please confirm the number of attendees by 9 December, and let us know if you need the projector.\n\nKind regards,\nCogwheel Facilities\n\n-- \nCogwheel Facilities\nCogwheel & Marmalade Ltd.\nTel +351 210 000 000\nRua das Amoreiras 12, 1000-001 Sample City",
+  "expected": {
+    "intent": {
+      "value": "venue_reply",
+      "status": "verified"
+    },
+    "sentiment_decision": {
+      "value": "accepts",
+      "status": "verified"
+    },
+    "materials": {
+      "value": {
+        "abstract": false,
+        "bio": false,
+        "photo": false,
+        "slides": false
+      },
+      "status": "verified"
+    },
+    "needs_human": {
+      "value": false,
+      "status": "verified"
+    }
+  }
+}

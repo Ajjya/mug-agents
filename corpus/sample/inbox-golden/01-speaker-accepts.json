@@ -1,0 +1,30 @@
+{
+  "id": "f01",
+  "source": "fictional",
+  "seededBy": "hand",
+  "attachments": [],
+  "body": "Hi!\n\nYes, I would be delighted to give a talk at the Winter Meetup on 12 December. Count me in.\n\nBest,\nWendeline\n\n-- \nWendeline Gooseberry\nTeapot Analytics\nTel +351 910 000 000\nRua das Amoreiras 12, 1000-001 Sample City\n\nOn Mon, 19 Oct 2026 at 10:00, MUG Organiser <organiser@mug.invalid> wrote:\n> Hello, would you speak at the MUG Sample City Winter Meetup on 12 December?\n> Thanks, the MUG organisers",
+  "expected": {
+    "intent": {
+      "value": "speaker_reply",
+      "status": "verified"
+    },
+    "sentiment_decision": {
+      "value": "accepts",
+      "status": "verified"
+    },
+    "materials": {
+      "value": {
+        "abstract": false,
+        "bio": false,
+        "photo": false,
+        "slides": false
+      },
+      "status": "verified"
+    },
+    "needs_human": {
+      "value": false,
+      "status": "verified"
+    }
+  }
+}

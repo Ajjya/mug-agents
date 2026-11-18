@@ -1,0 +1,30 @@
+{
+  "id": "f10",
+  "source": "fictional",
+  "seededBy": "hand",
+  "attachments": [],
+  "body": "Hi,\n\nIs there parking at the venue, and do I need to bring ID to get in? Also is the meetup free?\n\nThanks,\nBen",
+  "expected": {
+    "intent": {
+      "value": "attendee_question",
+      "status": "verified"
+    },
+    "sentiment_decision": {
+      "value": "asks_question",
+      "status": "verified"
+    },
+    "materials": {
+      "value": {
+        "abstract": false,
+        "bio": false,
+        "photo": false,
+        "slides": false
+      },
+      "status": "verified"
+    },
+    "needs_human": {
+      "value": false,
+      "status": "verified"
+    }
+  }
+}

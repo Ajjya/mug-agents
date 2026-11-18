@@ -1,0 +1,30 @@
+{
+  "id": "f06",
+  "source": "fictional",
+  "seededBy": "hand",
+  "attachments": [],
+  "body": "Hello MUG team,\n\nWe at Teapot Analytics would love to sponsor the pizza at your next meetup. Could you send us your sponsorship options and the usual audience size?\n\nThank you,\nMira Vantablack\n\n-- \nMira Vantablack\nTeapot Analytics\nTel +351 910 000 000\nRua das Amoreiras 12, 1000-001 Sample City",
+  "expected": {
+    "intent": {
+      "value": "sponsor_enquiry",
+      "status": "verified"
+    },
+    "sentiment_decision": {
+      "value": "asks_question",
+      "status": "verified"
+    },
+    "materials": {
+      "value": {
+        "abstract": false,
+        "bio": false,
+        "photo": false,
+        "slides": false
+      },
+      "status": "verified"
+    },
+    "needs_human": {
+      "value": false,
+      "status": "verified"
+    }
+  }
+}

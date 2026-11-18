@@ -1,0 +1,30 @@
+{
+  "id": "f02",
+  "source": "fictional",
+  "seededBy": "hand",
+  "attachments": [],
+  "body": "Hello,\n\nI am so sorry, but I have to withdraw from the Winter Meetup: a client deadline moved and I cannot be away that week. I hope to join you another time.\n\nIgnatius Fogwhistle\n\nOn Mon, 19 Oct 2026 at 10:00, MUG Organiser <organiser@mug.invalid> wrote:\n> Hello, would you speak at the MUG Sample City Winter Meetup on 12 December?\n> Thanks, the MUG organisers",
+  "expected": {
+    "intent": {
+      "value": "speaker_reply",
+      "status": "verified"
+    },
+    "sentiment_decision": {
+      "value": "declines",
+      "status": "verified"
+    },
+    "materials": {
+      "value": {
+        "abstract": false,
+        "bio": false,
+        "photo": false,
+        "slides": false
+      },
+      "status": "verified"
+    },
+    "needs_human": {
+      "value": false,
+      "status": "verified"
+    }
+  }
+}

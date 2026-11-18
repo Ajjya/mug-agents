@@ -1,0 +1,36 @@
+{
+  "id": "f04",
+  "source": "fictional",
+  "seededBy": "hand",
+  "attachments": [
+    {
+      "filename": "attachment-1.jpg",
+      "mimeType": "image/jpeg",
+      "sizeBytes": 245000
+    }
+  ],
+  "body": "Hi,\n\nAs promised, my bio is below and my photo is attached.\n\nBio: Otto Brambleworth builds event-driven systems and has spoken about change streams for ten years.\n\nOtto\n\nOn Mon, 19 Oct 2026 at 10:00, MUG Organiser <organiser@mug.invalid> wrote:\n> Hello, would you speak at the MUG Sample City Winter Meetup on 12 December?\n> Thanks, the MUG organisers",
+  "expected": {
+    "intent": {
+      "value": "speaker_reply",
+      "status": "verified"
+    },
+    "sentiment_decision": {
+      "value": "sends_material",
+      "status": "verified"
+    },
+    "materials": {
+      "value": {
+        "abstract": false,
+        "bio": true,
+        "photo": true,
+        "slides": false
+      },
+      "status": "verified"
+    },
+    "needs_human": {
+      "value": false,
+      "status": "verified"
+    }
+  }
+}

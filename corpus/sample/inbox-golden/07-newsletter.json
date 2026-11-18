@@ -1,0 +1,30 @@
+{
+  "id": "f07",
+  "source": "fictional",
+  "seededBy": "hand",
+  "attachments": [],
+  "body": "Database Weekly, issue 412\n\nThis week in databases: a new release, three tutorials and a conference roundup.\n\nYou are receiving this because you subscribed. To stop receiving it, click unsubscribe below.\n\nUnsubscribe | View in browser",
+  "expected": {
+    "intent": {
+      "value": "newsletter_or_noise",
+      "status": "verified"
+    },
+    "sentiment_decision": {
+      "value": "unclear",
+      "status": "verified"
+    },
+    "materials": {
+      "value": {
+        "abstract": false,
+        "bio": false,
+        "photo": false,
+        "slides": false
+      },
+      "status": "verified"
+    },
+    "needs_human": {
+      "value": false,
+      "status": "verified"
+    }
+  }
+}
