@@ -18,30 +18,50 @@
 
 export const TRUNCATION_MARKER = '\n[... truncated]';
 
+/** A dashed line naming the original or forwarded message, in the languages mail here arrives in. */
 const REPLY_MARKERS: readonly RegExp[] = [
-  /^-{2,}\s*Original Message\s*-{2,}\s*$/i,
-  /^-{2,}\s*Forwarded message\s*-{2,}\s*$/i,
+  /^-{2,}\s*(Original Message|Mensagem original|Mensaje original|Message d'origine|Original-Nachricht|Messaggio originale|Oorspronkelijk bericht)\s*-{2,}\s*$/i,
+  /^-{2,}\s*(Forwarded message|Mensagem encaminhada|Mensaje reenviado|Message transf[eé]r[eé]|Weitergeleitete Nachricht|Messaggio inoltrato)\s*-{2,}\s*$/i,
   /^_{10,}\s*$/, // the rule above an Outlook header block
 ];
 
-/** "On ... wrote:" and its translations, on one line. */
-const WROTE_LINE = /^(On|Em|Le|El)\b.{3,300}\b(wrote|escreveu|a écrit|escribió)\s*:\s*$/i;
+const VERBS = 'wrote|escreveu|a écrit|escribió|schrieb|schreef|ha scritto';
+const OPENERS = 'On|Em|No dia|Le|El|Am|Op|Il';
+/**
+ * "On ... wrote:" and its translations, on one line. The colon is REQUIRED: without it an ordinary
+ * sentence that happens to end in "escreveu" would cut a message in half.
+ * "No dia ... escreveu:" is, I believe, what European-Portuguese Gmail writes; unverified against a real mailbox.
+ */
+const WROTE_LINE = new RegExp(`^(${OPENERS})\\b.{3,300}\\b(${VERBS})\\s*:\\s*$`, 'i');
+/** German and Dutch put the verb BEFORE the name: "Am 19.10. um 10:00 schrieb Ana <a@x>:". */
+const WROTE_VERB_FIRST = /^(Am|Op)\b.{3,200}\b(schrieb|schreef)\b.{1,200}:\s*$/i;
 /** The same, when the client wrapped it so that only the second line ends in "wrote:". */
-const WROTE_TAIL = /^.{0,200}\b(wrote|escreveu|a écrit|escribió)\s*:\s*$/i;
-const HEADER_BLOCK = /^(From|De):\s.+$/i;
-const HEADER_FOLLOW = /^(Sent|Date|Enviado|Data|To|Para|Subject|Assunto):\s/i;
+const WROTE_TAIL = new RegExp(`^.{0,200}\\b(${VERBS})\\s*:\\s*$`, 'i');
+const OPENER_START = new RegExp(`^(${OPENERS})\\b`, 'i');
+/** An Outlook-style header block: a From-line followed by a Sent/To/Subject line (bold markers ignored). */
+const HEADER_BLOCK = /^(From|De|Von|Da|Van):\s.+$/i;
+const HEADER_FOLLOW =
+  /^(Sent|Date|Enviado|Data|To|Para|Subject|Assunto|An|Betreff|Gesendet|Datum|Inviato|Oggetto|Aan|Onderwerp|Verzonden):\s/i;
+
+/** Non-breaking spaces and markdown emphasis are noise for matching a marker. */
+const plain = (line: string): string =>
+  line
+    .replace(/\u00a0/g, ' ')
+    .replace(/[*_]{1,3}/g, '')
+    .trim();
 
 export function stripQuotedHistory(text: string): string {
   const lines = text.split('\n');
   let cut = lines.length;
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i] ?? '';
-    const next = lines[i + 1] ?? '';
+    const line = plain(lines[i] ?? '');
+    const next = plain(lines[i + 1] ?? '');
     const marker =
-      REPLY_MARKERS.some((re) => re.test(line.trim())) ||
-      WROTE_LINE.test(line.trim()) ||
-      (/^(On|Em|Le|El)\b/i.test(line.trim()) && WROTE_TAIL.test(next.trim())) ||
-      (HEADER_BLOCK.test(line.trim()) && HEADER_FOLLOW.test(next.trim()));
+      REPLY_MARKERS.some((re) => re.test(line)) ||
+      WROTE_LINE.test(line) ||
+      WROTE_VERB_FIRST.test(line) ||
+      (OPENER_START.test(line) && WROTE_TAIL.test(next)) ||
+      (HEADER_BLOCK.test(line) && HEADER_FOLLOW.test(next));
     if (marker) {
       cut = i;
       break;

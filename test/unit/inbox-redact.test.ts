@@ -47,6 +47,62 @@ describe('quoted history is stripped', () => {
   });
 });
 
+describe('more reply and forward markers (review: each missing one leaks the whole quoted thread)', () => {
+  const REPLY = 'My actual reply.';
+  const QUOTED = 'QUOTED-THREAD-TEXT that must never reach a provider.';
+  it.each([
+    // "No dia ..." is, I believe, what European-Portuguese Gmail writes. UNVERIFIED against a real mailbox.
+    [
+      'pt-PT Gmail: No dia',
+      `${REPLY}\n\nNo dia 19/10/2026, às 10:00, Ana <ana@x.invalid> escreveu:\n> ${QUOTED}`,
+    ],
+    [
+      'pt: No dia, wrapped',
+      `${REPLY}\n\nNo dia 19/10/2026, às 10:00, Ana Silva <ana.silva@example.invalid>\nescreveu:\n${QUOTED}`,
+    ],
+    [
+      'German: Am ... schrieb',
+      `${REPLY}\n\nAm 19.10.2026 um 10:00 schrieb Ana <ana@x.invalid>:\n> ${QUOTED}`,
+    ],
+    ['Italian', `${REPLY}\n\nIl 19/10/2026 alle 10:00 Ana <ana@x.invalid> ha scritto:\n${QUOTED}`],
+    ['Dutch', `${REPLY}\n\nOp 19 okt. 2026 om 10:00 schreef Ana <ana@x.invalid>:\n${QUOTED}`],
+    ['Portuguese Original Message', `${REPLY}\n\n-----Mensagem Original-----\n${QUOTED}`],
+    ['Portuguese forwarded', `${REPLY}\n\n---------- Mensagem encaminhada ----------\n${QUOTED}`],
+    ['Gmail English forwarded', `${REPLY}\n\n---------- Forwarded message ---------\n${QUOTED}`],
+    ['German original', `${REPLY}\n\n-----Original-Nachricht-----\n${QUOTED}`],
+    ['French original', `${REPLY}\n\n-----Message d'origine-----\n${QUOTED}`],
+    [
+      'bold Portuguese Outlook header',
+      `${REPLY}\n\n**De:** Ana\n**Enviado:** segunda-feira\n**Para:** MUG\n\n${QUOTED}`,
+    ],
+    [
+      'German Outlook header',
+      `${REPLY}\n\nVon: Ana\nGesendet: Montag, 19. Oktober 2026\nAn: MUG\nBetreff: x\n\n${QUOTED}`,
+    ],
+    [
+      'a non-breaking space in the marker',
+      `${REPLY}\n\nEm seg., 19 de out. de\u00a02026 às 10:00, Ana <a@x.invalid>\u00a0escreveu:\n${QUOTED}`,
+    ],
+  ])('%s', (_name, body) => {
+    const out = R(body);
+    expect(out).toBe(REPLY);
+    expect(out).not.toContain('QUOTED-THREAD');
+  });
+
+  it('does NOT strip ordinary prose that merely resembles a marker', () => {
+    for (const body of [
+      'No dia a dia usamos MongoDB, e o Rui escreveu um bom guia.',
+      'Am I too late to register? Someone schrieb me that it is full.',
+      'Il y a un problème, he said and wrote it down.',
+      'We discussed the ---------- of the schedule.',
+      'De: that is the abbreviation I use for Germany',
+      'Op zondag hoeft niets.',
+    ]) {
+      expect(R(body)).toBe(body);
+    }
+  });
+});
+
 describe('signatures are stripped', () => {
   it('after a line that is exactly "-- "', () => {
     expect(stripSignature('Thanks!\n-- \nWendeline\nCTO, Example')).toBe('Thanks!');
