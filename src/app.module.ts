@@ -1,4 +1,4 @@
-import { type DynamicModule, Module } from '@nestjs/common';
+import { type DynamicModule, Module, type ModuleMetadata } from '@nestjs/common';
 import { RetrievalModule } from './retrieval/retrieval.module.js';
 import { ApprovalsModule } from './approvals/approvals.module.js';
 import { ConfigModule } from './config/config.module.js';
@@ -13,7 +13,12 @@ import { RepositoriesModule } from './repositories/repositories.module.js';
 @Module({})
 export class AppModule {
   /** Config and logger are built once (main.ts) and shared with the container as values. */
-  static register(config: AppConfig, logger: AppLogger): DynamicModule {
+  static register(
+    config: AppConfig,
+    logger: AppLogger,
+    /** Modules only some entry points load (the inbox CLI): nothing else boots them. */
+    extraImports: NonNullable<ModuleMetadata['imports']> = [],
+  ): DynamicModule {
     return {
       module: AppModule,
       imports: [
@@ -25,6 +30,7 @@ export class AppModule {
         ApprovalsModule,
         RetrievalModule,
         HealthModule,
+        ...extraImports,
       ],
     };
   }

@@ -1,5 +1,5 @@
 import 'reflect-metadata';
-import type { INestApplicationContext } from '@nestjs/common';
+import type { INestApplicationContext, ModuleMetadata } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from '../src/app.module.js';
 import { loadConfig } from '../src/config/config.module.js';
@@ -10,6 +10,8 @@ import { AppLogger } from '../src/logging/logger.module.js';
 export function runCli(
   fn: (app: INestApplicationContext, config: AppConfig) => Promise<number>,
   onError: (err: unknown) => number | undefined = () => undefined,
+  /** Modules only this command loads (e.g. the inbox). A module that fails to boot fails the command. */
+  extraImports: NonNullable<ModuleMetadata['imports']> = [],
 ): void {
   const main = async (): Promise<number> => {
     let config: AppConfig;
@@ -23,10 +25,13 @@ export function runCli(
       throw err;
     }
     const logger = new AppLogger(config);
-    const app = await NestFactory.createApplicationContext(AppModule.register(config, logger), {
-      logger,
-      abortOnError: false,
-    });
+    const app = await NestFactory.createApplicationContext(
+      AppModule.register(config, logger, extraImports),
+      {
+        logger,
+        abortOnError: false,
+      },
+    );
     try {
       return await fn(app, config);
     } catch (err) {
