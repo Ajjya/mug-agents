@@ -30,8 +30,10 @@
     "search": "npm run build:scripts --silent && node --env-file-if-exists=.env dist-scripts/scripts/search.js",
     "suggest-speakers": "npm run build:scripts --silent && node --env-file-if-exists=.env dist-scripts/scripts/suggest-speakers.js",
     "speakers": "npm run build:scripts --silent && node --env-file-if-exists=.env dist-scripts/scripts/speakers.js",
+    "inbox": "npm run build:scripts --silent && node --env-file-if-exists=.env dist-scripts/scripts/inbox.js",
     "eval:retrieval": "npm run build:scripts --silent && node --env-file-if-exists=.env dist-scripts/evals/retrieval/run.js",
     "eval:speakers": "npm run build:scripts --silent && node --env-file-if-exists=.env dist-scripts/evals/speakers/run.js",
+    "eval:triage": "npm run build:scripts --silent && node --env-file-if-exists=.env dist-scripts/evals/triage/run.js",
     "bench:crossover": "npm run build:scripts --silent && node --env-file-if-exists=.env dist-scripts/evals/retrieval/crossover.js"
   },
   "dependencies": {

@@ -43,6 +43,7 @@ import { Triager } from './triage.js';
 
 export const INBOX_CONFIG = Symbol('INBOX_CONFIG');
 export const GMAIL_CLIENT = Symbol('GMAIL_CLIENT');
+export const TRIAGER = Symbol('TRIAGER');
 
 /**
  * The inbox. It is imported ONLY by the inbox CLI and by tests, never by AppModule, so nothing else
@@ -72,6 +73,12 @@ export const GMAIL_CLIENT = Symbol('GMAIL_CLIENT');
         new LazyGmailClient(() => GoogleGmailClient.fromCredentials(requireGmailCredentials(c))),
     },
     {
+      provide: TRIAGER,
+      inject: [STRUCTURED_CALL, INBOX_CONFIG],
+      useFactory: (call: StructuredCall, config: InboxConfig) =>
+        new Triager({ call, maxChars: config.triageMaxChars, startAt: config.triageStartRung }),
+    },
+    {
       provide: InboxService,
       inject: [
         GMAIL_CLIENT,
@@ -85,7 +92,7 @@ export const GMAIL_CLIENT = Symbol('GMAIL_CLIENT');
         EVENTS_REPOSITORY,
         ORGANISATIONS_REPOSITORY,
         TASKS_REPOSITORY,
-        STRUCTURED_CALL,
+        TRIAGER,
         INBOX_CONFIG,
       ],
       useFactory: (
@@ -100,7 +107,7 @@ export const GMAIL_CLIENT = Symbol('GMAIL_CLIENT');
         events: EventsRepository,
         organisations: OrganisationsRepository,
         tasks: TasksRepository,
-        call: StructuredCall,
+        triager: Triager,
         config: InboxConfig,
       ) => {
         const logger = new Logger('Inbox');
@@ -117,11 +124,7 @@ export const GMAIL_CLIENT = Symbol('GMAIL_CLIENT');
           organisations,
           tasks,
           config,
-          triager: new Triager({
-            call,
-            maxChars: config.triageMaxChars,
-            startAt: config.triageStartRung,
-          }),
+          triager,
           // Counts and flags only: the service never passes a subject, an address or any text.
           log: (message, fields) => {
             logger.log(message, fields ?? {});
@@ -130,6 +133,6 @@ export const GMAIL_CLIENT = Symbol('GMAIL_CLIENT');
       },
     },
   ],
-  exports: [InboxService, INBOX_CONFIG],
+  exports: [InboxService, INBOX_CONFIG, TRIAGER],
 })
 export class InboxModule {}
