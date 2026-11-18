@@ -617,6 +617,52 @@ describe('1.1 candidates: metadata only, never a body, never a model', () => {
   });
 });
 
+describe('our own sent mail is not inbound: its body is never fetched (review: it was fetched on every poll)', () => {
+  it('a SENT message in a labelled thread, over three polls: zero body fetches, nothing stored or triaged', async () => {
+    const h = buildInboxHarness();
+    // Our own reply, carrying the label (a filter applied it) and in an admitted thread (th-001).
+    h.gmail.receive(
+      message({
+        id: 'm-800',
+        threadId: 'th-001',
+        labels: ['SENT', 'Label_1'],
+        from: 'MUG Organiser <organiser@mug.invalid>',
+        body: 'OUR-OWN-REPLY body',
+      }),
+    );
+    // And a plain SENT reply with no label of its own, found through the admitted-thread sweep.
+    h.gmail.receive(
+      message({
+        id: 'm-801',
+        threadId: 'th-001',
+        labels: ['SENT'],
+        from: 'MUG Organiser <organiser@mug.invalid>',
+        body: 'OUR-OWN-REPLY-2 body',
+      }),
+    );
+    let skipped = 0;
+    for (let i = 0; i < 3; i++) skipped += (await h.service.poll({ now: NOW })).skippedOutbound;
+
+    expect(h.gmail.calls.full).not.toContain('m-800'); // COUNTED across all three polls
+    expect(h.gmail.calls.full).not.toContain('m-801');
+    expect(skipped).toBeGreaterThanOrEqual(2);
+    expect(await h.repos.inbound.findByGmailId('m-800')).toBeNull();
+    expect(await h.repos.inbound.findByGmailId('m-801')).toBeNull();
+    expect(h.model.prompts.join('\n')).not.toContain('OUR-OWN-REPLY');
+  });
+
+  it('a history record for our own sent reply in an admitted thread: not fetched either', async () => {
+    const h = buildInboxHarness();
+    await h.service.poll({ now: NOW });
+    const fullBefore = h.gmail.calls.full.length;
+    h.gmail.receive(
+      message({ id: 'm-802', threadId: 'th-005', labels: ['SENT'], body: 'OUR-OWN-REPLY-3' }),
+    );
+    await h.service.poll({ now: NOW });
+    expect(h.gmail.calls.full.slice(fullBefore)).toEqual([]);
+  });
+});
+
 describe('1.4 a configured label that does not exist in Gmail is an error, never "everything"', () => {
   it('fails before any listing', async () => {
     const gmail = FakeGmail.fromFixture();

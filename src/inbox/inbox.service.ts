@@ -392,7 +392,7 @@ export class InboxService {
     for (const rec of rest) {
       ctx.seen.add(rec.messageId);
       if (await ctx.scope.isAdmitted(rec.threadId)) {
-        await this.fetchAndStore(rec.messageId, ctx);
+        await this.fetchAndStore(rec.messageId, ctx, undefined, rec.labelIds);
       } else if (rec.labelIds.includes(ctx.candidateId)) {
         await this.processCandidates([{ id: rec.messageId, threadId: rec.threadId }], {
           ...ctx,
@@ -432,7 +432,7 @@ export class InboxService {
           ctx.report.alreadyStored++;
           continue;
         }
-        await this.fetchAndStore(m.id, ctx);
+        await this.fetchAndStore(m.id, ctx, undefined, m.labelIds);
       }
     }
   }
@@ -442,8 +442,22 @@ export class InboxService {
    * admitted thread it belongs to) to be in scope. The response is checked once more before anything
    * is stored.
    */
-  private async fetchAndStore(id: string, ctx: PollCtx, meta?: GmailMetadata): Promise<void> {
+  private async fetchAndStore(
+    id: string,
+    ctx: PollCtx,
+    meta?: GmailMetadata,
+    /** The labels already known from a thread listing or a history record, when there is no metadata. */
+    knownLabels?: readonly string[],
+  ): Promise<void> {
     const { gmail } = this.deps;
+    // Our own side of the conversation is not inbound mail. Its labels are known BEFORE any body fetch
+    // (from the headers, the thread listing or the history record), so its body is never fetched at all:
+    // it used to be fetched, discarded, and fetched again on every poll.
+    const labelsBefore = meta?.labelIds ?? knownLabels;
+    if (labelsBefore?.some((l) => OUTBOUND_LABELS.includes(l))) {
+      ctx.report.skippedOutbound++;
+      return;
+    }
     if (ctx.dry) {
       const m = meta ?? (await gmail.getMetadata(id));
       // Dry run: the headers are all there is. A label in them admits the thread IN MEMORY, so later
