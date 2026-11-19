@@ -2,8 +2,14 @@
   "note": "A fictional mailbox for tests. Every name, address and body is invented. The PRIVATE-MARKER and CANDIDATE-BODY-MARKER strings exist only so a test can prove they never reach a database or a provider.",
   "self": "organiser@mug.invalid",
   "labels": [
-    { "id": "Label_1", "name": "mug-agents" },
-    { "id": "Label_2", "name": "mug-maybe" }
+    {
+      "id": "Label_1",
+      "name": "mug-agents"
+    },
+    {
+      "id": "Label_2",
+      "name": "mug-maybe"
+    }
   ],
   "messages": [
     {
@@ -69,7 +75,7 @@
     {
       "id": "m-006",
       "threadId": "th-001",
-      "labels": ["INBOX"],
+      "labels": ["INBOX", "Label_1"],
       "receivedAt": "2026-10-27T09:30:00.000Z",
       "from": "Wendeline Gooseberry <wendeline@speakers.invalid>",
       "to": "MUG Organiser <organiser@mug.invalid>",
@@ -77,8 +83,16 @@
       "messageId": "<m006@speakers.invalid>",
       "body": "Here are my bio and photo, as promised.",
       "attachments": [
-        { "filename": "bio.txt", "mimeType": "text/plain", "sizeBytes": 812 },
-        { "filename": "wendeline.jpg", "mimeType": "image/jpeg", "sizeBytes": 245000 }
+        {
+          "filename": "bio.txt",
+          "mimeType": "text/plain",
+          "sizeBytes": 812
+        },
+        {
+          "filename": "wendeline.jpg",
+          "mimeType": "image/jpeg",
+          "sizeBytes": 245000
+        }
       ]
     },
     {

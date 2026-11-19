@@ -216,20 +216,18 @@ const baseEnvSchema = z.object({
   GMAIL_LABEL: z.string().trim().min(1).optional(),
   /** Metadata-only label: nothing but headers is ever fetched. Required, distinct, no default. */
   GMAIL_CANDIDATE_LABEL: z.string().trim().min(1).optional(),
-  /** Desktop-app OAuth client and the refresh token. Secrets: never logged, never in an error. */
-  GMAIL_CLIENT_ID: z.string().min(1).optional(),
-  GMAIL_CLIENT_SECRET: z.string().min(1).optional(),
-  GMAIL_REFRESH_TOKEN: z.string().min(1).optional(),
+  /** Gmail over IMAP with an app password. The password is a secret: never logged, never in an error. */
+  IMAP_HOST: z.string().trim().min(1).default('imap.gmail.com'),
+  IMAP_PORT: z.coerce.number().int().min(1).max(65535).default(993),
+  IMAP_USER: z.string().trim().min(1).optional(),
+  IMAP_APP_PASSWORD: z.string().min(1).optional(),
   /** The ladder rung triage starts on (a `provider:model` that must be in LLM_MODEL_LADDER). */
   TRIAGE_START_MODEL: z.string().trim().min(1).default('ollama:gpt-oss:20b'),
   /** Bound on the redacted text a triage prompt may carry (truncated from the end, with a marker). */
   TRIAGE_MAX_CHARS: z.coerce.number().int().min(500).max(50_000).default(6000),
-  /** Pages of 500 ids the label sweep may read per poll: bounds a backfill. */
+  /** Pages of UIDs one folder sweep may read per poll: bounds a first backfill and a UIDVALIDITY re-sweep. */
   GMAIL_SWEEP_MAX_PAGES: z.coerce.number().int().min(1).max(100).default(20),
-  /** Admitted threads with activity in this many days are checked for later unlabelled replies. */
-  INBOX_THREAD_SWEEP_DAYS: z.coerce.number().int().min(1).max(365).default(60),
-  /** At most this many admitted threads are checked per poll. */
-  INBOX_THREAD_SWEEP_MAX: z.coerce.number().int().min(1).max(2000).default(200),
+  GMAIL_SWEEP_PAGE_SIZE: z.coerce.number().int().min(1).max(500).default(200),
   /** Who approvals are recorded as when the CLI is not given --by. No auth yet: recorded as-is. */
   APPROVER_NAME: z.string().trim().min(1).optional(),
   /**

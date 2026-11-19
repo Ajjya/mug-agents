@@ -97,7 +97,7 @@ describe('the inbox module validates its configuration at boot (spec 1.4)', () =
       label: 'mug-agents',
       candidateLabel: 'mug-maybe',
     });
-    expect(app.get<AppConfig>(APP_CONFIG).GMAIL_REFRESH_TOKEN).toBeUndefined();
+    expect(app.get<AppConfig>(APP_CONFIG).IMAP_APP_PASSWORD).toBeUndefined();
     await app.close();
   });
 });

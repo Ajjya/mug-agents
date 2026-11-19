@@ -15,9 +15,9 @@ import {
   type SpeakersRepository,
 } from '../repositories/speakers.repository.js';
 import { TASKS_REPOSITORY, type TasksRepository } from '../repositories/tasks.repository.js';
-import { GoogleGmailClient, LazyGmailClient } from './gmail.client.js';
 import type { GmailClient } from './gmail.transport.js';
-import { type InboxConfig, requireGmailCredentials, resolveInboxConfig } from './inbox.config.js';
+import { type InboxConfig, requireImapCredentials, resolveInboxConfig } from './inbox.config.js';
+import { ImapGmailClient, LazyGmailClient } from './imap.client.js';
 import { InboxService } from './inbox.service.js';
 import {
   ADMITTED_THREADS_REPOSITORY,
@@ -48,8 +48,8 @@ export const TRIAGER = Symbol('TRIAGER');
 /**
  * The inbox. It is imported ONLY by the inbox CLI and by tests, never by AppModule, so nothing else
  * boots it, and it validates its configuration when it boots: an unset GMAIL_LABEL or
- * GMAIL_CANDIDATE_LABEL, or the two being equal, fails here (spec 1.4), before any Gmail call can
- * exist. Gmail credentials are demanded lazily, on the first Gmail call, so commands that only read
+ * GMAIL_CANDIDATE_LABEL, or the two being equal, fails here (spec 1.4), before any mail call can
+ * exist, and so does a label that names INBOX or a [Gmail] folder. The app password is demanded lazily, on the first Gmail call, so commands that only read
  * the database (`candidates`, `admit`, `list`) need none.
  */
 @Module({
@@ -68,9 +68,14 @@ export const TRIAGER = Symbol('TRIAGER');
     { provide: INBOX_CURSOR_REPOSITORY, useClass: MongoInboxCursorRepository },
     {
       provide: GMAIL_CLIENT,
-      inject: [APP_CONFIG],
-      useFactory: (c: AppConfig): GmailClient =>
-        new LazyGmailClient(() => GoogleGmailClient.fromCredentials(requireGmailCredentials(c))),
+      inject: [APP_CONFIG, INBOX_CONFIG],
+      useFactory: (c: AppConfig, config: InboxConfig): GmailClient =>
+        new LazyGmailClient(() =>
+          ImapGmailClient.fromCredentials(requireImapCredentials(c), [
+            config.label,
+            config.candidateLabel,
+          ]),
+        ),
     },
     {
       provide: TRIAGER,

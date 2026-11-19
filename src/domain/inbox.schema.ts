@@ -235,20 +235,28 @@ export type ContactInput = z.infer<typeof ContactInputSchema>;
 
 // ---- the poll cursor ----
 
+/** Where the sweep of ONE label folder stopped: the highest UID processed, under the UIDVALIDITY it was read with. */
+export const FolderCursorSchema = z
+  .object({
+    folder: nonEmpty,
+    uidValidity: nonEmpty,
+    lastUid: z.number().int().min(0),
+  })
+  .strict();
+export type FolderCursor = z.infer<typeof FolderCursorSchema>;
+
 export const InboxCursorInputSchema = z
   .object({
     key: z.literal('gmail'),
-    /** `users.getProfile` historyId captured BEFORE the last sweep, so nothing slips between. */
-    historyId: nonEmpty.optional(),
     /**
-     * The Gmail label IDS the two configured names resolved to on the first real poll. Names can be
-     * renamed or recreated, and a different label could then carry the name (a candidate label renamed to
-     * the strong one would admit every candidate): a change is refused until the human confirms it.
+     * One entry per label folder. A label applied to an old message gives it a NEW, highest UID in that
+     * folder at the moment it is applied, so "UIDs above lastUid" is exactly "labelled since the last poll".
+     * A changed UIDVALIDITY discards the entry: the folder is swept again (bounded), and the unique
+     * Gmail id absorbs what was already stored.
      */
-    labelId: nonEmpty.optional(),
-    candidateLabelId: nonEmpty.optional(),
+    folders: z.array(FolderCursorSchema).optional(),
     lastPollAt: isoDate.optional(),
-    lastHistoryExpiredAt: isoDate.optional(),
+    lastUidValidityResetAt: isoDate.optional(),
   })
   .strict();
 export const InboxCursorSchema = InboxCursorInputSchema.extend(documentShape);

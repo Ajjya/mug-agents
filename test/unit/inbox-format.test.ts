@@ -49,19 +49,18 @@ describe('what `inbox poll --dry-run` prints (the first real run)', () => {
     expect(text).toContain('new candidate threads: 1');
   });
 
-  it('says so when the history id expired, when there is no cursor yet, and when the sweep was cut short', async () => {
+  it('says so when a folder was recreated, and when the sweep was cut short', async () => {
     const h = buildInboxHarness();
     const first = await h.service.poll({ now: NOW });
     expect(formatPollReport(first, { dryRun: false, label: 'x' }).join('\n')).toContain(
-      'History: no cursor yet.',
+      'by UID within each label folder',
     );
-    h.gmail.expireHistory();
+    h.gmail.recreateFolder('mug-agents');
     const second = await h.service.poll({ now: NOW });
     expect(formatPollReport(second, { dryRun: false, label: 'x' }).join('\n')).toContain(
-      'EXPIRED, fell back to the bounded label sweep',
+      'UIDVALIDITY changed',
     );
-    const h2 = buildInboxHarness({ config: { sweepMaxPages: 1 } });
-    h2.gmail.pageSize = 1;
+    const h2 = buildInboxHarness({ config: { sweepMaxPages: 1, sweepPageSize: 1 } });
     const cut = await h2.service.poll({ now: NOW });
     expect(formatPollReport(cut, { dryRun: false, label: 'x' }).join('\n')).toContain(
       'hit its page limit (GMAIL_SWEEP_MAX_PAGES)',

@@ -1,7 +1,9 @@
 import type {
   CandidateThread,
+  FolderCursor,
   InboundMessage,
   InboundMessageInput,
+  InboxCursor,
 } from '../domain/inbox.schema.js';
 import { ProviderUnavailableError } from '../llm/errors.js';
 import { DuplicateKeyError } from '../repositories/base.repository.js';
@@ -12,13 +14,7 @@ import type { TasksRepository } from '../repositories/tasks.repository.js';
 import { allPages } from '../agents/planner/plan-persistence.js';
 import { UNKNOWN_SENDER, parseAddress, parseAddressList } from './address.js';
 import { observeCandidateRefs, recordCandidate } from './candidates.js';
-import {
-  type GmailClient,
-  type GmailMetadata,
-  HistoryExpiredError,
-  type HistoryRecord,
-  type MessageRef,
-} from './gmail.transport.js';
+import type { GmailClient, GmailMetadata, MessageRef } from './gmail.transport.js';
 import type { InboxConfig } from './inbox.config.js';
 import { recordInbound, resolveLink } from './linking.js';
 import { redactForTriage } from './redact.js';
@@ -56,8 +52,6 @@ export interface PollOptions {
   /** Report what would be stored: reads headers only, fetches no body, calls no model, writes nothing. */
   dryRun?: boolean;
   now?: Date;
-  /** Accept that the configured label names now resolve to different Gmail labels, and pin the new ids. */
-  repinLabels?: boolean;
 }
 
 export interface PollReport {
@@ -75,9 +69,9 @@ export interface PollReport {
   triagePending: number;
   /** Pending messages left alone because their thread has been excluded since they were stored. */
   triageSkippedExcluded: number;
-  historyUsed: boolean;
-  historyExpired: boolean;
-  /** The label sweep hit GMAIL_SWEEP_MAX_PAGES: older labelled mail may not have been listed. */
+  /** A folder's UIDVALIDITY changed (it was recreated): its cursor was discarded and it was swept again. */
+  uidValidityReset: boolean;
+  /** A sweep hit GMAIL_SWEEP_MAX_PAGES: the rest is picked up by the next poll. */
   sweepTruncated: boolean;
   /** `--dry-run` only. */
   wouldStore: { gmailId: string; threadId: string; receivedAt: string; subject: string }[];
@@ -89,19 +83,6 @@ export class InboxLabelMissingError extends Error {
       `The Gmail label "${label}" does not exist. Create it in Gmail first: an absent label is an error, never "everything".`,
     );
     this.name = 'InboxLabelMissingError';
-  }
-}
-
-/** A configured label name now resolves to a different Gmail label than the one this mailbox was pinned to. */
-export class InboxLabelChangedError extends Error {
-  constructor(
-    public readonly labelName: string,
-    which: 'GMAIL_LABEL' | 'GMAIL_CANDIDATE_LABEL',
-  ) {
-    super(
-      `The Gmail label "${labelName}" (${which}) is a different label than the one this mailbox was first polled with: it was renamed or recreated. Nothing was listed. If that is intended, run "inbox poll --repin-labels"; if not, fix the labels in Gmail.`,
-    );
-    this.name = 'InboxLabelChangedError';
   }
 }
 
@@ -123,22 +104,19 @@ const emptyReport = (): PollReport => ({
   triageFailed: 0,
   triagePending: 0,
   triageSkippedExcluded: 0,
-  historyUsed: false,
-  historyExpired: false,
+  uidValidityReset: false,
   sweepTruncated: false,
   wouldStore: [],
 });
 
-const DAY_MS = 86_400_000;
-const MAX_HISTORY_PAGES = 20;
 const OUTBOUND_LABELS = ['SENT', 'DRAFT'];
 
-/** `2026-11-01` or an ISO instant -> Gmail's `YYYY/MM/DD`. */
-function gmailDate(value: string): string {
+/** `2026-11-01` or an ISO instant -> `YYYY-MM-DD`. */
+function sinceDate(value: string): string {
   const d = new Date(value);
   if (Number.isNaN(d.getTime()))
     throw new InboxInputError(`--since must be an ISO date, got "${value}"`);
-  return `${String(d.getUTCFullYear())}/${String(d.getUTCMonth() + 1).padStart(2, '0')}/${String(d.getUTCDate()).padStart(2, '0')}`;
+  return d.toISOString().slice(0, 10);
 }
 
 /** The thread-level access-control state for ONE poll: what the database says, plus (dry-run) what it would say. */
@@ -164,10 +142,6 @@ class Scope {
   async isAdmitted(threadId: string): Promise<boolean> {
     if (this.wouldAdmit.has(threadId)) return true;
     return (await this.deps.admitted.findByThreadId(threadId)) !== null;
-  }
-
-  wouldAdmitThreads(): string[] {
-    return [...this.wouldAdmit];
   }
 
   /** The label admitted this thread. The stronger label wins over a candidate record. */
@@ -206,18 +180,16 @@ export class InboxService {
 
   /**
    * The order below is what makes the scope guarantee (spec 1) hold:
-   *  1. resolve both labels; a label that does not exist aborts BEFORE any listing;
-   *  2. capture the mailbox's current history id BEFORE reading anything, so mail arriving mid-poll is
-   *     seen by the next one;
-   *  3. sweep BY LABEL (ids only; the transport cannot express an unscoped list). Gmail exposes no
-   *     "labelled at" time, so there is nothing to keep a high-water mark over: the sweep re-lists the
-   *     label every poll, bounded by GMAIL_SWEEP_MAX_PAGES, and the unique gmailId absorbs the repeats;
-   *  4. every listed id has its HEADERS read first (never a body), and only a message that carries the
-   *     label, or sits in an admitted thread, goes on to a body fetch; anything else is dropped;
-   *  5. the body that comes back is checked AGAIN against the same rule before it is stored;
-   *  6. history and the admitted-thread sweep add later, unlabelled replies. History only helps: what it
-   *     reports is filtered on the labels and thread it reports, and a message it names that neither
-   *     carries a label nor sits in an admitted thread is dropped without even its headers being read.
+   *  1. resolve both labels to their folders via LIST; a label that has no folder aborts BEFORE any listing;
+   *  2. sweep each folder (opened read-only) for UIDs ABOVE the stored cursor. Applying a label gives a
+   *     message a NEW, highest UID in that label's folder, so a message that arrived months ago and was
+   *     labelled today is simply a new UID: there is no "labelled at" time to keep and no history feed;
+   *  3. every listed message has its ENVELOPE read first (never a body), and only a message that carries
+   *     the label goes on to a body fetch; anything else is dropped;
+   *  4. the body that comes back is checked AGAIN against the same rule before it is stored;
+   *  5. the cursor is saved last, with the UIDVALIDITY it was read under. A changed UIDVALIDITY discards
+   *     the folder's cursor and sweeps it again (bounded); the unique Gmail id absorbs what is stored.
+   * Mail that is NOT in a label folder is not reachable at all: INBOX and All Mail are never opened.
    */
   async poll(options: PollOptions = {}): Promise<PollReport> {
     const now = options.now ?? new Date();
@@ -231,45 +203,24 @@ export class InboxService {
     if (candidateId === null) throw new InboxLabelMissingError(config.candidateLabel);
 
     const cursor = await this.deps.cursor.get();
-    // Pinned by ID, checked BEFORE anything is listed: a label renamed or recreated since the first poll
-    // must not quietly give another label the admitting (or the candidate) role.
-    if (!options.repinLabels) {
-      if (cursor?.labelId && cursor.labelId !== labelId)
-        throw new InboxLabelChangedError(config.label, 'GMAIL_LABEL');
-      if (cursor?.candidateLabelId && cursor.candidateLabelId !== candidateId)
-        throw new InboxLabelChangedError(config.candidateLabel, 'GMAIL_CANDIDATE_LABEL');
-    }
-    const headHistoryId = await gmail.getCurrentHistoryId();
-    const after = options.since ? gmailDate(options.since) : undefined;
+    const since = options.since ? sinceDate(options.since) : undefined;
     const scope = new Scope(this.deps, dry, now);
     const ctx: PollCtx = { labelId, candidateId, scope, report, now, dry, seen: new Set() };
 
-    // ---- 3/4/5: the label sweep ----
-    const labelled = await this.sweep(labelId, after, report);
-    await this.processLabelled(labelled, ctx);
+    // ---- 2/3/4: the label folder, from the cursor (or from 0 with --since: a deliberate re-read) ----
+    const labelled = await this.sweep(labelId, since, since ? null : cursor, report);
+    await this.processLabelled(labelled.refs, ctx);
 
-    // ---- candidates: headers only, on a client type that has no body method ----
-    const candidateRefs = await this.sweep(candidateId, after, report);
-    await this.processCandidates(candidateRefs, ctx);
-
-    // ---- 6: history (an optimisation) ----
-    if (cursor?.historyId) {
-      try {
-        const records = await this.history(cursor.historyId);
-        report.historyUsed = true;
-        await this.processHistory(records, ctx);
-      } catch (err) {
-        if (!(err instanceof HistoryExpiredError)) throw err;
-        report.historyExpired = true; // the sweep above already ran: a bounded backfill, never the mailbox
-      }
-    }
-
-    // ---- 6: later replies in admitted threads ----
-    await this.processAdmittedThreads(ctx, report.historyExpired);
+    // ---- candidates: ENVELOPE only, except for a thread that has since been admitted. The candidate
+    // folder has NO cursor: it is small, it is re-listed (ids only) each poll, and that is how `admit`
+    // reaches the bodies of a thread's messages that were first seen as candidates.
+    const candidates = await this.sweep(candidateId, since, null, report);
+    await this.processCandidates(candidates.refs, ctx);
 
     if (!dry) {
       await this.triagePending(report);
-      await this.saveCursor(headHistoryId, now, report.historyExpired, { labelId, candidateId });
+      // With --since the sweep re-read old UIDs on purpose and the cursor is left where it was.
+      if (!since) await this.saveCursor(cursor, [labelled.state], now, report);
     }
     this.deps.log('inbox poll', {
       stored: report.stored.length,
@@ -281,52 +232,47 @@ export class InboxService {
       triaged: report.triaged,
       triageFailed: report.triageFailed,
       triagePending: report.triagePending,
-      historyUsed: report.historyUsed,
-      historyExpired: report.historyExpired,
+      uidValidityReset: report.uidValidityReset,
       sweepTruncated: report.sweepTruncated,
       dryRun: dry,
     });
     return report;
   }
 
-  /** Ids by label, at most `sweepMaxPages` pages. */
+  /** UIDs above the cursor, at most `sweepMaxPages` pages; from 0 when the folder's UIDVALIDITY changed. */
   private async sweep(
-    labelId: string,
-    after: string | undefined,
+    folder: string,
+    since: string | undefined,
+    cursor: InboxCursor | null,
     report: PollReport,
-  ): Promise<MessageRef[]> {
+  ): Promise<{ refs: MessageRef[]; state: FolderCursor }> {
+    const { gmail, config } = this.deps;
+    const prior = cursor?.folders?.find((f) => f.folder === folder);
+    let afterUid = prior?.lastUid ?? 0;
     const refs: MessageRef[] = [];
-    let pageToken: string | undefined;
-    for (let page = 0; page < this.deps.config.sweepMaxPages; page++) {
-      const r = await this.deps.gmail.listMessageRefs({
-        labelId,
-        ...(after ? { after } : {}),
-        ...(pageToken ? { pageToken } : {}),
-      });
+    let uidValidity = prior?.uidValidity ?? '';
+    for (let page = 0; page < config.sweepMaxPages; page++) {
+      const query = { labelId: folder, ...(since ? { since } : {}), limit: config.sweepPageSize };
+      let r = await gmail.listMessageRefs({ ...query, afterUid });
+      if (page === 0 && prior && prior.uidValidity !== r.uidValidity) {
+        report.uidValidityReset = true; // the folder was recreated: its UIDs mean nothing now
+        afterUid = 0;
+        r = await gmail.listMessageRefs({ ...query, afterUid });
+      }
+      uidValidity = r.uidValidity;
       refs.push(...r.refs);
-      pageToken = r.nextPageToken;
-      if (!pageToken) return refs;
+      const last = r.refs.at(-1);
+      if (last) afterUid = last.uid;
+      if (!r.hasMore) break;
+      if (page === config.sweepMaxPages - 1) report.sweepTruncated = true;
     }
-    report.sweepTruncated = true;
-    return refs;
+    return { refs, state: { folder, uidValidity, lastUid: afterUid } };
   }
 
-  private async history(startHistoryId: string): Promise<HistoryRecord[]> {
-    const records: HistoryRecord[] = [];
-    let pageToken: string | undefined;
-    for (let page = 0; page < MAX_HISTORY_PAGES; page++) {
-      const r = await this.deps.gmail.listHistory(startHistoryId, pageToken);
-      records.push(...r.records);
-      pageToken = r.nextPageToken;
-      if (!pageToken) break;
-    }
-    return records;
-  }
-
-  /** Refs from the label query. Headers first; the label decides, not the query. */
+  /** Refs from the label folder. Envelope first; the label decides, not the listing. */
   private async processLabelled(refs: readonly MessageRef[], ctx: PollCtx): Promise<void> {
     const known = await this.deps.inbound.knownGmailIds(refs.map((r) => r.id));
-    const metas: GmailMetadata[] = [];
+    const metas: { ref: MessageRef; meta: GmailMetadata }[] = [];
     for (const ref of refs) {
       if (ctx.seen.has(ref.id)) continue;
       ctx.seen.add(ref.id);
@@ -338,32 +284,39 @@ export class InboxService {
         ctx.report.droppedExcluded++;
         continue;
       }
-      metas.push(await this.deps.gmail.getMetadata(ref.id));
+      metas.push({ ref, meta: await this.deps.gmail.getMetadata(ref) });
     }
     // Pass 1: what carries the label admits its thread. Pass 2: the rest, now that admission is known.
-    for (const meta of metas.filter((m) => m.labelIds.includes(ctx.labelId))) {
-      // NOT admitted here. The label seen in the headers is a claim; fetchAndStore admits the thread only
+    for (const { ref, meta } of metas.filter((m) => m.meta.labelIds.includes(ctx.labelId))) {
+      // NOT admitted here. The label seen in the envelope is a claim; fetchAndStore admits the thread only
       // after the body that comes back confirms it (otherwise its re-check would be checking itself).
-      await this.fetchAndStore(meta.id, ctx, meta);
+      await this.fetchAndStore(ref, ctx, meta);
     }
-    for (const meta of metas.filter((m) => !m.labelIds.includes(ctx.labelId))) {
-      if (await ctx.scope.isAdmitted(meta.threadId)) await this.fetchAndStore(meta.id, ctx, meta);
+    for (const { ref, meta } of metas.filter((m) => !m.meta.labelIds.includes(ctx.labelId))) {
+      if (await ctx.scope.isAdmitted(meta.threadId)) await this.fetchAndStore(ref, ctx, meta);
       else if (meta.labelIds.includes(ctx.candidateId)) await this.noteCandidate(meta, ctx);
       else ctx.report.dropped++; // listed (a wrong query, say) but not ours: dropped, no body fetch
     }
   }
 
-  /** Candidate refs: only threads not yet known have their headers read, once. */
+  /** Candidate refs: only threads not yet known have their ENVELOPE read, once. */
   private async processCandidates(refs: readonly MessageRef[], ctx: PollCtx): Promise<void> {
     const known = await this.deps.inbound.knownGmailIds(refs.map((r) => r.id));
     const fresh: MessageRef[] = [];
+    const admittedRefs: MessageRef[] = [];
     for (const ref of refs) {
       if (ctx.seen.has(ref.id) || known.has(ref.id)) continue;
-      if ((await ctx.scope.isExcluded(ref.threadId)) || (await ctx.scope.isAdmitted(ref.threadId)))
-        continue;
-      fresh.push(ref);
+      if (await ctx.scope.isExcluded(ref.threadId)) continue;
+      if (await ctx.scope.isAdmitted(ref.threadId)) admittedRefs.push(ref);
+      else fresh.push(ref);
     }
     for (const ref of fresh) ctx.seen.add(ref.id);
+    // A message in the candidate folder whose THREAD is admitted (by a human, or by the strong label on
+    // another message) is in scope like any other: thread-level admission (spec 1a).
+    for (const ref of admittedRefs) {
+      ctx.seen.add(ref.id);
+      await this.fetchAndStore(ref, ctx, await this.deps.gmail.getMetadata(ref));
+    }
     const r = await observeCandidateRefs(fresh, this.deps.gmail, {
       candidateLabelId: ctx.candidateId,
       candidates: this.deps.candidates,
@@ -371,7 +324,7 @@ export class InboxService {
       dryRun: ctx.dry,
     });
     ctx.report.candidatesRecorded += r.recorded;
-    ctx.report.dropped += r.rejected; // listed as a candidate, but its own headers say otherwise
+    ctx.report.dropped += r.rejected; // listed as a candidate, but its own envelope says otherwise
   }
 
   private async noteCandidate(meta: GmailMetadata, ctx: PollCtx): Promise<void> {
@@ -385,107 +338,21 @@ export class InboxService {
   }
 
   /**
-   * History records are filtered on what THEY say, before any fetch: a label we own, an admitted
-   * thread, or a candidate label. A private message the feed mentions is dropped with no fetch at all.
-   */
-  private async processHistory(records: readonly HistoryRecord[], ctx: PollCtx): Promise<void> {
-    const known = await this.deps.inbound.knownGmailIds(records.map((r) => r.messageId));
-    const claimed: MessageRef[] = [];
-    const rest: HistoryRecord[] = [];
-    for (const rec of records) {
-      if (ctx.seen.has(rec.messageId)) continue;
-      if (known.has(rec.messageId)) {
-        ctx.seen.add(rec.messageId);
-        continue;
-      }
-      if (await ctx.scope.isExcluded(rec.threadId)) {
-        ctx.seen.add(rec.messageId);
-        ctx.report.droppedExcluded++;
-        continue;
-      }
-      // A record that CLAIMS our label is only a claim (whether history reports a snapshot of the labels
-      // or the current ones is unverified against a real mailbox, and a label can be removed since).
-      // It goes through exactly the path the sweep uses: headers first, and admission only after the body
-      // that comes back confirms the label. It does not admit anything by itself.
-      if (rec.labelIds.includes(ctx.labelId))
-        claimed.push({ id: rec.messageId, threadId: rec.threadId });
-      else rest.push(rec);
-    }
-    await this.processLabelled(claimed, ctx);
-    for (const rec of rest) {
-      ctx.seen.add(rec.messageId);
-      if (await ctx.scope.isAdmitted(rec.threadId)) {
-        await this.fetchAndStore(rec.messageId, ctx, undefined, rec.labelIds);
-      } else if (rec.labelIds.includes(ctx.candidateId)) {
-        await this.processCandidates([{ id: rec.messageId, threadId: rec.threadId }], {
-          ...ctx,
-          seen: new Set(),
-        });
-      } else {
-        ctx.report.dropped++; // never fetched, headers included
-      }
-    }
-  }
-
-  /** Admitted threads with recent activity are checked for later replies that carry no label. */
-  private async processAdmittedThreads(ctx: PollCtx, ignoreWindow: boolean): Promise<void> {
-    const { config } = this.deps;
-    const cutoff = ctx.now.getTime() - config.threadSweepDays * DAY_MS;
-    const activity = new Map<string, number>();
-    for (const t of await this.deps.admitted.findRecent(Math.max(config.threadSweepMax * 2, 50))) {
-      const msgs = await this.deps.inbound.findByThreadId(t.threadId);
-      const last = Math.max(Date.parse(t.admittedAt), ...msgs.map((m) => Date.parse(m.receivedAt)));
-      activity.set(t.threadId, last);
-    }
-    for (const id of ctx.scope.wouldAdmitThreads()) activity.set(id, ctx.now.getTime());
-    const threads = [...activity.entries()]
-      // With a lost history cursor nothing else would find a late reply in a quiet thread, so the
-      // recency window is set aside (the per-poll count limit still bounds it).
-      .filter(([, last]) => ignoreWindow || last >= cutoff)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, config.threadSweepMax)
-      .map(([id]) => id);
-
-    for (const threadId of threads) {
-      if (await ctx.scope.isExcluded(threadId)) continue;
-      const refs = await this.deps.gmail.getThreadRefs(threadId);
-      const unseen = refs.messages.filter((m) => !ctx.seen.has(m.id));
-      const known = await this.deps.inbound.knownGmailIds(unseen.map((m) => m.id));
-      for (const m of unseen) {
-        ctx.seen.add(m.id);
-        if (known.has(m.id)) {
-          ctx.report.alreadyStored++;
-          continue;
-        }
-        await this.fetchAndStore(m.id, ctx, undefined, m.labelIds);
-      }
-    }
-  }
-
-  /**
    * The ONLY place a body is fetched, and only for a message already shown (by its headers, or by the
    * admitted thread it belongs to) to be in scope. The response is checked once more before anything
    * is stored.
    */
-  private async fetchAndStore(
-    id: string,
-    ctx: PollCtx,
-    meta?: GmailMetadata,
-    /** The labels already known from a thread listing or a history record, when there is no metadata. */
-    knownLabels?: readonly string[],
-  ): Promise<void> {
+  private async fetchAndStore(ref: MessageRef, ctx: PollCtx, meta: GmailMetadata): Promise<void> {
     const { gmail } = this.deps;
     // Our own side of the conversation is not inbound mail. Its labels are known BEFORE any body fetch
-    // (from the headers, the thread listing or the history record), so its body is never fetched at all:
-    // it used to be fetched, discarded, and fetched again on every poll.
-    const labelsBefore = meta?.labelIds ?? knownLabels;
-    if (labelsBefore?.some((l) => OUTBOUND_LABELS.includes(l))) {
+    // (from the envelope's labels), so its body is never fetched at all.
+    if (meta.labelIds.some((l) => OUTBOUND_LABELS.includes(l))) {
       ctx.report.skippedOutbound++;
       return;
     }
     if (ctx.dry) {
-      const m = meta ?? (await gmail.getMetadata(id));
-      // Dry run: the headers are all there is. A label in them admits the thread IN MEMORY, so later
+      const m = meta;
+      // Dry run: the envelope is all there is. A label in them admits the thread IN MEMORY, so later
       // messages of that thread show up as they would on a real poll. Nothing is written.
       if (m.labelIds.includes(ctx.labelId)) await ctx.scope.admitByLabel(m.threadId);
       ctx.report.wouldStore.push({
@@ -496,7 +363,7 @@ export class InboxService {
       });
       return;
     }
-    const full = await gmail.getFull(id);
+    const full = await gmail.getFull(ref);
     // The re-check (spec 1.3), on what actually came back and NOT circular: the message's own labels, or
     // an admission that already existed BEFORE this fetch. A thread is admitted by a label only after this
     // passes, never before, so a stale claim (a history record, a label removed since the headers were
@@ -670,18 +537,19 @@ export class InboxService {
   }
 
   private async saveCursor(
-    historyId: string,
+    current: InboxCursor | null,
+    states: readonly FolderCursor[],
     now: Date,
-    expired: boolean,
-    pins: { labelId: string; candidateId: string },
+    report: PollReport,
   ): Promise<void> {
-    const current = await this.deps.cursor.get();
+    const folders = [
+      ...(current?.folders ?? []).filter((f) => !states.some((s) => s.folder === f.folder)),
+      ...states,
+    ];
     const patch = {
-      historyId,
-      labelId: pins.labelId,
-      candidateLabelId: pins.candidateId,
+      folders,
       lastPollAt: now.toISOString(),
-      ...(expired ? { lastHistoryExpiredAt: now.toISOString() } : {}),
+      ...(report.uidValidityReset ? { lastUidValidityResetAt: now.toISOString() } : {}),
     };
     if (current) await this.deps.cursor.updateWithRetry(current._id, () => patch);
     else await this.deps.cursor.insert({ key: 'gmail', ...patch });

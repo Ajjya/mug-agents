@@ -1,16 +1,10 @@
+import { isForbiddenFolder } from './folders.js';
 import {
   ConfigError,
   type AppConfig,
   parseModelRef,
   formatModelRef,
 } from '../config/env.schema.js';
-
-/**
- * The only read-only scope. No send, compose or modify scope is requested anywhere in this repository:
- * an accidental send is not merely forbidden but impossible. M4b widens it deliberately, and only to
- * the compose scope. (A source scan in test/unit/inbox-scope-config.test.ts keeps it that way.)
- */
-export const GMAIL_SCOPES = ['https://www.googleapis.com/auth/gmail.readonly'] as const;
 
 export interface InboxConfig {
   /** Full-trust label name. */
@@ -19,9 +13,9 @@ export interface InboxConfig {
   candidateLabel: string;
   triageStartRung: number;
   triageMaxChars: number;
+  /** Pages of GMAIL_SWEEP_PAGE_SIZE UIDs one poll may read per folder: bounds a backfill or a re-sweep. */
   sweepMaxPages: number;
-  threadSweepDays: number;
-  threadSweepMax: number;
+  sweepPageSize: number;
 }
 
 /**
@@ -46,6 +40,16 @@ export function resolveInboxConfig(config: AppConfig): InboxConfig {
       'GMAIL_LABEL and GMAIL_CANDIDATE_LABEL must differ: they are two levels of trust',
     );
   }
+  for (const [name, value] of [
+    ['GMAIL_LABEL', label],
+    ['GMAIL_CANDIDATE_LABEL', candidate],
+  ] as const) {
+    if (value !== undefined && isForbiddenFolder(value)) {
+      problems.push(
+        `${name}: "${value}" is INBOX or a [Gmail] system folder (All Mail, Sent, ...): it holds the whole mailbox, not a label, and is never opened`,
+      );
+    }
+  }
   const start = parseModelRef(config.TRIAGE_START_MODEL);
   let triageStartRung = 0;
   if (typeof start === 'string') {
@@ -69,35 +73,32 @@ export function resolveInboxConfig(config: AppConfig): InboxConfig {
     triageStartRung,
     triageMaxChars: config.TRIAGE_MAX_CHARS,
     sweepMaxPages: config.GMAIL_SWEEP_MAX_PAGES,
-    threadSweepDays: config.INBOX_THREAD_SWEEP_DAYS,
-    threadSweepMax: config.INBOX_THREAD_SWEEP_MAX,
+    sweepPageSize: config.GMAIL_SWEEP_PAGE_SIZE,
   };
 }
 
-export interface GmailCredentials {
-  clientId: string;
-  clientSecret: string;
-  refreshToken: string;
+export interface ImapCredentials {
+  host: string;
+  port: number;
+  user: string;
+  appPassword: string;
 }
 
-/** For the real Gmail adapter only. Lists the NAMES that are missing, never a value. */
-export function requireGmailCredentials(config: AppConfig): GmailCredentials {
-  const missing = (
-    ['GMAIL_CLIENT_ID', 'GMAIL_CLIENT_SECRET', 'GMAIL_REFRESH_TOKEN'] as const
-  ).filter((k) => config[k] === undefined);
-  if (
-    missing.length > 0 ||
-    config.GMAIL_CLIENT_ID === undefined ||
-    config.GMAIL_CLIENT_SECRET === undefined ||
-    config.GMAIL_REFRESH_TOKEN === undefined
-  ) {
+/** For the real adapter only. Lists the NAMES that are missing, never a value. */
+export function requireImapCredentials(config: AppConfig): ImapCredentials {
+  if (config.IMAP_USER === undefined || config.IMAP_APP_PASSWORD === undefined) {
+    const missing = [
+      ...(config.IMAP_USER === undefined ? ['IMAP_USER'] : []),
+      ...(config.IMAP_APP_PASSWORD === undefined ? ['IMAP_APP_PASSWORD'] : []),
+    ];
     throw new ConfigError(
-      missing.map((k) => `${k}: required to read Gmail (run: npm run inbox -- auth)`),
+      missing.map((k) => `${k}: required to read Gmail (an app password: see README, "Inbox")`),
     );
   }
   return {
-    clientId: config.GMAIL_CLIENT_ID,
-    clientSecret: config.GMAIL_CLIENT_SECRET,
-    refreshToken: config.GMAIL_REFRESH_TOKEN,
+    host: config.IMAP_HOST,
+    port: config.IMAP_PORT,
+    user: config.IMAP_USER,
+    appPassword: config.IMAP_APP_PASSWORD,
   };
 }

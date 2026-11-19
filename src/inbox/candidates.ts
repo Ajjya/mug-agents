@@ -12,7 +12,7 @@ import type { CandidateThreadsRepository } from './repositories.js';
  */
 
 export interface CandidateContext {
-  /** The id of the candidate label: a listing or a history record that names a message is only a claim. */
+  /** The id of the candidate label: a listing that names a message is only a claim. */
   candidateLabelId: string;
   candidates: CandidateThreadsRepository;
   now: Date;
@@ -32,8 +32,8 @@ export async function recordCandidate(
   meta: GmailMetadata,
   ctx: CandidateContext,
 ): Promise<'recorded' | 'refreshed' | 'dismissed' | 'not_candidate'> {
-  // Verified against the message's OWN headers, like the strong label: a listing that returned too much
-  // (or a history record with a stale claim) must not put a private message's subject and sender into
+  // Verified against the message's OWN envelope, like the strong label: a listing that returned too much
+  // (or a stale one) must not put a private message's subject and sender into
   // candidate_threads. Nothing is recorded and no body is involved.
   if (!meta.labelIds.includes(ctx.candidateLabelId)) return 'not_candidate';
   const existing = await ctx.candidates.findByThreadId(meta.threadId);
@@ -74,7 +74,7 @@ export async function observeCandidateRefs(
       continue;
     }
     seenThreads.add(ref.threadId);
-    const outcome = await recordCandidate(await meta.getMetadata(ref.id), ctx);
+    const outcome = await recordCandidate(await meta.getMetadata(ref), ctx);
     if (outcome === 'recorded') recorded++;
     else if (outcome === 'not_candidate') rejected++;
     else skipped++;

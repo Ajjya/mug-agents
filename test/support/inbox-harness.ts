@@ -65,8 +65,7 @@ export const TEST_INBOX_CONFIG: InboxConfig = {
   triageStartRung: 0,
   triageMaxChars: 6000,
   sweepMaxPages: 20,
-  threadSweepDays: 60,
-  threadSweepMax: 200,
+  sweepPageSize: 200,
 };
 
 export interface InboxHarness {

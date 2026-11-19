@@ -28,7 +28,7 @@ export function formatPollReport(
   }
   out.push(
     `Dropped (not in scope, nothing stored or fetched): ${String(r.dropped)}; excluded threads: ${String(r.droppedExcluded)}; new candidate threads: ${String(r.candidatesRecorded)}; own sent mail skipped: ${String(r.skippedOutbound)}.`,
-    `History: ${r.historyExpired ? 'EXPIRED, fell back to the bounded label sweep' : r.historyUsed ? 'used' : 'no cursor yet'}.${r.sweepTruncated ? ' The label sweep hit its page limit (GMAIL_SWEEP_MAX_PAGES): older labelled mail may not have been listed.' : ''}`,
+    `Cursor: ${r.uidValidityReset ? 'a folder was recreated (UIDVALIDITY changed): its cursor was discarded and it was swept again' : 'by UID within each label folder'}.${r.sweepTruncated ? ' A sweep hit its page limit (GMAIL_SWEEP_MAX_PAGES): the rest is picked up by the next poll.' : ''}`,
   );
   return out;
 }

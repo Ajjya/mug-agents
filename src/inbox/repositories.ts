@@ -40,6 +40,7 @@ import {
   type InboundMessage,
   type InboundMessageInput,
   type InboundMessagePatch,
+  type FolderCursor,
   type InboxCursor,
 } from '../domain/inbox.schema.js';
 import { COLLECTIONS } from '../mongo/indexes.js';
@@ -239,9 +240,9 @@ export interface ContactsRepository extends Repository<
   findByAddress(address: string): Promise<Contact | null>;
 }
 export interface InboxCursorRepository extends Repository<
-  { key: 'gmail'; historyId?: string; lastPollAt?: string; lastHistoryExpiredAt?: string },
+  { key: 'gmail'; folders?: FolderCursor[]; lastPollAt?: string; lastUidValidityResetAt?: string },
   InboxCursor,
-  Partial<Pick<InboxCursor, 'historyId' | 'lastPollAt' | 'lastHistoryExpiredAt'>>
+  Partial<Pick<InboxCursor, 'folders' | 'lastPollAt' | 'lastUidValidityResetAt'>>
 > {
   get(): Promise<InboxCursor | null>;
 }

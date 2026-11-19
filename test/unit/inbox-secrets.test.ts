@@ -1,41 +1,25 @@
 import { inspect } from 'node:util';
-import type { gmail_v1 } from '@googleapis/gmail';
 import { describe, expect, it, vi } from 'vitest';
 import { GmailTransportError, sanitizeTransportError } from '../../src/inbox/gmail.errors.js';
-import { GoogleGmailClient } from '../../src/inbox/gmail.client.js';
-import { HistoryExpiredError } from '../../src/inbox/gmail.transport.js';
+import { ImapGmailClient, type ImapSession } from '../../src/inbox/imap.client.js';
 
-const REFRESH = '1//0gSECRETrefreshTOKEN-abcdefghijklmnop';
-const CLIENT_SECRET = 'GOCSPX-SECRETclientSECRET-12345678';
-const ACCESS = 'ya29.SECRETaccessTOKEN-abcdefghijklmnopqrstuv';
-const SECRETS = [REFRESH, CLIENT_SECRET, ACCESS];
+const APP_PASSWORD = 'abcd efgh ijkl mnop';
+const COMPACT = 'abcdefghijklmnop';
+const USER = 'organiser.real@gmail.invalid';
+const SECRETS = [APP_PASSWORD, COMPACT, USER];
+const PLAIN_B64 = Buffer.from(`\0${USER}\0${COMPACT}`).toString('base64');
 
-/** An error shaped like what the HTTP layer throws: a message, the request config (body and headers) and the response. */
-function realisticError(status = 400): Error {
-  const config = {
-    url: 'https://oauth2.googleapis.com/token',
-    method: 'POST',
-    data: `grant_type=refresh_token&refresh_token=${REFRESH}&client_secret=${CLIENT_SECRET}&client_id=123.apps.googleusercontent.com`,
-    headers: {
-      Authorization: `Bearer ${ACCESS}`,
-      'content-type': 'application/x-www-form-urlencoded',
-    },
-    body: `refresh_token=${REFRESH}`,
-  };
-  const err = new Error(
-    `invalid_grant: Token has been expired or revoked. (refresh_token=${REFRESH})`,
-  );
+/** An error shaped like what an IMAP library throws on a failed login: it echoes the command. */
+function realisticError(): Error {
+  const err = new Error(`Command failed: A1 LOGIN "${USER}" "${APP_PASSWORD}"`);
   return Object.assign(err, {
-    status,
-    code: String(status),
-    config,
-    response: {
-      status,
-      config,
-      data: { error: 'invalid_grant' },
-      request: { headers: config.headers },
-    },
-    cause: Object.assign(new Error(`socket: ${REFRESH}`), { config }),
+    authenticationFailed: true,
+    serverResponseCode: 'AUTHENTICATIONFAILED',
+    responseStatus: 'NO',
+    responseText: `[AUTHENTICATIONFAILED] Invalid credentials. A1 LOGIN ${USER} ${COMPACT} AUTHENTICATE PLAIN ${PLAIN_B64}`,
+    command: `A1 LOGIN "${USER}" "${APP_PASSWORD}"`,
+    response: { command: `A1 LOGIN "${USER}" "${APP_PASSWORD}"`, tag: 'A1' },
+    cause: Object.assign(new Error(`socket: ${COMPACT}`), { config: { pass: COMPACT } }),
   });
 }
 
@@ -51,85 +35,105 @@ function everythingAbout(err: unknown): string {
   ].join('\n');
 }
 
-describe('a thrown transport error never carries a credential (spec 4)', () => {
-  it('the raw error DOES contain the secrets (the problem is real)', () => {
+describe('a serialized transport error never carries the app password (spec 4)', () => {
+  it('the raw error DOES contain it (the problem is real: IMAP libraries echo the failed LOGIN)', () => {
     const text = everythingAbout(realisticError());
-    expect(text).toContain(REFRESH);
-    expect(text).toContain(CLIENT_SECRET);
-    expect(text).toContain(ACCESS);
+    expect(text).toContain(APP_PASSWORD);
+    expect(text).toContain(COMPACT);
+    expect(text).toContain(PLAIN_B64);
   });
 
-  it('sanitizeTransportError keeps the operation and the HTTP status and nothing a secret could be in', () => {
-    const out = sanitizeTransportError('messages.get', realisticError(401), SECRETS);
+  it('sanitizeTransportError keeps the operation and a scrubbed message, and nothing a secret could be in', () => {
+    const out = sanitizeTransportError('LOGIN', realisticError(), SECRETS);
     expect(out).toBeInstanceOf(GmailTransportError);
-    expect(out).toMatchObject({
-      operation: 'messages.get',
-      status: 401,
-      name: 'GmailTransportError',
-    });
-    expect(out.message).toContain('messages.get');
-    expect(out.message).toContain('invalid_grant');
+    expect(out).toMatchObject({ operation: 'LOGIN', name: 'GmailTransportError' });
+    expect(out.message).toContain('LOGIN failed');
+    expect(out.message).toContain('AUTHENTICATIONFAILED');
     const text = everythingAbout(out);
-    for (const secret of SECRETS) expect(text).not.toContain(secret);
-    expect(Object.keys(out).sort()).toEqual(['name', 'operation', 'status']); // own properties: no config, no response, no cause
+    for (const secret of [...SECRETS, PLAIN_B64]) expect(text).not.toContain(secret);
+    expect(Object.keys(out).sort()).toEqual(['name', 'operation']); // own properties: no command, no response, no cause
     expect((out as { cause?: unknown }).cause).toBeUndefined();
   });
 
-  it('scrubs token SHAPES even when the secret list does not name them', () => {
-    const e = Object.assign(
-      new Error(`failed ${REFRESH} ${ACCESS} ${CLIENT_SECRET} refresh_token=abc123 Bearer abc.def`),
-      {},
+  it('scrubs credential SHAPES even when the secret list does not name them (a rotated password)', () => {
+    const e = new Error(
+      `failed A2 LOGIN "someone" "wxyz wxyz wxyz wxyz" and ${PLAIN_B64} and qrst uvwx qrst uvwx`,
     );
     const out = sanitizeTransportError('x', e, []);
-    for (const secret of SECRETS) expect(out.message).not.toContain(secret);
-    expect(out.message).not.toContain('abc123');
-    expect(out.message).not.toMatch(/Bearer abc/);
+    expect(out.message).not.toContain('wxyz');
+    expect(out.message).not.toContain(PLAIN_B64);
+    expect(out.message).not.toContain('qrst');
   });
 
-  it('an error that is not an Error, or has no status, is still safe', () => {
-    expect(sanitizeTransportError('y', `plain ${REFRESH}`, SECRETS).message).not.toContain(REFRESH);
-    expect(sanitizeTransportError('y', { weird: REFRESH }, SECRETS).message).not.toContain(REFRESH);
-    expect(sanitizeTransportError('y', undefined, SECRETS).status).toBeUndefined();
+  it('an error that is not an Error is still safe', () => {
+    expect(sanitizeTransportError('y', `plain ${APP_PASSWORD}`, SECRETS).message).not.toContain(
+      COMPACT,
+    );
+    expect(sanitizeTransportError('y', { weird: COMPACT }, SECRETS).message).not.toContain(COMPACT);
   });
 });
 
-describe('GoogleGmailClient throws sanitized errors for EVERY call', () => {
-  function client() {
-    const fail = vi.fn().mockRejectedValue(realisticError(500));
-    const api = {
-      users: {
-        labels: { list: fail },
-        messages: { list: fail, get: fail },
-        threads: { get: fail },
-        history: { list: fail },
-        getProfile: fail,
+describe('ImapGmailClient throws sanitized errors for EVERY call', () => {
+  function client(failAt: 'connect' | 'list' | 'lock') {
+    const fail = () => Promise.reject(realisticError());
+    const session = {
+      connect: failAt === 'connect' ? fail : () => Promise.resolve(undefined),
+      list: failAt === 'list' ? fail : () => Promise.resolve([{ path: 'mug-agents' }]),
+      getMailboxLock: fail,
+      mailbox: false,
+      search: fail,
+      fetch: () => {
+        throw realisticError();
       },
-    } as unknown as gmail_v1.Gmail;
-    return new GoogleGmailClient(api, SECRETS);
+      download: fail,
+      logout: () => Promise.resolve(undefined),
+    } as unknown as ImapSession;
+    return new ImapGmailClient(() => session, ['mug-agents'], SECRETS);
   }
-  const calls: [string, (c: GoogleGmailClient) => Promise<unknown>][] = [
-    ['labels.list', (c) => c.resolveLabelId('x')],
-    ['messages.list', (c) => c.listMessageRefs({ labelId: 'L' })],
-    ['messages.get (metadata)', (c) => c.getMetadata('a')],
-    ['messages.get (full)', (c) => c.getFull('a')],
-    ['threads.get', (c) => c.getThreadRefs('t')],
-    ['getProfile', (c) => c.getCurrentHistoryId()],
-    ['history.list', (c) => c.listHistory('1')],
+  const ref = { id: '1', threadId: '1', folder: 'mug-agents', uid: 1 };
+  const calls: [string, 'connect' | 'list' | 'lock', (c: ImapGmailClient) => Promise<unknown>][] = [
+    ['LIST: connect fails', 'connect', (c) => c.resolveLabelId('mug-agents')],
+    ['LIST: list fails', 'list', (c) => c.resolveLabelId('mug-agents')],
+    [
+      'UID SEARCH',
+      'lock',
+      async (c) => {
+        await c.resolveLabelId('mug-agents');
+        return await c.listMessageRefs({ labelId: 'mug-agents', limit: 10 });
+      },
+    ],
+    [
+      'UID FETCH (ENVELOPE)',
+      'lock',
+      async (c) => {
+        await c.resolveLabelId('mug-agents');
+        return await c.getMetadata(ref);
+      },
+    ],
+    [
+      'UID FETCH (BODYSTRUCTURE, text parts)',
+      'lock',
+      async (c) => {
+        await c.resolveLabelId('mug-agents');
+        return await c.getFull(ref);
+      },
+    ],
   ];
-  it.each(calls)('%s', async (_name, call) => {
-    const err = await call(client()).catch((e: unknown) => e);
+  it.each(calls)('%s', async (_name, failAt, call) => {
+    const err = await call(client(failAt)).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(GmailTransportError);
     const text = everythingAbout(err);
-    for (const secret of SECRETS) expect(text).not.toContain(secret);
-    expect(err).toMatchObject({ status: 500 });
+    for (const secret of [...SECRETS, PLAIN_B64]) expect(text).not.toContain(secret);
   });
 
-  it('a 404 from history is STILL a HistoryExpiredError, not a transport error', async () => {
-    const api = {
-      users: { history: { list: vi.fn().mockRejectedValue(realisticError(404)) } },
-    } as unknown as gmail_v1.Gmail;
-    await expect(new GoogleGmailClient(api, SECRETS).listHistory('1')).rejects.toBeInstanceOf(
-      HistoryExpiredError,
-    );
+  it('close() never throws, even when logout fails with the same error', async () => {
+    const session = {
+      connect: () => Promise.resolve(undefined),
+      list: () => Promise.resolve([]),
+      logout: vi.fn().mockRejectedValue(realisticError()),
+    } as unknown as ImapSession;
+    const c = new ImapGmailClient(() => session, ['mug-agents'], SECRETS);
+    await c.resolveLabelId('mug-agents');
+    await expect(c.close()).resolves.toBeUndefined();
   });
 });
