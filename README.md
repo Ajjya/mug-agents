@@ -26,41 +26,41 @@ Or `npm run build && npm start`.
 Validated with Zod at boot (`src/config/env.schema.ts`). Invalid or missing values exit non-zero
 with a list of every problem.
 
-| Variable                                                          | Required            | Default                                                       | Notes                                                                                                        |
-| ----------------------------------------------------------------- | ------------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| `MONGODB_URI`                                                     | yes                 | –                                                             | `mongodb://…` or `mongodb+srv://…`                                                                           |
-| `MONGODB_DB`                                                      | yes                 | –                                                             | Database name                                                                                                |
-| `NODE_ENV`                                                        | no                  | `development`                                                 | `development` \| `test` \| `production`                                                                      |
-| `PORT`                                                            | no                  | `3000`                                                        |                                                                                                              |
-| `LOG_LEVEL`                                                       | no                  | `info`                                                        | `silent` \| `fatal` \| `error` \| `warn` \| `info` \| `debug` \| `trace`                                     |
-| `OLLAMA_BASE_URL`                                                 | no                  | `https://ollama.com/v1`                                       | OpenAI-compatible endpoint                                                                                   |
-| `OLLAMA_API_KEY`                                                  | at first model call | –                                                             | **Secret.** Not required at boot or for `npm test`                                                           |
-| `OLLAMA_MAX_CONCURRENCY`                                          | no                  | `3`                                                           | Provider limit, not a tuning knob                                                                            |
-| `LLM_MODEL_LADDER`                                                | no                  | `ollama:gemma4:31b,ollama:gpt-oss:20b,ollama:mistral-large-4` | Ordered rungs; unknown provider or duplicates rejected                                                       |
-| `LLM_PRICES`                                                      | no                  | `{}`                                                          | JSON map model ref → `{inputPerMTok, outputPerMTok}`                                                         |
-| `LLM_TIMEOUT_MS`                                                  | no                  | `60000`                                                       | Per provider call                                                                                            |
-| `CHECKPOINT_TTL_DAYS`                                             | no                  | `30`                                                          | Days a finished thread's checkpoints are kept; paused/failed threads never expire                            |
-| `APPROVER_NAME`                                                   | no                  | OS user                                                       | Recorded as the decider when `approvals` has no `--by`                                                       |
-| `OLLAMA_LOCAL_BASE_URL`                                           | no                  | `http://127.0.0.1:11434`                                      | Local Ollama, for embeddings only                                                                            |
-| `EMBEDDING_MODEL`                                                 | no                  | `nomic-embed-text`                                            | Local embedding model; recorded on every chunk                                                               |
-| `EVAL_EMBEDDERS`                                                  | no                  | `ollama-local:<EMBEDDING_MODEL>`                              | Embedders the retrieval eval compares                                                                        |
-| `RETRIEVAL_STORE`                                                 | no                  | `bruteforce`                                                  | `bruteforce` or `atlas`                                                                                      |
-| `ATLAS_LOCAL_URI`                                                 | no                  | –                                                             | mongodb-atlas-local, for the Atlas arm of tests and eval                                                     |
-| `VECTOR_MIN_SCORE`                                                | no                  | `0.575`                                                       | Cosine below this is not relevant (calibrated on the sample)                                                 |
-| `VECTOR_MIN_GAP`                                                  | no                  | `0.05`                                                        | Scale-free vector gate: top cosine minus the median of the retrieved set                                     |
-| `KEYWORD_MIN_COVERAGE`                                            | no                  | `0.5`                                                         | Keyword arm: share of the query's distinct terms a chunk must contain                                        |
-| `CHASE_MAX_ROUNDS`                                                | no                  | `2`                                                           | Sent chases of one kind per speaker per event before a task replaces the next message                        |
-| `CHASE_MIN_INTERVAL_DAYS`                                         | no                  | `7`                                                           | Days after the last sent message before the next chase is due                                                |
-| `MAX_DRAFTS_PER_RUN`                                              | no                  | `10`                                                          | Drafts one `speakers run` may write; the rest wait for the next run                                          |
-| `EVENT_TIME_ZONE`                                                 | no                  | `Europe/Lisbon`                                               | Time zone event and slot times are written in, in drafts                                                     |
-| `GMAIL_LABEL`                                                     | to start the inbox  | –                                                             | Admits mail: bodies read, triaged, linked. No default; must differ from the candidate label                  |
-| `GMAIL_CANDIDATE_LABEL`                                           | to start the inbox  | –                                                             | Metadata only: nothing but headers is ever fetched. No default                                               |
-| `GMAIL_CLIENT_ID` / `GMAIL_CLIENT_SECRET` / `GMAIL_REFRESH_TOKEN` | to read Gmail       | –                                                             | Desktop-app OAuth (`npm run inbox -- auth`). Secrets: never logged, never in an error                        |
-| `TRIAGE_START_MODEL`                                              | no                  | `ollama:gpt-oss:20b`                                          | Ladder rung triage starts on (must be in `LLM_MODEL_LADDER`)                                                 |
-| `TRIAGE_MAX_CHARS`                                                | no                  | `6000`                                                        | Bound on the redacted text a triage prompt carries (cut from the end, with a marker)                         |
-| `GMAIL_SWEEP_MAX_PAGES`                                           | no                  | `20`                                                          | Pages of 500 ids the label sweep may read per poll (bounds a backfill)                                       |
-| `INBOX_THREAD_SWEEP_DAYS` / `INBOX_THREAD_SWEEP_MAX`              | no                  | `60` / `200`                                                  | Admitted threads with recent activity checked for later unlabelled replies, and how many per poll            |
-| `LLM_MAX_ATTEMPTS`                                                | no                  | 2 × ladder length                                             | Total provider calls per structured call; must let every rung be reached (3 rungs need ≥ 5), else boot fails |
+| Variable                                          | Required            | Default                                                       | Notes                                                                                                        |
+| ------------------------------------------------- | ------------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `MONGODB_URI`                                     | yes                 | –                                                             | `mongodb://…` or `mongodb+srv://…`                                                                           |
+| `MONGODB_DB`                                      | yes                 | –                                                             | Database name                                                                                                |
+| `NODE_ENV`                                        | no                  | `development`                                                 | `development` \| `test` \| `production`                                                                      |
+| `PORT`                                            | no                  | `3000`                                                        |                                                                                                              |
+| `LOG_LEVEL`                                       | no                  | `info`                                                        | `silent` \| `fatal` \| `error` \| `warn` \| `info` \| `debug` \| `trace`                                     |
+| `OLLAMA_BASE_URL`                                 | no                  | `https://ollama.com/v1`                                       | OpenAI-compatible endpoint                                                                                   |
+| `OLLAMA_API_KEY`                                  | at first model call | –                                                             | **Secret.** Not required at boot or for `npm test`                                                           |
+| `OLLAMA_MAX_CONCURRENCY`                          | no                  | `3`                                                           | Provider limit, not a tuning knob                                                                            |
+| `LLM_MODEL_LADDER`                                | no                  | `ollama:gemma4:31b,ollama:gpt-oss:20b,ollama:mistral-large-4` | Ordered rungs; unknown provider or duplicates rejected                                                       |
+| `LLM_PRICES`                                      | no                  | `{}`                                                          | JSON map model ref → `{inputPerMTok, outputPerMTok}`                                                         |
+| `LLM_TIMEOUT_MS`                                  | no                  | `60000`                                                       | Per provider call                                                                                            |
+| `CHECKPOINT_TTL_DAYS`                             | no                  | `30`                                                          | Days a finished thread's checkpoints are kept; paused/failed threads never expire                            |
+| `APPROVER_NAME`                                   | no                  | OS user                                                       | Recorded as the decider when `approvals` has no `--by`                                                       |
+| `OLLAMA_LOCAL_BASE_URL`                           | no                  | `http://127.0.0.1:11434`                                      | Local Ollama, for embeddings only                                                                            |
+| `EMBEDDING_MODEL`                                 | no                  | `nomic-embed-text`                                            | Local embedding model; recorded on every chunk                                                               |
+| `EVAL_EMBEDDERS`                                  | no                  | `ollama-local:<EMBEDDING_MODEL>`                              | Embedders the retrieval eval compares                                                                        |
+| `RETRIEVAL_STORE`                                 | no                  | `bruteforce`                                                  | `bruteforce` or `atlas`                                                                                      |
+| `ATLAS_LOCAL_URI`                                 | no                  | –                                                             | mongodb-atlas-local, for the Atlas arm of tests and eval                                                     |
+| `VECTOR_MIN_SCORE`                                | no                  | `0.575`                                                       | Cosine below this is not relevant (calibrated on the sample)                                                 |
+| `VECTOR_MIN_GAP`                                  | no                  | `0.05`                                                        | Scale-free vector gate: top cosine minus the median of the retrieved set                                     |
+| `KEYWORD_MIN_COVERAGE`                            | no                  | `0.5`                                                         | Keyword arm: share of the query's distinct terms a chunk must contain                                        |
+| `CHASE_MAX_ROUNDS`                                | no                  | `2`                                                           | Sent chases of one kind per speaker per event before a task replaces the next message                        |
+| `CHASE_MIN_INTERVAL_DAYS`                         | no                  | `7`                                                           | Days after the last sent message before the next chase is due                                                |
+| `MAX_DRAFTS_PER_RUN`                              | no                  | `10`                                                          | Drafts one `speakers run` may write; the rest wait for the next run                                          |
+| `EVENT_TIME_ZONE`                                 | no                  | `Europe/Lisbon`                                               | Time zone event and slot times are written in, in drafts                                                     |
+| `GMAIL_LABEL`                                     | to start the inbox  | –                                                             | Admits mail: bodies read, triaged, linked. No default; must differ from the candidate label                  |
+| `GMAIL_CANDIDATE_LABEL`                           | to start the inbox  | –                                                             | Metadata only: nothing but headers is ever fetched. No default                                               |
+| `IMAP_USER` / `IMAP_APP_PASSWORD`                 | to read Gmail       | –                                                             | A Gmail address and an **app password** (see Inbox). Secrets: never logged, never in an error                |
+| `IMAP_HOST` / `IMAP_PORT`                         | no                  | `imap.gmail.com` / `993`                                      | The IMAP server (TLS)                                                                                        |
+| `TRIAGE_START_MODEL`                              | no                  | `ollama:gpt-oss:20b`                                          | Ladder rung triage starts on (must be in `LLM_MODEL_LADDER`)                                                 |
+| `TRIAGE_MAX_CHARS`                                | no                  | `6000`                                                        | Bound on the redacted text a triage prompt carries (cut from the end, with a marker)                         |
+| `GMAIL_SWEEP_MAX_PAGES` / `GMAIL_SWEEP_PAGE_SIZE` | no                  | `20` / `200`                                                  | UIDs read per page, and pages per folder per poll: bounds a first backfill and a UIDVALIDITY re-sweep        |
+| `LLM_MAX_ATTEMPTS`                                | no                  | 2 × ladder length                                             | Total provider calls per structured call; must let every rung be reached (3 rungs need ≥ 5), else boot fails |
 
 `process.env` is read only in `src/config/config.module.ts`.
 
@@ -566,52 +566,56 @@ that only falls due in the closing window. Writes `evals/speakers/report-<date>.
 
 Reads the mail you have chosen to show it, triages each message into a validated summary, links it to a
 speaker, organisation and event, and **pauses chasing for a speaker who has written back**. **Nothing in this
-milestone, or the next, sends anything:** M4b will create Gmail _drafts_ for you to send yourself. Only the
-read-only Gmail scope (`gmail.readonly`) is ever requested, and a test fails on any wider scope or any Gmail write call.
+milestone, or the next, sends anything:** M4b will create Gmail _drafts_ for you to send yourself. The transport
+is **IMAP with an app password**, and the code has no way to write to the mailbox: label folders are opened
+read-only (`EXAMINE`), and a test fails on any `APPEND`, `STORE`, `EXPUNGE`, copy, move or flag change anywhere in the source.
 
 ### The mailbox is your personal one: what the system may read
 
-Gmail cannot narrow `gmail.readonly` by label, so the narrowing is this code's job and it is the most important
-thing here. Two labels, two levels of trust (both **required**, no default, and they must differ; an unset or equal
-pair fails the inbox's boot):
+The login reaches the whole mailbox (an app password cannot be narrowed by label), so the narrowing is this code's job
+and it is the most important thing here. In Gmail's IMAP **every label is a folder**, and the folder is the scope.
+**`INBOX` and `[Gmail]/All Mail` (and every other `[Gmail]/...` folder) are never opened**: a label configured as one of
+them fails the boot, and the client refuses to open them regardless. Two labels, two levels of trust (both **required**,
+no default, and they must differ; an unset or equal pair fails the inbox's boot):
 
 | Label                                      | Applied by                                   | What the system may do                                               |
 | ------------------------------------------ | -------------------------------------------- | -------------------------------------------------------------------- |
 | `GMAIL_LABEL` (e.g. `mug-agents`)          | your `+mug` filter, or you by hand           | fetch the full body, redact it, triage it (a provider call), link it |
-| `GMAIL_CANDIDATE_LABEL` (e.g. `mug-maybe`) | loose filters (`from:meetup.com`, a keyword) | **headers only**: no body is ever fetched and no model is called     |
+| `GMAIL_CANDIDATE_LABEL` (e.g. `mug-maybe`) | loose filters (`from:meetup.com`, a keyword) | **envelope only**: no body is ever fetched and no model is called    |
 
 - **Dismissing** a candidate refuses the _loose_ label for good; applying `mug-agents` to that thread later is a deliberate,
   stronger decision and admits it. To refuse a thread even against that, `exclude-thread` it.
-- Scope is the **thread**: once any message in a thread carried `mug-agents` (or you admitted it), later unlabelled
-  replies are in scope. `exclude-thread` revokes that, permanently until undone, and beats a fresh label.
-- Every listing is scoped by a label **id** (the transport cannot express an unscoped list); every message has its
-  headers read before its body is fetched; and the body that comes back is checked against the same rule again before
-  it is stored. A message that is neither labelled nor in an admitted thread is dropped, with no body fetch.
-- **Gmail exposes no "labelled at" time** (checked against the API docs and the installed client's types), so a
-  high-water mark over labelling time is impossible. The poller **re-lists the label's ids every poll**, bounded by
-  `GMAIL_SWEEP_MAX_PAGES` (500 ids a page), and the unique `gmailId` absorbs the repeats. `history.list` is an
-  optimisation for later unlabelled replies; an expired history id (HTTP 404) falls back to the bounded label sweep,
-  never to the mailbox. Cost: one id-list call per 500 labelled messages per poll.
-- **Labels are pinned by Gmail id** on the first real poll. If a configured name later resolves to a different label (a
-  `mug-maybe` renamed to `mug-agents` would otherwise admit every candidate), the poll is refused before listing anything:
-  confirm with `npm run inbox -- poll --repin-labels`.
-- **Unverified against a real mailbox** (asserted from the docs and the code, to be checked on your first dry-run): whether
-  `history.list` reports a snapshot of a message's labels or the current ones (the code no longer depends on it: a label claim
-  admits nothing until the fetched body confirms it); whether `format=metadata` also returns a snippet (never read); and
-  whether European-Portuguese Gmail writes `No dia ... escreveu:` for a quoted reply (it is recognised, but I could not confirm it).
+- Scope is the **thread**: once any message in a thread carried `mug-agents` (or you admitted it), its other messages
+  _that are in a label folder_ are in scope. **A later reply that carries no label is not reachable** (it lives only in INBOX /
+  All Mail, which are never opened): label it, or have a Gmail filter label replies in that thread.
+  `exclude-thread` revokes admission, permanently until undone, and beats a fresh label.
+- **The cursor is a UID.** Applying a label to a message gives it a **new, highest UID** in that label's folder at that moment
+  (checked against the real mailbox: a 2014 message labelled today got the next UID, not one ordered by its date), so "UIDs above the
+  last one processed" is exactly "labelled since the last poll", however old the message is. The cursor (last UID per folder,
+  stored with `UIDVALIDITY`) is saved after a poll. A changed `UIDVALIDITY` (the folder was deleted and recreated) discards it
+  and sweeps the folder again, bounded by `GMAIL_SWEEP_MAX_PAGES`; the unique Gmail id (`X-GM-MSGID`) absorbs what is stored.
+  The candidate folder has no cursor: it is small, and re-listing its ids is how `admit` reaches a thread's earlier messages.
+- `poll --since <date>` re-reads from the start of the folders (without moving the cursor): use it after `include-thread`,
+  because mail that arrived while a thread was excluded was skipped, and an ordinary poll does not go back for it.
+- Every message has its **envelope** read (`UID FETCH ... ENVELOPE`, nothing else) before its body is fetched; the body is
+  fetched as text parts only (attachments are listed from `BODYSTRUCTURE` and never downloaded); and what comes back is checked
+  against the same rule again before it is stored. A message that is neither labelled nor in an admitted thread is dropped.
+- **Unverified against a real mailbox** (to be checked on your first dry-run): that `download` returns correctly decoded
+  text for Portuguese mail (charsets, quoted-printable); and whether European-Portuguese Gmail writes `No dia ... escreveu:`
+  for a quoted reply (it is recognised, but I could not confirm it).
 - Raw mail is untrusted data. The full body is stored (`inbound_messages`, `personal`) behind **one** accessor that only
   the inbox module and its CLI may call; the triage call gets the **redacted** body, has no tools, and returns a strict
   schema. Nothing downstream reads a raw body. What leaves the machine is in [docs/data-handling.md](docs/data-handling.md).
 
 ### Setting it up
 
-1. In Gmail, create the two labels and the filters that apply them.
-2. In the Google Cloud console: enable the Gmail API and create an OAuth client of type **Desktop app**. Put
-   `GMAIL_CLIENT_ID` and `GMAIL_CLIENT_SECRET` in `.env`, plus `GMAIL_LABEL` and `GMAIL_CANDIDATE_LABEL`.
-3. `npm run inbox -- auth` opens the Desktop flow (loopback redirect, PKCE) and prints a refresh token once; put it in
-   `.env` as `GMAIL_REFRESH_TOKEN`. **While the consent screen is in "Testing" status that token expires after 7 days**;
-   set the app to "In production" for a token that lasts.
-4. First run, read-only: `npm run inbox -- poll --dry-run` prints what it would store and triage (headers only: no body
+1. In Gmail, create the two labels and the filters that apply them. Make sure IMAP is on (Settings > Forwarding and POP/IMAP).
+2. Create an **app password** (Google Account > Security > 2-Step Verification > App passwords; 2-step verification must be
+   on). Put it in `.env` as `IMAP_APP_PASSWORD`, with `IMAP_USER` (your address), `GMAIL_LABEL` and `GMAIL_CANDIDATE_LABEL`.
+   An app password is a secret: it is never logged and never appears in an error. Revoke it from the same page.
+   _Why not OAuth:_ `gmail.readonly` is a restricted scope (a Google security assessment to leave Testing), and a
+   refresh token issued while the app is in Testing expires after 7 days.
+3. First run, read-only: `npm run inbox -- poll --dry-run` prints what it would store and triage (envelopes only: no body
    fetched, no model called, nothing written). Then `npm run inbox -- poll`.
 
 ```bash

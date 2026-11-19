@@ -27,17 +27,20 @@ generation model, so triage goes to Ollama Cloud like everything else generative
 rather than absorbed: the redacted text of mail you have labelled `mug-agents` is sent to Ollama Cloud. What
 limits the exposure is the scope below, not the redaction.
 
-**Decision (2026-11-18): two labels, two levels of trust.** The mailbox is your personal one, and Gmail's OAuth
-scopes are all-or-nothing (`gmail.readonly` grants the whole mailbox), so what the system reads is decided by
-this code and by a human, never by a pattern:
+**Decision (2026-11-18): two labels, two levels of trust.** The mailbox is your personal one, and an IMAP app
+password reaches all of it, so what the system reads is decided by this code and by a human, never by a pattern.
+Each label is a Gmail IMAP **folder**, the folder is the scope, and `INBOX` and `[Gmail]/All Mail` are never opened
+(2026-11-19: the transport moved from the Gmail API with OAuth to IMAP with an app password; the two-label model
+did not change):
 
-| Label (config, required, no default, must differ) | Applied by                                   | What the system may do                                                                                                                 |
-| ------------------------------------------------- | -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `GMAIL_LABEL` (`mug-agents`)                      | the `+mug` filter, or you by hand            | fetch the full body, redact it, triage it (a provider call), link it                                                                   |
-| `GMAIL_CANDIDATE_LABEL` (`mug-maybe`)             | loose filters (`from:meetup.com`, a keyword) | **headers only** (subject, sender, date): no body is fetched and no model is called. Nothing more happens until you `admit` the thread |
+| Label (config, required, no default, must differ) | Applied by                                   | What the system may do                                                                                                                  |
+| ------------------------------------------------- | -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `GMAIL_LABEL` (`mug-agents`)                      | the `+mug` filter, or you by hand            | fetch the full body, redact it, triage it (a provider call), link it                                                                    |
+| `GMAIL_CANDIDATE_LABEL` (`mug-maybe`)             | loose filters (`from:meetup.com`, a keyword) | **envelope only** (subject, sender, date): no body is fetched and no model is called. Nothing more happens until you `admit` the thread |
 
-A thread labelled both is admitted. Once any message in a thread carried `mug-agents`, or you admitted it, later
-messages in that thread are in scope even if unlabelled; `exclude-thread` revokes that, permanently, until undone. Dismissing a candidate refuses the _loose_ label for good; labelling the thread `mug-agents` afterwards is a deliberate, stronger decision and admits it (confirmed 2026-11-18).
+A thread labelled both is admitted. Once any message in a thread carried `mug-agents`, or you admitted it, its other messages that sit in a
+label folder are in scope; a later reply that carries **no** label is not reachable at all (it lives only in INBOX / All
+Mail, which are never opened). `exclude-thread` revokes admission, permanently, until undone. Dismissing a candidate refuses the _loose_ label for good; labelling the thread `mug-agents` afterwards is a deliberate, stronger decision and admits it (confirmed 2026-11-18).
 
 What this means for the provider:
 
@@ -54,14 +57,16 @@ What this means for the provider:
   if its thread is excluded afterwards, it is not triaged (the check is made when the call would be made, not when the
   message was stored), `retry-triage` refuses it, and `export-golden` skips it. Tested by counting model calls.
 - **Admission needs a confirmed label.** A thread is admitted by the label only after the body that comes back
-  confirms it (or by an earlier admission). A label _claimed_ by a listing or a history record, or seen in the headers and
-  gone by the fetch, admits nothing. The candidate label is verified in the message's own headers too: a wrong listing
+  confirms it (or by an earlier admission). A label seen in the envelope and gone by the fetch admits nothing. The candidate label is verified in the message's own envelope too: a wrong listing
   cannot put a private message's subject or sender into `candidate_threads`.
-- **Labels are pinned by Gmail id** on the first real poll; a name that later resolves to a different label (renamed,
-  recreated, swapped) is refused before anything is listed, until you confirm with `--repin-labels`.
+- **A folder is opened read-only, and only if it is one of the two configured labels.** `EXAMINE`, never `SELECT`;
+  folder names come from `LIST`, and a configured label with no folder fails the poll before anything is listed;
+  a label configured as INBOX or a `[Gmail]/...` folder fails the boot. The candidate fetch asks for the envelope and
+  nothing else; the admitted fetch downloads text parts only, never an attachment.
 - **Our own sent mail** (`SENT`, `DRAFT`) is skipped before any body fetch.
-- **Errors:** a failed Gmail or OAuth call throws a fresh error with an operation, an HTTP status and a scrubbed message
-  (known secrets and token shapes removed); the original, which carries the request, is never attached.
+- **Errors:** a failed IMAP call throws a fresh error with an operation and a scrubbed message (the app password, in
+  both spellings, and anything shaped like a `LOGIN` line or an `AUTHENTICATE PLAIN` payload removed: IMAP libraries
+  echo the failed login); the original, which carries the command, is never attached.
 - **Not stripped:** the substance. "I can't make it, I'm having surgery that week" is exactly what triage is for, and
   cannot be removed and still classified. Redaction is hygiene, not a guarantee; the guarantee is that you choose
   what the system sees.
@@ -73,9 +78,9 @@ What this means for the provider:
 - **What the model can do:** nothing. The call has no tools, its output is validated against a strict schema that
   contains no ids, status values or normalised dates, and the summary changes no domain record (it raises a task for
   a human when something needs a decision). Fabricated `mentions` (spans not in the text) are refused and retried.
-- **Gmail access:** read-only (`gmail.readonly`); no send, compose or modify scope is requested anywhere, and a source
-  scan fails on any Gmail write call. The refresh token and client secret come from config and are never logged,
-  never in an error message or a thrown error's properties.
+- **Mailbox access:** read-only. Nothing in `src/` or `scripts/` can `APPEND`, `STORE`, `EXPUNGE`, copy, move or change a
+  flag (a source scan fails on any of them). The app password comes from config (`IMAP_APP_PASSWORD`) and is never
+  logged, never in an error message or a thrown error's properties. It can be revoked at any time from your Google account.
 - **Logs:** counts and flags only. When a message is dropped for lacking the label, nothing about it (no subject, no
   address) is logged.
 - **The golden set:** real mail is exported anonymised (stable fictional names through a mapping file that stays out of

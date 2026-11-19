@@ -5,6 +5,57 @@ speaker/organisation/event, and pauses chasing for a speaker who has written bac
 Gmail** (M4b creates drafts; automated sending is not planned). Delivered on `main` in small commits. Spec:
 `specs/M4a-inbox.md` (the file was `M4a-inbox-spec.md`; renamed to the name used in the request).
 
+## 2026-11-19: the transport is now IMAP with an app password (supersedes the Gmail API sections below)
+
+Sections 1 and 4 of the spec changed: Gmail over **IMAP** (`imapflow` 2.12.1) with an app password, not the Gmail API with
+OAuth. Everything below that describes `history.list`, OAuth, `inbox auth`, label-id pins and `--repin-labels` is **historical**;
+the README and `docs/data-handling.md` describe what is true now. OAuth was rejected because `gmail.readonly` is a restricted
+scope (leaving Testing needs a security assessment) and a refresh token issued in Testing lasts 7 days.
+
+**Step 1, verified against the real mailbox (read-only, plus two scratch labels):** applying a label to a message gives it a **new,
+highest UID in that label's folder at that moment**, not one ordered by its date. Two 2014 messages applied to an empty scratch folder
+in the order 2014-02-26, 2014-03-08 got UIDs 1, 2; applied in the order 2014-03-08, then 2014-02-26 into a second folder they got 1, 2
+(the older message got the higher UID). Copying from All Mail with `EXAMINE` worked. `imapflow` exposes `X-GM-MSGID` (`emailId`),
+`X-GM-THRID` (`threadId`) and `X-GM-LABELS` (`labels`), and opens read-only with `getMailboxLock(path, { readOnly: true })`.
+Observed: `X-GM-LABELS` **leaves out the label of the folder being read**, so the client adds the folder to `labelIds`.
+The two scratch labels `mug-uid-probe` and `mug-uid-probe2` are still in your Gmail (each holds copies, nothing was moved or deleted): delete them when you like.
+
+### What the migration had to change outside the transport implementation, and what leaked
+
+The transport implementation is `src/inbox/imap.client.ts` (new), `src/inbox/gmail.errors.ts`, `src/inbox/folders.ts` (new).
+Everything else below is a change **outside** it. Per your instruction, none of the leaks is fixed here beyond what the new
+transport forced.
+
+| File                                                                                                                                                                                                  | Change                                                                                                                                                                                                                                                                                     | What leaked                                                                                                                                                                                                                                     |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/inbox/gmail.transport.ts` (the interface)                                                                                                                                                        | `MessageRef` gained `folder` and `uid`; `listMessageRefs` takes `afterUid`/`limit` and returns `uidValidity`/`hasMore`; `getMetadata` and `getFull` take a `MessageRef`, not an id; `getThreadRefs`, `getCurrentHistoryId`, `listHistory`, `HistoryExpiredError` are gone; `close()` added | **The interface was shaped by the Gmail API.** Page tokens, history, "list by label id, fetch by message id" and thread listing all assumed an API that can address any message by id from anywhere. IMAP addresses a message by (folder, UID). |
+| `src/inbox/inbox.service.ts`                                                                                                                                                                          | `poll()` rewritten: sweep by UID cursor, no history, no id pins, no `processHistory`, no `processAdmittedThreads`; the candidate folder is re-listed from 0 each poll; `--since` re-reads from 0                                                                                           | **An assumption about ordering and about reach.** The service assumed it could re-list the label every poll (no cursor), ask "what else is in this thread?" (`getThreadRefs`) and that label ids were stable. See the behaviour changes below.  |
+| `src/domain/inbox.schema.ts`, `src/inbox/repositories.ts`                                                                                                                                             | The cursor is now `folders[{folder, uidValidity, lastUid}]`, not `historyId` / `labelId` / `candidateLabelId`                                                                                                                                                                              | **A field only the API provided:** `historyId` and the Gmail label ids.                                                                                                                                                                         |
+| `src/inbox/candidates.ts`                                                                                                                                                                             | `getMetadata(ref)` instead of `getMetadata(id)`; wording                                                                                                                                                                                                                                   | The id-addressing.                                                                                                                                                                                                                              |
+| `src/inbox/format.ts`                                                                                                                                                                                 | The "History: ..." line became a "Cursor: ..." line                                                                                                                                                                                                                                        | History was in the report.                                                                                                                                                                                                                      |
+| `src/inbox/inbox.config.ts`, `src/config/env.schema.ts`, `src/inbox/inbox.module.ts`                                                                                                                  | OAuth settings, scopes and `INBOX_THREAD_SWEEP_*` removed; `IMAP_*` and `GMAIL_SWEEP_PAGE_SIZE` added; INBOX/`[Gmail]` refused as a label at boot                                                                                                                                          | Credentials and the thread-sweep settings.                                                                                                                                                                                                      |
+| `scripts/inbox.ts`                                                                                                                                                                                    | `auth`, `--repin-labels` removed; the client is closed after a poll                                                                                                                                                                                                                        | OAuth flow.                                                                                                                                                                                                                                     |
+| **Not changed:** triage (`triage.ts`, `triage.schema.ts`, `redact.ts`, metrics), `linking.ts`, `anonymise.ts`, `golden.ts`, the Speakers agent, every other repository and every other domain schema. |                                                                                                                                                                                                                                                                                            | Nothing leaked there.                                                                                                                                                                                                                           |
+
+**Behaviour that changed, and you should decide on:**
+
+1. **A later reply that carries no label is no longer reachable.** Over the API an admitted thread's unlabelled replies were found by
+   listing the thread. Over IMAP they live only in INBOX / All Mail, which are never opened. The thread-level admission still holds
+   for messages in a label folder, but "an unlabelled reply in an admitted thread is picked up" (spec 1a) is gone. It needs a Gmail
+   filter that labels replies, or you labelling them. A test states this limit.
+2. **Label-id pinning is gone.** IMAP has no stable label id. A label renamed or swapped is now caught only as a folder that is missing,
+   or as a changed `UIDVALIDITY`, which per your instruction re-sweeps rather than refusing. A `mug-maybe` renamed to `mug-agents`
+   would be treated as the admitting folder. Low probability, and it was a review-round guard, so you should know it was removed.
+3. **`include-thread` does not go back for mail skipped while a thread was excluded** (the cursor moved past it). Recover with
+   `poll --since <date>`. The candidate folder is re-listed each poll, so it is unaffected.
+4. **"A configured folder missing from LIST fails at boot"** is enforced at the start of every `poll` (before anything is listed),
+   not when the NestJS module boots, so database-only commands do not need a network connection.
+5. **ENVELOPE has no `References` header**, so a candidate has none; an admitted message gets it from a separate header fetch.
+
+**Still unverified against a real mailbox:** that `imapflow`'s `download` returns correctly decoded text for real Portuguese mail
+(charsets, quoted-printable), and the full `poll --dry-run` path over the real client. I did not run `poll` against your mailbox.
+Your stored cursor, if you had run the earlier version, would not parse (it had `historyId`); there was none, since the first real run was yours.
+
 ## Settled before coding
 
 Labels `mug-agents` / `mug-maybe`, and triage starting on `gpt-oss:20b`, as given. The fictional sample corpus and the
