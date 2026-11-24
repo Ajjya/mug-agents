@@ -46,13 +46,17 @@ export class RecordingModel implements LlmProvider {
   queue: ((prompt: string) => string)[] = [];
   /** Throw this for every call (a provider outage). */
   fail: Error | undefined;
+  /** How long a call takes, by prompt (a slow model). It ignores `timeoutMs`, as a hung provider would. */
+  delayMs: ((prompt: string) => number) | undefined;
 
   get calls(): number {
     return this.prompts.length;
   }
 
-  chat(request: ChatRequest): Promise<ChatResponse> {
+  async chat(request: ChatRequest): Promise<ChatResponse> {
     this.prompts.push(request.prompt);
+    const wait = this.delayMs?.(request.prompt) ?? 0;
+    if (wait > 0) await new Promise<void>((resolve) => setTimeout(resolve, wait));
     if (this.fail) return Promise.reject(this.fail);
     const content = (this.queue.shift() ?? (() => NEUTRAL_ANSWER))(request.prompt);
     return Promise.resolve({ content, promptTokens: 10, completionTokens: 5, latencyMs: 1 });
@@ -64,6 +68,7 @@ export const TEST_INBOX_CONFIG: InboxConfig = {
   candidateLabel: 'mug-maybe',
   triageStartRung: 0,
   triageMaxChars: 6000,
+  triageDeadlineMs: 120_000,
   sweepMaxPages: 20,
   sweepPageSize: 200,
   documentShareSenders: ['drive-shares-dm-noreply@google.com'],
@@ -142,7 +147,12 @@ export function buildInboxHarness(options: InboxHarnessOptions = {}): InboxHarne
     events: repos.events,
     organisations: repos.organisations,
     tasks: repos.tasks,
-    triager: new Triager({ call, maxChars: config.triageMaxChars, startAt: 0 }),
+    triager: new Triager({
+      call,
+      maxChars: config.triageMaxChars,
+      startAt: 0,
+      deadlineMs: config.triageDeadlineMs,
+    }),
     config,
     log: (message, fields = {}) => {
       logs.push(`${message} ${JSON.stringify(fields)}`);

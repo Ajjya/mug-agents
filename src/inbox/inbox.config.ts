@@ -14,6 +14,8 @@ export interface InboxConfig {
   candidateLabel: string;
   triageStartRung: number;
   triageMaxChars: number;
+  /** The most one message's triage may take across the ladder (TRIAGE_MESSAGE_DEADLINE_MS). */
+  triageDeadlineMs: number;
   /** Pages of GMAIL_SWEEP_PAGE_SIZE UIDs one poll may read per folder: bounds a backfill or a re-sweep. */
   sweepMaxPages: number;
   sweepPageSize: number;
@@ -75,6 +77,7 @@ export function resolveInboxConfig(config: AppConfig): InboxConfig {
     candidateLabel: candidate,
     triageStartRung,
     triageMaxChars: config.TRIAGE_MAX_CHARS,
+    triageDeadlineMs: config.TRIAGE_MESSAGE_DEADLINE_MS,
     sweepMaxPages: config.GMAIL_SWEEP_MAX_PAGES,
     sweepPageSize: config.GMAIL_SWEEP_PAGE_SIZE,
     documentShareSenders: parseSenderList(config.INBOX_DOCUMENT_SHARE_SENDERS),

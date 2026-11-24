@@ -329,7 +329,7 @@ runCli(
       case 'retriage': {
         const r = await inbox.retriage();
         console.log(
-          `Triaged ${String(r.triaged)}; triage failed ${String(r.triageFailed)}; left pending (provider outage) ${String(r.triagePending)}.`,
+          `Triaged ${String(r.triaged)}; triage failed ${String(r.triageFailed)}; stopped at the per-message deadline ${String(r.triageDeadlineStopped)}; left pending (provider outage) ${String(r.triagePending)}.`,
         );
         console.log(`Considered ${String(r.considered)} stored message(s).`);
         for (const line of formatTriageRouting(r)) console.log(line);

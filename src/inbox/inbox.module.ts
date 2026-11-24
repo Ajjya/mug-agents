@@ -81,7 +81,12 @@ export const TRIAGER = Symbol('TRIAGER');
       provide: TRIAGER,
       inject: [STRUCTURED_CALL, INBOX_CONFIG],
       useFactory: (call: StructuredCall, config: InboxConfig) =>
-        new Triager({ call, maxChars: config.triageMaxChars, startAt: config.triageStartRung }),
+        new Triager({
+          call,
+          maxChars: config.triageMaxChars,
+          startAt: config.triageStartRung,
+          deadlineMs: config.triageDeadlineMs,
+        }),
     },
     {
       provide: InboxService,

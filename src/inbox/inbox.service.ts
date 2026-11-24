@@ -85,6 +85,11 @@ export interface PollReport {
   skippedOutbound: number;
   triaged: number;
   triageFailed: number;
+  /**
+   * Messages stopped by the per-message deadline (TRIAGE_MESSAGE_DEADLINE_MS): marked failed with the reason and
+   * counted HERE, not in `triageFailed` (which is the models not holding the schema).
+   */
+  triageDeadlineStopped: number;
   /** Left pending because the provider was unavailable; retried on the next poll. */
   triagePending: number;
   /** Pending messages left alone because their thread has been excluded since they were stored. */
@@ -154,6 +159,7 @@ const emptyReport = (): PollReport => ({
   skippedOutbound: 0,
   triaged: 0,
   triageFailed: 0,
+  triageDeadlineStopped: 0,
   triagePending: 0,
   triageSkippedExcluded: 0,
   uidValidityReset: false,
@@ -290,6 +296,7 @@ export class InboxService {
       skippedOutbound: report.skippedOutbound,
       triaged: report.triaged,
       triageFailed: report.triageFailed,
+      triageDeadlineStopped: report.triageDeadlineStopped,
       triagePending: report.triagePending,
       reachedModel: report.reachedModel,
       ruleConflicts: report.ruleConflicts,
@@ -590,7 +597,8 @@ export class InboxService {
             triageFailure: out.issues,
             triagedAt,
           });
-          report.triageFailed++;
+          if (out.reason === 'deadline') report.triageDeadlineStopped++;
+          else report.triageFailed++;
         }
         if (options.tasks) await this.raiseTask(m, out.ok ? out.summary : undefined);
       } catch (err) {

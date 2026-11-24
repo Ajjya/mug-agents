@@ -7,7 +7,7 @@ export class StructuredOutputError extends Error {
     public readonly attempts: readonly LlmCallRecord[],
     /** The last validation issues. Never the raw model output. */
     public readonly issues: readonly string[],
-    public readonly reason: 'ladder_exhausted' | 'max_attempts',
+    public readonly reason: 'ladder_exhausted' | 'max_attempts' | 'deadline',
   ) {
     super(
       `Structured output failed in node "${node}" after ${String(attempts.length)} attempt(s) (${reason}): ${issues.slice(0, 3).join('; ') || 'no validation issues recorded'}`,

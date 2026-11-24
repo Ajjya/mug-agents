@@ -5,6 +5,12 @@ import type { PollReport } from './inbox.service.js';
  *  - a dry run lists what it WOULD store (date, thread id, subject) for in-scope messages only;
  *  - everything else is a COUNT: nothing about a dropped message (no subject, no address, no id) is printed.
  */
+/** Messages the per-message deadline stopped are reported on their own: that is time, not the schema. */
+const deadlineNote = (r: PollReport): string =>
+  r.triageDeadlineStopped > 0
+    ? `; stopped at the per-message deadline (TRIAGE_MESSAGE_DEADLINE_MS) ${String(r.triageDeadlineStopped)}`
+    : '';
+
 export function formatPollReport(
   r: PollReport,
   options: { dryRun: boolean; label: string },
@@ -23,7 +29,7 @@ export function formatPollReport(
     }
   } else {
     out.push(
-      `Stored ${String(r.stored.length)}; already stored ${String(r.alreadyStored)}; triaged ${String(r.triaged)}; triage failed ${String(r.triageFailed)}; triage pending ${String(r.triagePending)}${r.triageSkippedExcluded > 0 ? `; left alone (excluded threads) ${String(r.triageSkippedExcluded)}` : ''}.`,
+      `Stored ${String(r.stored.length)}; already stored ${String(r.alreadyStored)}; triaged ${String(r.triaged)}; triage failed ${String(r.triageFailed)}${deadlineNote(r)}; triage pending ${String(r.triagePending)}${r.triageSkippedExcluded > 0 ? `; left alone (excluded threads) ${String(r.triageSkippedExcluded)}` : ''}.`,
     );
   }
   out.push(
@@ -52,6 +58,6 @@ export function formatTriageRouting(r: PollReport): string[] {
   const decided = Object.values(d).reduce((a, b) => a + b, 0);
   return [
     `Intent decided by (${String(decided)} message(s) triaged): List-Unsubscribe ${n('rule_list_unsubscribe')}; calendar part ${n('rule_calendar')}; document-share sender ${n('rule_sender_list')}; known speaker ${n('lookup_speaker')}; known contact ${n('lookup_contact')}; model alone ${n('model')}.`,
-    `Reached a model: ${String(r.reachedModel)} of ${String(decided + r.triageFailed)}. Rule/lookup disagreements (earlier decider won, counted not hidden): ${String(r.ruleConflicts)}. Wall-clock: ${(r.elapsedMs / 1000).toFixed(1)}s.`,
+    `Reached a model: ${String(r.reachedModel)} of ${String(decided + r.triageFailed + r.triageDeadlineStopped)}. Rule/lookup disagreements (earlier decider won, counted not hidden): ${String(r.ruleConflicts)}. Wall-clock: ${(r.elapsedMs / 1000).toFixed(1)}s.`,
   ];
 }

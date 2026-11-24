@@ -224,6 +224,12 @@ const baseEnvSchema = z.object({
   /** The ladder rung triage starts on (a `provider:model` that must be in LLM_MODEL_LADDER). */
   TRIAGE_START_MODEL: z.string().trim().min(1).default('ollama:gpt-oss:20b'),
   /** Bound on the redacted text a triage prompt may carry (truncated from the end, with a marker). */
+  /**
+   * The most one message's triage may take across the whole model ladder. Without it a message that keeps
+   * failing validation can hold the run for attempts x LLM_TIMEOUT_MS. When it passes, the ladder stops, the
+   * message is marked failed with the reason, and the batch moves on.
+   */
+  TRIAGE_MESSAGE_DEADLINE_MS: z.coerce.number().int().min(1).default(120_000),
   TRIAGE_MAX_CHARS: z.coerce.number().int().min(500).max(50_000).default(6000),
   /**
    * Senders whose mail is `document_share`, decided in code with no model call: exact addresses, or

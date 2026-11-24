@@ -57,13 +57,21 @@ export interface FixedIntent {
 
 export type TriageOutcome =
   | { ok: true; summary: TriageSummary; calls: LlmCallRecord[] }
-  | { ok: false; issues: string[]; calls: LlmCallRecord[] };
+  | {
+      ok: false;
+      issues: string[];
+      calls: LlmCallRecord[];
+      /** `deadline`: stopped by the per-message deadline; `validation`: the models could not hold the schema. */
+      reason: 'validation' | 'deadline';
+    };
 
 export interface TriagerOptions {
   call: StructuredCall;
   /** Reported with the summary; the ladder rung it starts on is `startAt`. */
   maxChars: number;
   startAt: number;
+  /** TRIAGE_MESSAGE_DEADLINE_MS: the most one message may take across the whole ladder. */
+  deadlineMs?: number;
 }
 
 export class Triager {
@@ -80,7 +88,11 @@ export class Triager {
     fixed?: FixedIntent,
   ): Promise<TriageOutcome> {
     try {
-      const options = { node: 'triage', startAt: this.options.startAt };
+      const options = {
+        node: 'triage',
+        startAt: this.options.startAt,
+        ...(this.options.deadlineMs === undefined ? {} : { deadlineMs: this.options.deadlineMs }),
+      };
       const r = fixed
         ? await this.options.call(
             triageOutputSchema(redactedBody, true),
@@ -105,7 +117,12 @@ export class Triager {
       };
     } catch (err) {
       if (err instanceof StructuredOutputError) {
-        return { ok: false, issues: [...err.issues], calls: [...err.attempts] };
+        return {
+          ok: false,
+          issues: [...err.issues],
+          calls: [...err.attempts],
+          reason: err.reason === 'deadline' ? 'deadline' : 'validation',
+        };
       }
       throw err;
     }

@@ -33,6 +33,12 @@ export interface StructuredOptions {
   node: string;
   /** Ladder index to start at (default 0). */
   startAt?: number;
+  /**
+   * An upper bound on the TOTAL time this call may take, across every attempt and rung. Without it the
+   * worst case is attempts x timeoutMs. When it passes, the ladder stops (a call in flight is abandoned,
+   * not waited for) and the call fails with `StructuredOutputError` reason `deadline`.
+   */
+  deadlineMs?: number;
 }
 
 export interface StructuredResult<T> {
@@ -110,7 +116,9 @@ const realSleep = (ms: number): Promise<void> => new Promise((resolve) => setTim
  *  - timeouts / transport errors count as attempts and are handled like validation failures;
  *  - queue_full retries the same rung after a backoff and never climbs;
  *  - auth failures and 5xx abort with ProviderUnavailableError (every rung is the same vendor);
- *  - the ladder or LLM_MAX_ATTEMPTS exhausted -> StructuredOutputError (issues only, no raw output).
+ *  - the ladder or LLM_MAX_ATTEMPTS exhausted -> StructuredOutputError (issues only, no raw output);
+ *  - `deadlineMs` (optional) bounds the whole call: no attempt starts after it, an attempt in flight when it
+ *    passes is abandoned, and the result is StructuredOutputError with reason `deadline`.
  */
 export async function callStructured<T>(
   schema: z.ZodType<T>,
@@ -131,6 +139,17 @@ export async function callStructured<T>(
       `startAt ${String(rung)} is outside the ladder (size ${String(ladder.length)})`,
     );
   }
+  const startedAt = Date.now();
+  const deadlineAt = options.deadlineMs === undefined ? undefined : startedAt + options.deadlineMs;
+  const stopped = (): StructuredOutputError =>
+    new StructuredOutputError(
+      options.node,
+      calls,
+      [
+        `stopped at the per-message deadline of ${String(options.deadlineMs)} ms after ${String(calls.length)} attempt(s)`,
+      ],
+      'deadline',
+    );
   let failuresOnRung = 0;
   let queueRejections = 0;
   let lastIssues: string[] = [];
@@ -156,6 +175,7 @@ export async function callStructured<T>(
   };
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    if (deadlineAt !== undefined && Date.now() >= deadlineAt) throw stopped();
     const ref = ladder[rung];
     if (!ref) throw new RangeError('rung out of range'); // unreachable: climb() guards the index
     const provider = deps.provider(ref.provider);
@@ -180,13 +200,40 @@ export async function callStructured<T>(
     };
 
     try {
-      const res = await provider.chat({
+      const attemptStart = Date.now();
+      const remaining =
+        deadlineAt === undefined ? Number.POSITIVE_INFINITY : deadlineAt - attemptStart;
+      const chat = provider.chat({
         model: ref.model,
         prompt: buildPrompt(prompt, jsonSchema, provider.constrainsOutput, lastIssues),
         temperature: 0,
-        timeoutMs,
+        // an attempt never gets more time than the message has left
+        timeoutMs: Math.max(1, Math.min(timeoutMs, remaining)),
         ...(provider.constrainsOutput ? { jsonSchema } : {}),
       });
+      chat.catch(() => undefined); // if the deadline wins the race, a late failure of this call is not unhandled
+      let timer: NodeJS.Timeout | undefined;
+      const outcome =
+        deadlineAt === undefined
+          ? await chat
+          : await Promise.race([
+              chat,
+              new Promise<'deadline'>((resolve) => {
+                timer = setTimeout(
+                  () => {
+                    resolve('deadline');
+                  },
+                  Math.max(0, remaining),
+                );
+              }),
+            ]).finally(() => {
+              clearTimeout(timer);
+            });
+      if (outcome === 'deadline') {
+        record('timeout', { latencyMs: Date.now() - attemptStart });
+        throw stopped();
+      }
+      const res = outcome;
       const checked = validate(schema, res.content);
       const base = {
         tokensIn: res.promptTokens,
