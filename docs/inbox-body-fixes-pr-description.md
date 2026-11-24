@@ -33,7 +33,7 @@ implemented but **applied to newly ingested messages only**.
   `inbox repair-bodies` is a **dry run by default**, and changes a document only with `--write`. I did not run it.
 - **Checked on the real collection:** a fingerprint (SHA-256 over every document, in `_id` order) of
   `mug_agents_dev.inbound_messages` was taken before the work on item 4 and again after the final `npm run verify`:
-  see the report for both values. Tests use `mongodb-memory-server` and in-memory repositories, never that database.
+  both were `467` documents, highest `version` 7, SHA-256 prefix `9ffe1ecb267ebf84`: identical. Tests use `mongodb-memory-server` and in-memory repositories, never that database.
 - The stored `"undefined\r\n"` document is **not repaired** by any of this (`repair-bodies` leaves it alone and counts it:
   its body must be re-fetched, not normalised).
 

@@ -1,8 +1,8 @@
 {
-  "theme": "Introduction to Atlas Vector Search",
-  "date": "2027-03-18",
+  "theme": "Vector search in production",
+  "date": "2027-02-19T18:30:00.000Z",
   "format": "talks",
-  "capacity": 80,
-  "coHost": "Lisbon Python Users Group",
-  "notes": "Evening meetup, two 25-minute talks and networking. Pizza sponsored."
+  "capacity": 60,
+  "coHost": "Lisbon JUG",
+  "notes": "INSCALE offered the room"
 }
