@@ -123,28 +123,46 @@ describe('a LinkedIn URL has one home: handles.linkedin', () => {
     expect((await seedSpeakers(dir, repo)).updated).toEqual([]);
   });
 
-  it('an explicit handles.linkedin wins over links.linkedin, and a LinkedIn handle a human has is never overwritten by a re-seed', async () => {
+  const withEntry = (e: Record<string, unknown>) => {
     const dir = mkdtempSync(join(tmpdir(), 'seed-li-'));
     cpSync(SAMPLE, dir, { recursive: true });
     const file = join(dir, 'speakers.seed.json');
     const seed = JSON.parse(readFileSync(file, 'utf8')) as { speakers: Record<string, unknown>[] };
-    seed.speakers.push(
+    seed.speakers.push(e);
+    writeFileSync(file, JSON.stringify(seed));
+    return dir;
+  };
+
+  it('an entry with BOTH values, identical, loads and ends up with ONE handle', async () => {
+    const url = 'https://www.linkedin.com/in/ana-pires/';
+    const dir = withEntry(entry({ links: { linkedin: url }, handles: { linkedin: url } }));
+    const repo = new InMemorySpeakersRepository();
+    await seedSpeakers(dir, repo);
+    const ana = await repo.findByHandle('ana-pires');
+    expect(ana?.handles).toEqual({ linkedin: url });
+    expect(ana?.links).toEqual({}); // links keeps only github and website in the database
+    expect(chooseDelivery(ana ?? { emails: [], handles: {} })).toBe('manual:linkedin');
+  });
+
+  it('an entry with BOTH values that DIFFER fails loudly, naming the speaker, and writes nothing', async () => {
+    const dir = withEntry(
       entry({
         links: { linkedin: 'https://linkedin.com/in/old' },
         handles: { linkedin: 'https://linkedin.com/in/new' },
       }),
     );
-    writeFileSync(file, JSON.stringify(seed));
     const repo = new InMemorySpeakersRepository();
-    await seedSpeakers(dir, repo);
-    expect((await repo.findByHandle('ana-pires'))?.handles.linkedin).toBe(
-      'https://linkedin.com/in/new',
+    await expect(seedSpeakers(dir, repo)).rejects.toThrow(
+      /speaker ana-pires: links\.linkedin \(https:\/\/linkedin\.com\/in\/old\) and handles\.linkedin \(https:\/\/linkedin\.com\/in\/new\) differ/,
     );
-    // a speaker whose LinkedIn only came from links never has an existing handle replaced
-    const other = seed.speakers.at(-1);
-    if (other) other['handles'] = undefined;
-    const repo2 = new InMemorySpeakersRepository();
-    const ana = await repo2.insert({
+    expect(await repo.findByHandle('ana-pires')).toBeNull();
+    expect(await repo.count()).toBe(0); // nothing at all was written
+  });
+
+  it('a handle a human already has is never overwritten by a re-seed that only has links.linkedin', async () => {
+    const dir = withEntry(entry({ links: { linkedin: 'https://linkedin.com/in/from-links' } }));
+    const repo = new InMemorySpeakersRepository();
+    const ana = await repo.insert({
       handle: 'ana-pires',
       name: 'Ana Pires',
       emails: [],
@@ -153,14 +171,8 @@ describe('a LinkedIn URL has one home: handles.linkedin', () => {
       links: {},
       perEvent: [],
     });
-    seed.speakers[seed.speakers.length - 1] = entry({
-      links: { linkedin: 'https://linkedin.com/in/from-links' },
-    });
-    writeFileSync(file, JSON.stringify(seed));
-    await seedSpeakers(dir, repo2);
-    expect((await repo2.findById(ana._id))?.handles.linkedin).toBe(
-      'https://linkedin.com/in/humans',
-    );
+    await seedSpeakers(dir, repo);
+    expect((await repo.findById(ana._id))?.handles.linkedin).toBe('https://linkedin.com/in/humans');
   });
 
   it('the stored schema no longer accepts links.linkedin: one home, enforced', () => {

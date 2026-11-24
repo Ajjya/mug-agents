@@ -21,8 +21,9 @@ export const SeedSpeakerSchema = z
     topics: SpeakerInputSchema.shape.topics,
     bio: SpeakerInputSchema.shape.bio,
     /**
-     * `links.linkedin` is still accepted here (existing seed files have it) and is ROUTED to `handles.linkedin`:
-     * a LinkedIn URL has one home. An explicit `handles.linkedin` in the same entry wins.
+     * The FILE's one source for a LinkedIn URL is `links.linkedin`: it is what you write, and the loader ROUTES it
+     * into `handles.linkedin` (a URL has one home in the database). `handles` stays accepted but is not required.
+     * If an entry carries BOTH and they differ, loading fails, naming the speaker: nothing is silently preferred.
      */
     links: SpeakerInputSchema.shape.links.extend({ linkedin: z.url().optional() }).strict(),
     perEvent: SpeakerInputSchema.shape.perEvent,
@@ -45,6 +46,15 @@ export const SeedFileSchema = z
         });
       }
       seen.add(s.handle);
+      const a = s.links.linkedin;
+      const b = s.handles?.linkedin;
+      if (a !== undefined && b !== undefined && a !== b) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['speakers', i, 'handles', 'linkedin'],
+          message: `speaker ${s.handle}: links.linkedin (${a}) and handles.linkedin (${b}) differ. The seed file's one source is links.linkedin: keep that one and delete handles.linkedin (npm run clean-speaker-seed removes it only where the two are identical).`,
+        });
+      }
     });
   });
 
@@ -82,7 +92,8 @@ export async function seedSpeakers(
 
   const result: SeedResult = { created: [], updated: [], unchanged: [] };
   for (const entry of seed.speakers) {
-    // links.linkedin is a way to REACH someone: it belongs in handles (an explicit handles.linkedin wins).
+    // links.linkedin is a way to REACH someone: it belongs in handles. (Where both are present they are
+    // identical: the file schema refuses entries where they differ.)
     const { linkedin: legacyLinkedin, ...links } = entry.links;
     const routed = legacyLinkedin !== undefined && entry.handles?.linkedin === undefined;
     const s = {

@@ -28,6 +28,7 @@
     "ingest": "npm run build:scripts --silent && node --env-file-if-exists=.env dist-scripts/scripts/ingest.js",
     "seed-speakers": "npm run build:scripts --silent && node --env-file-if-exists=.env dist-scripts/scripts/seed-speakers.js",
     "seed-organisations": "npm run build:scripts --silent && node --env-file-if-exists=.env dist-scripts/scripts/seed-organisations.js",
+    "clean-speaker-seed": "npm run build:scripts --silent && node --env-file-if-exists=.env dist-scripts/scripts/clean-speaker-seed.js",
     "migrate-speaker-contacts": "npm run build:scripts --silent && node --env-file-if-exists=.env dist-scripts/scripts/migrate-speaker-contacts.js",
     "search": "npm run build:scripts --silent && node --env-file-if-exists=.env dist-scripts/scripts/search.js",
     "suggest-speakers": "npm run build:scripts --silent && node --env-file-if-exists=.env dist-scripts/scripts/suggest-speakers.js",
