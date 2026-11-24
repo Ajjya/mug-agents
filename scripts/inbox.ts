@@ -405,8 +405,11 @@ runCli(
             ...(values.limit ? { limit: Number(values.limit) } : {}),
           },
         );
+        for (const sk of r.skippedNoRedaction) {
+          console.log(`SKIPPED ${sk.id}: ${sk.reason}`);
+        }
         console.log(
-          `Wrote ${String(r.written.length)} golden file(s) to ${values.out}; already exported ${String(r.skippedAlreadyExported)}; left alone (exist) ${String(r.skippedExisting)}; skipped (excluded threads) ${String(r.skippedExcluded)}.`,
+          `Wrote ${String(r.written.length)} golden file(s) to ${values.out}; already exported ${String(r.skippedAlreadyExported)}; left alone (exist) ${String(r.skippedExisting)}; skipped (excluded threads) ${String(r.skippedExcluded)}; SKIPPED for want of a real redacted body ${String(r.skippedNoRedaction.length)}.`,
         );
         console.log(
           `Every label is "unverified". Correct the files, mark each field "verified", then: npm run inbox -- check-golden ${values.out}`,

@@ -655,6 +655,15 @@ export class InMemoryInboundMessagesRepository implements InboundMessagesReposit
     delete d.hasCalendarPart;
     delete d.structureCheckedAt;
   }
+  /** Test lever: data written before the bodyText guard existed (the guard would refuse it today). */
+  legacyBody(id: EntityId, bodyText: string): void {
+    this.bodies.set(id.toLowerCase(), bodyText);
+  }
+  /** Test lever: a message whose redacted body is missing altogether (older or damaged data). */
+  clearRedacted(id: EntityId): void {
+    const d = this.docs.get(id.toLowerCase());
+    if (d) delete (d as { bodyRedacted?: string }).bodyRedacted;
+  }
   /** Test lever: the stored verdict is the model's, with this intent (what a pre-rules run left behind). */
   forceIntent(gmailId: string, intent: string): void {
     const d = [...this.docs.values()].find((x) => x.gmailId === gmailId);

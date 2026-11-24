@@ -286,6 +286,47 @@ describe('export-golden', () => {
     }).toThrow(GoldenNotVerifiedError);
   });
 
+  it('a message with no real redacted body is SKIPPED, with its id and the reason: never written as "undefined"', async () => {
+    const w = await world();
+    const bad = async (gmailId: string, over: Record<string, unknown>) =>
+      (await w.inbound.insert(inboundInput({ gmailId, threadId: `t-${gmailId}`, ...over })))
+        .message;
+    // what the first real run stored: the guard refuses it today, so it is put there as legacy data
+    const undef = await bad('b-1', { bodyText: 'x', bodyRedacted: 'undefined' });
+    const repo = w.inbound as unknown as {
+      legacyBody(id: string, text: string): void;
+      clearRedacted(id: string): void;
+    };
+    repo.legacyBody(undef._id, 'undefined\r\n');
+    const empty = await bad('b-2', { bodyText: 'Some words', bodyRedacted: '' });
+    const missing = await bad('b-3', { bodyText: 'Some words' });
+    const rawUndef = await bad('b-4', { bodyText: 'x', bodyRedacted: 'fine text' });
+    repo.legacyBody(rawUndef._id, 'undefined');
+    repo.clearRedacted(missing._id);
+    const out = tmp();
+    const report = await exportGolden({ ...w, triager: stubTriager() }, { outDir: out });
+
+    expect(report.written).toEqual(['g001', 'g002']); // only the two real ones
+    expect(report.skippedNoRedaction).toEqual([
+      { id: undef._id, reason: 'bodyRedacted is the string "undefined", not a redacted body' },
+      { id: empty._id, reason: 'bodyRedacted is empty: there is nothing to label' },
+      { id: missing._id, reason: 'bodyRedacted is missing' },
+      {
+        id: rawUndef._id,
+        reason: 'the stored body is the string "undefined", not the message text',
+      },
+    ]);
+    // Not one file has a body that is not real, and the skipped messages are not recorded as exported.
+    for (const { golden } of loadGolden(out)) {
+      expect(golden.body).not.toMatch(/^\s*(undefined|null)\s*$/);
+      expect(golden.body).not.toBe('(empty)');
+    }
+    const mapping = JSON.parse(readFileSync(join(out, '.pseudonyms.json'), 'utf8')) as {
+      exported: Record<string, string>;
+    };
+    expect(Object.keys(mapping.exported).sort()).toEqual(['g-1', 'g-2']);
+  });
+
   it('the same person is the same pseudonym in every message, and the proposed mentions stay verbatim spans', async () => {
     const w = await world();
     const out = tmp();

@@ -12,6 +12,7 @@ import {
 import type { SpeakersRepository } from '../repositories/speakers.repository.js';
 import type { OrganisationsRepository } from '../repositories/organisations.repository.js';
 import { allPages } from '../agents/planner/plan-persistence.js';
+import { isStringifiedNothing } from '../domain/inbox.schema.js';
 import { PseudonymMapSchema, Pseudonymiser, emptyMap } from './anonymise.js';
 import type {
   ContactsRepository,
@@ -202,6 +203,24 @@ export interface ExportReport {
   skippedExisting: number;
   skippedAlreadyExported: number;
   skippedExcluded: number;
+  /**
+   * Messages NOT exported because there is no real redacted body to export: the id and the reason, one entry
+   * each. A golden file is never written for one of these, and the CLI says so for every one.
+   */
+  skippedNoRedaction: { id: string; reason: string }[];
+}
+
+/** Why a stored message has no real redacted body (and so cannot be exported), or null when it has one. */
+export function redactionProblem(m: { bodyRedacted?: unknown }, raw: string | null): string | null {
+  const red = m.bodyRedacted;
+  if (typeof red !== 'string') return 'bodyRedacted is missing';
+  if (isStringifiedNothing(red))
+    return `bodyRedacted is the string "${red.trim()}", not a redacted body`;
+  if (red.trim() === '') return 'bodyRedacted is empty: there is nothing to label';
+  if (raw !== null && isStringifiedNothing(raw)) {
+    return `the stored body is the string "${raw.trim()}", not the message text`;
+  }
+  return null;
 }
 
 const extOf = (filename: string): string => /\.[A-Za-z0-9]{1,8}$/.exec(filename)?.[0] ?? '';
@@ -250,6 +269,7 @@ export async function exportGolden(
     skippedExisting: 0,
     skippedAlreadyExported: 0,
     skippedExcluded: 0,
+    skippedNoRedaction: [],
   };
   let counter = Object.keys(stored.exported).length;
   for (const m of await deps.inbound.findRecent(options.limit ?? 500)) {
@@ -263,6 +283,12 @@ export async function exportGolden(
     }
     const raw = await deps.inbound.getRawBody(m._id);
     if (raw === null) continue;
+    // Never write a golden file whose body is not a real redacted body: say which message and why.
+    const problem = redactionProblem(m, raw);
+    if (problem !== null) {
+      report.skippedNoRedaction.push({ id: m._id, reason: problem });
+      continue;
+    }
     pseud.learn('person', m.from.name);
     pseud.address(m.from.address);
     for (const t of m.to) {
