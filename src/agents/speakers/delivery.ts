@@ -1,12 +1,15 @@
 import type { MessageChannel } from '../../domain/message.schema.js';
+import type { Event } from '../../domain/event.schema.js';
 import type { Speaker, SpeakerHandleKind } from '../../domain/speaker.schema.js';
 import type { Decision, PlannedAction } from './decide.js';
 
 /**
  * HOW a message reaches a speaker, decided AFTER decideActions has decided WHAT is due, never inside it.
- * The channel is not a property of a speaker but of the stage of the relationship: first contact is usually
- * a person on LinkedIn, and an address appears later, for some, when they reply. So it is read from what we
- * know about the speaker NOW, each time, and never stored as a preference.
+ *
+ * Read from what we know about the speaker NOW, each time, and never stored as a preference: an address
+ * first, then a handle. There is no stage-dependent case left to reason about: the agent never writes the
+ * first message (you do, by hand, wherever you reach them), so everything it drafts is a reply, a chase or
+ * a thank-you in a conversation that already exists, and the answer is the same at every stage.
  *
  *  - an address on file          -> `email`: a draft, as always;
  *  - no address, a handle        -> `manual:<handle>`: the SAME drafted text, stored with that channel, and a
@@ -15,7 +18,7 @@ import type { Decision, PlannedAction } from './decide.js';
  */
 export type Delivery = 'email' | `manual:${SpeakerHandleKind}` | 'no_contact';
 
-/** First handle wins, in this order: LinkedIn is where first contact usually happens. */
+/** First handle wins, in this order. */
 const HANDLE_ORDER: readonly SpeakerHandleKind[] = ['linkedin', 'whatsapp', 'other'];
 
 /** Pure. */
@@ -73,4 +76,29 @@ export function routeDelivery(
     deferred,
     noContact,
   };
+}
+
+/**
+ * What a "Reach out to <name> about <event>" task carries: a SUGGESTION, never a drafted message. The agent
+ * does not word the first message; it says who, why now, and where to find them.
+ */
+export function outreachSuggestion(
+  speaker: Pick<Speaker, 'name' | 'topics' | 'emails' | 'handles'>,
+  event: Pick<Event, 'title' | 'date' | 'theme'>,
+): string {
+  const how = chooseDelivery(speaker);
+  const where =
+    how === 'email'
+      ? `by email (${speaker.emails[0] ?? ''})`
+      : how === 'no_contact'
+        ? 'no address or handle on file yet: find one first'
+        : `on ${how.slice('manual:'.length)} (${speaker.handles[how.slice('manual:'.length) as SpeakerHandleKind] ?? ''})`;
+  const parts = [
+    `Invite ${speaker.name} to speak at ${event.title}${event.date ? ` on ${event.date.slice(0, 10)}` : ''}.`,
+    event.theme ? `Event theme: ${event.theme}.` : '',
+    speaker.topics.length > 0 ? `Their topics: ${speaker.topics.join(', ')}.` : '',
+    `Reach them ${where}.`,
+    'Nothing was drafted: write it yourself, then record it ("speakers sent --kind invitation") or set them to invited.',
+  ];
+  return parts.filter(Boolean).join(' ');
 }

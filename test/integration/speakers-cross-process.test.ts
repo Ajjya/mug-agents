@@ -60,7 +60,7 @@ describe('speakers: resume across processes', () => {
   it('interrupt in process A, approve in process B: no duplicates, no model call in B', () => {
     const { eventId = '' } = step(['seed']);
     const a = step(['run', eventId, '2026-10-31']);
-    expect(a).toMatchObject({ status: 'awaiting_approval', created: 2, modelCalls: 2 });
+    expect(a).toMatchObject({ status: 'awaiting_approval', created: 0, modelCalls: 0 });
     const b = step(['decide', a.requestId ?? '']);
     expect(b).toMatchObject({ status: 'completed', modelCalls: 0 });
     const c = step(['run', eventId, '2026-10-31']);

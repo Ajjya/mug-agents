@@ -41,18 +41,41 @@ const tasksOf = async (repos: ReturnType<typeof inMemorySpeakerRepos>) =>
   await allPages((after) => repos.tasks.findMany({ limit: 200, ...(after ? { after } : {}) }));
 
 describe('delivery follows what we know about the speaker NOW', () => {
-  it('a speaker with only a linkedin handle at T-6w: a draft on linkedin, a send task, no email', async () => {
+  // Everything below continues a conversation that exists: the agent never writes the first message.
+  const FIRST = (id: string, eventId: string, h: ReturnType<typeof buildSpeakersHarness>) =>
+    h.service.recordSent(
+      { eventId, speakerId: id, kind: 'invitation', on: '2026-11-01', by: 'me' },
+      day('2026-11-02'),
+    );
+
+  it('a speaker with only a linkedin handle at T-6w: ONE reach-out task, no draft, no email, no send task', async () => {
     const { repos, s, h } = await world([{ name: 'Ana Pires', status: 'idea' }], {
       'Ana Pires': { handles: { linkedin: 'https://linkedin.com/in/ana-pires' } },
     });
     await h.service.run(s.eventId, { now: day('2026-10-31') });
-    const msgs = await eventMessages(h, s.eventId);
-    expect(msgs).toHaveLength(1);
-    expect(msgs[0]).toMatchObject({ kind: 'invitation', channel: 'linkedin', status: 'draft' });
-    expect(msgs.some((m) => m.channel === 'email')).toBe(false);
-    expect((await tasksOf(repos)).map((t) => t.title)).toEqual(['Send to Ana Pires on linkedin']);
+    expect(await eventMessages(h, s.eventId)).toEqual([]);
+    const tasks = await tasksOf(repos);
+    expect(tasks.map((t) => t.title)).toEqual([
+      'Reach out to Ana Pires about MUG Sample City Winter Meetup',
+    ]);
+    expect(tasks[0]?.notes).toMatch(/on linkedin \(https:\/\/linkedin\.com\/in\/ana-pires\)/);
     // a second run the same day writes nothing twice
     await h.service.run(s.eventId, { now: day('2026-10-31') });
+    expect(await tasksOf(repos)).toHaveLength(1);
+  });
+
+  it('a linkedin-only speaker you have written to, due a chase: a draft on linkedin plus a send task, no email', async () => {
+    const { repos, s, h } = await world([{ name: 'Ana Pires', status: 'idea' }], {
+      'Ana Pires': { handles: { linkedin: 'ana-pires' } },
+    });
+    await FIRST(s.speakers['Ana Pires'] ?? '', s.eventId, h);
+    await h.service.run(s.eventId, { now: day('2026-11-08') });
+    const msgs = await eventMessages(h, s.eventId);
+    const chase = msgs.filter((m) => m.kind === 'chase_reply');
+    expect(chase).toMatchObject([{ channel: 'linkedin', status: 'draft' }]);
+    expect(msgs.some((m) => m.channel === 'email')).toBe(false);
+    expect((await tasksOf(repos)).map((t) => t.title)).toEqual(['Send to Ana Pires on linkedin']);
+    await h.service.run(s.eventId, { now: day('2026-11-08') });
     expect(await tasksOf(repos)).toHaveLength(1);
   });
 
@@ -60,25 +83,31 @@ describe('delivery follows what we know about the speaker NOW', () => {
     const { repos, s, h } = await world([{ name: 'Ana Pires', status: 'idea' }], {
       'Ana Pires': { emails: ['ana@speakers.invalid'] },
     });
-    await h.service.run(s.eventId, { now: day('2026-10-31') });
-    expect((await eventMessages(h, s.eventId)).map((m) => m.channel)).toEqual(['email']);
+    await FIRST(s.speakers['Ana Pires'] ?? '', s.eventId, h);
+    await h.service.run(s.eventId, { now: day('2026-11-08') });
+    expect(
+      (await eventMessages(h, s.eventId))
+        .filter((m) => m.kind === 'chase_reply')
+        .map((m) => m.channel),
+    ).toEqual(['email']);
     expect(await tasksOf(repos)).toEqual([]);
   });
 
-  it('a speaker with neither gets one task and no draft, and never starves the others of the cap', async () => {
+  it('a speaker with neither, due a chase: one find-contact task and no draft, and never starves the others of the cap', async () => {
     const { repos, s, h } = await world(
       [
-        { name: 'Ana Pires', status: 'idea' },
-        { name: 'Rui Alves', status: 'idea' },
+        { name: 'Ana Pires', status: 'invited' },
+        { name: 'Rui Alves', status: 'invited' },
       ],
       { 'Rui Alves': { emails: ['rui@speakers.invalid'] } },
     );
+    for (const n of ['Ana Pires', 'Rui Alves']) await FIRST(s.speakers[n] ?? '', s.eventId, h);
     const capped = buildSpeakersHarness(repos, {
       policy: { chaseMaxRounds: 2, chaseMinIntervalDays: 7, maxDraftsPerRun: 1 },
     });
-    await capped.service.run(s.eventId, { now: day('2026-10-31') });
-    await capped.service.run(s.eventId, { now: day('2026-10-31') });
-    const msgs = await eventMessages(h, s.eventId);
+    await capped.service.run(s.eventId, { now: day('2026-11-08') });
+    await capped.service.run(s.eventId, { now: day('2026-11-08') });
+    const msgs = (await eventMessages(h, s.eventId)).filter((m) => m.kind === 'chase_reply');
     expect(msgs.map((m) => m.speakerId)).toEqual([s.speakers['Rui Alves']]);
     expect((await tasksOf(repos)).map((t) => t.title)).toEqual([
       'Find contact details for Ana Pires',
@@ -86,40 +115,22 @@ describe('delivery follows what we know about the speaker NOW', () => {
   });
 
   it('adopting an address turns the next action into an email draft', async () => {
-    const { s, h } = await world([{ name: 'Ana Pires', status: 'invited' }], {
+    const { s, h } = await world([{ name: 'Ana Pires', status: 'idea' }], {
       'Ana Pires': { handles: { linkedin: 'ana-pires' } },
     });
     const id = s.speakers['Ana Pires'] ?? '';
-    // the invitation went out on LinkedIn, recorded by hand
-    const rec = await h.service.recordSent(
-      {
-        eventId: s.eventId,
-        speakerId: id,
-        kind: 'invitation',
-        on: '2026-11-01',
-        by: 'me',
-      },
-      day('2026-11-02'),
-    );
+    // the first message went out on LinkedIn, recorded by hand
+    const rec = await FIRST(id, s.eventId, h);
     expect(rec.message.channel).toBe('linkedin');
     await h.service.run(s.eventId, { now: day('2026-11-09') });
     expect(
       (await eventMessages(h, s.eventId)).filter((m) => m.kind === 'chase_reply'),
     ).toMatchObject([{ channel: 'linkedin', status: 'draft' }]);
     // a reply arrives by email and the address is adopted (what `inbox link --adopt-address` does)
-    const other = await world([{ name: 'Ana Pires', status: 'invited' }], {
+    const other = await world([{ name: 'Ana Pires', status: 'idea' }], {
       'Ana Pires': { emails: ['ana@speakers.invalid'], handles: { linkedin: 'ana-pires' } },
     });
-    await other.h.service.recordSent(
-      {
-        eventId: other.s.eventId,
-        speakerId: other.s.speakers['Ana Pires'] ?? '',
-        kind: 'invitation',
-        on: '2026-11-01',
-        by: 'me',
-      },
-      day('2026-11-02'),
-    );
+    await FIRST(other.s.speakers['Ana Pires'] ?? '', other.s.eventId, other.h);
     await other.h.service.run(other.s.eventId, { now: day('2026-11-09') });
     expect(
       (await eventMessages(other.h, other.s.eventId))

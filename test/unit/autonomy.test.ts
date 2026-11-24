@@ -17,7 +17,6 @@ describe('autonomy policy table', () => {
       send_external_message: 'approve',
       delete_anything: 'never',
       draft_speaker_message: 'auto',
-      first_contact_message: 'approve',
       chase_in_existing_thread: 'auto',
       thank_you_message: 'auto',
     });

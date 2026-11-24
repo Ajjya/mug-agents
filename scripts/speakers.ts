@@ -13,7 +13,7 @@ import {
   SpeakerNotInEventError,
 } from '../src/agents/speakers/speakers.store.js';
 import { IllegalTransitionError } from '../src/agents/speakers/transitions.js';
-import { MESSAGE_KINDS } from '../src/domain/message.schema.js';
+import { DRAFT_KINDS, MESSAGE_KINDS } from '../src/domain/message.schema.js';
 import { SPEAKER_STATUSES } from '../src/domain/speaker.schema.js';
 import { EmbeddingMismatchError, EmbeddingUnavailableError } from '../src/retrieval/embedder.js';
 import { SpeakerSuggester } from '../src/retrieval/suggest-speakers.js';
@@ -93,7 +93,7 @@ runCli(
           ...(values.redraft && values.speaker
             ? {
                 redraft: [
-                  { speakerId: values.speaker, kind: z.enum(MESSAGE_KINDS).parse(values.redraft) },
+                  { speakerId: values.speaker, kind: z.enum(DRAFT_KINDS).parse(values.redraft) },
                 ],
               }
             : {}),
@@ -109,6 +109,12 @@ runCli(
           console.log(
             `  ${a.speakerId}  ${a.kind} #${String(a.round)}  [${a.delivery.replace(':', ' on ')}${a.delivery === 'email' ? '' : ', by hand'}]  ${a.reason}`,
           );
+        }
+        if (d && d.outreach.length > 0) {
+          console.log(
+            `\nREACH OUT YOURSELF (${String(d.outreach.length)}): the agent never writes the first message; one task each, no draft`,
+          );
+          for (const o of d.outreach) console.log(`  ${o.speakerId}  ${o.reason}`);
         }
         if (d && d.noContact.length > 0) {
           console.log(

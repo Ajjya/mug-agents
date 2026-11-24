@@ -4,7 +4,7 @@ import {
   FACT_SLOTS,
   type FactSlot,
   type MessageFacts,
-  type MessageKind,
+  type DraftKind,
 } from '../../domain/message.schema.js';
 import type { Organisation } from '../../domain/organisation.schema.js';
 import type { Speaker } from '../../domain/speaker.schema.js';
@@ -25,7 +25,7 @@ import { MIN_NOTICE_DAYS } from './decide.js';
 const DAY_MS = 86_400_000;
 
 /** Days before the event a chased item is due (a commitment: set here, never by the model). */
-export const DUE_OFFSET_DAYS: Partial<Record<MessageKind, number>> = {
+export const DUE_OFFSET_DAYS: Partial<Record<DraftKind, number>> = {
   chase_abstract: -21,
   chase_bio: -14,
   chase_photo: -14,
@@ -42,11 +42,9 @@ export const SLOT_DESCRIPTIONS: Record<FactSlot, string> = {
   due_date: 'the date we need the answer or the material by',
 };
 
-export const KIND_PURPOSE: Record<MessageKind, string> = {
-  invitation:
-    'Invite the speaker to give a talk at the event, on its theme. Ask them to reply by the due date.',
+export const KIND_PURPOSE: Record<DraftKind, string> = {
   chase_reply:
-    'A short, friendly reminder about the invitation we sent: ask whether they can speak, yes or no, by the due date. No pressure.',
+    'A short, friendly reminder about the invitation already sent to them: ask whether they can speak, yes or no, by the due date. No pressure.',
   chase_abstract:
     'Thank them for agreeing to speak and ask for the talk title and abstract by the due date.',
   chase_bio: 'Ask for a short speaker bio for the event page, by the due date.',
@@ -57,8 +55,7 @@ export const KIND_PURPOSE: Record<MessageKind, string> = {
 };
 
 /** Slots the draft MUST contain, per kind (when the event record has a value for them). */
-const REQUIRED: Record<MessageKind, readonly FactSlot[]> = {
-  invitation: ['speaker_name', 'event_title', 'event_date', 'due_date'],
+const REQUIRED: Record<DraftKind, readonly FactSlot[]> = {
   chase_reply: ['speaker_name', 'event_title', 'event_date', 'due_date'],
   chase_abstract: ['speaker_name', 'event_title', 'due_date'],
   chase_bio: ['speaker_name', 'event_title', 'due_date'],
@@ -71,7 +68,7 @@ export interface FactInput {
   event: Pick<Event, '_id' | 'title' | 'date' | 'agenda'>;
   speaker: Pick<Speaker, '_id' | 'name' | 'preferredName'>;
   venue: Pick<Organisation, 'name' | 'address'> | null;
-  kind: MessageKind;
+  kind: DraftKind;
   now: Date;
   /** Days a reply is asked for in (the chase interval). */
   replyDays: number;
@@ -135,7 +132,7 @@ export function buildFacts(input: FactInput): MessageFacts {
     const eventDay = utcDayMs(d);
     const offset = DUE_OFFSET_DAYS[kind];
     const target =
-      kind === 'invitation' || kind === 'chase_reply'
+      kind === 'chase_reply'
         ? utcDayMs(now) + input.replyDays * DAY_MS
         : offset === undefined
           ? undefined
@@ -153,7 +150,7 @@ export function buildFacts(input: FactInput): MessageFacts {
   return facts;
 }
 
-export function requiredSlots(kind: MessageKind, facts: MessageFacts): FactSlot[] {
+export function requiredSlots(kind: DraftKind, facts: MessageFacts): FactSlot[] {
   return REQUIRED[kind].filter((s) => facts[s] !== undefined);
 }
 
@@ -320,7 +317,7 @@ export function substitute(
  * nothing a chunk says can change the recipient (chosen by code) or a fact (filled by code).
  */
 export function draftPrompt(input: {
-  kind: MessageKind;
+  kind: DraftKind;
   facts: MessageFacts;
   required: readonly FactSlot[];
   theme: string | undefined;

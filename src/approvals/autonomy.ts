@@ -13,7 +13,6 @@ export const AUTONOMY_ACTIONS = [
   'send_external_message',
   'delete_anything',
   'draft_speaker_message',
-  'first_contact_message',
   'chase_in_existing_thread',
   'thank_you_message',
 ] as const;
@@ -36,8 +35,9 @@ export const AUTONOMY_POLICY: Readonly<Record<AutonomyAction, AutonomyLevel>> = 
   // Speakers agent (M3b). Nothing is sent by the system yet, so `approve` buys a work queue:
   // an approved draft means "send this now". M4 can consume `approved` without a redesign.
   draft_speaker_message: 'auto',
-  // The speaker has no message marked sent for any event: a stranger gets nothing unreviewed.
-  first_contact_message: 'approve',
+  // There is NO first_contact_message entry on purpose: the agent never writes the first message to a
+  // speaker (a human does, by hand). That is a structural guarantee, not a policy that asks for approval:
+  // see decideActions, SpeakerPipelineStore.upsertDraft and test/unit/speakers-no-first-contact.test.ts.
   // A sent message exists and the chase limit is not reached (decideActions enforces the limit).
   chase_in_existing_thread: 'auto',
   // Settled before coding: auto. It goes to someone already in a sent thread, its facts come from

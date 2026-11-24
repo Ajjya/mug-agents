@@ -7,7 +7,7 @@ import {
   requiredSlots,
   substitute,
 } from '../../src/agents/speakers/drafting.js';
-import type { MessageKind } from '../../src/domain/message.schema.js';
+import type { DraftKind } from '../../src/domain/message.schema.js';
 
 const SPEAKER = { _id: 'd'.repeat(24), name: 'Wendeline Gooseberry' };
 const EVENT = {
@@ -25,7 +25,7 @@ const EVENT = {
 const VENUE = { name: 'Cogwheel & Marmalade Ltd.', address: '1 Bramble Lane, Sample City' };
 const NOW = new Date('2026-11-01T09:00:00.000Z');
 
-const facts = (kind: MessageKind, over: Partial<typeof EVENT> = {}) =>
+const facts = (kind: DraftKind, over: Partial<typeof EVENT> = {}) =>
   buildFacts({
     event: { ...EVENT, ...over },
     speaker: SPEAKER,
@@ -37,8 +37,8 @@ const facts = (kind: MessageKind, over: Partial<typeof EVENT> = {}) =>
   });
 
 describe('buildFacts: every value comes from the event record', () => {
-  it('invitation: date, reply-by, venue and slot', () => {
-    expect(facts('invitation')).toEqual({
+  it('chase_reply: date, reply-by, venue and slot', () => {
+    expect(facts('chase_reply')).toEqual({
       speaker_name: 'Wendeline Gooseberry',
       event_title: 'MUG Sample City Winter Meetup',
       event_date: 'Saturday 12 December 2026',
@@ -57,7 +57,7 @@ describe('buildFacts: every value comes from the event record', () => {
 
   it('a due date gives at least 3 days of notice, and is never on or after the event day', () => {
     // Run on T-3w (21 Nov), the day the abstract is due: moved to 24 Nov.
-    const late = (now: string, kind: MessageKind) =>
+    const late = (now: string, kind: DraftKind) =>
       buildFacts({
         event: EVENT,
         speaker: SPEAKER,
@@ -79,7 +79,7 @@ describe('buildFacts: every value comes from the event record', () => {
         event: EVENT,
         speaker: SPEAKER,
         venue: VENUE,
-        kind: 'invitation',
+        kind: 'chase_reply',
         now: new Date(now),
         replyDays: 7,
         timeZone: 'Europe/Lisbon',
@@ -92,7 +92,7 @@ describe('buildFacts: every value comes from the event record', () => {
   it('within the draft window every due date gives at least 3 days and is before the event', () => {
     const eventDay = Date.parse('2026-12-12T00:00:00Z');
     for (const kind of [
-      'invitation',
+      'chase_reply',
       'chase_reply',
       'chase_abstract',
       'chase_bio',
@@ -121,13 +121,13 @@ describe('buildFacts: every value comes from the event record', () => {
   });
 
   it('a date-only event has no time; a timed one is shown in the event time zone', () => {
-    expect(facts('invitation').event_time).toBeUndefined();
+    expect(facts('chase_reply').event_time).toBeUndefined();
     // 18:00 UTC in summer is 19:00 in Lisbon.
-    expect(facts('invitation', { date: '2026-07-04T18:00:00.000Z' }).event_time).toBe('19:00');
+    expect(facts('chase_reply', { date: '2026-07-04T18:00:00.000Z' }).event_time).toBe('19:00');
   });
 
   it('only required slots that have a value are required', () => {
-    expect(requiredSlots('invitation', facts('invitation'))).toEqual([
+    expect(requiredSlots('chase_reply', facts('chase_reply'))).toEqual([
       'speaker_name',
       'event_title',
       'event_date',
@@ -138,8 +138,8 @@ describe('buildFacts: every value comes from the event record', () => {
 });
 
 describe('draftSchema: the model may not write a fact', () => {
-  const f = facts('invitation');
-  const schema = draftSchema(requiredSlots('invitation', f), f);
+  const f = facts('chase_reply');
+  const schema = draftSchema(requiredSlots('chase_reply', f), f);
   const good = {
     subject: 'Would you speak at {{event_title}}?',
     body: 'Hello {{speaker_name}},\nWe would love you to speak at {{event_title}} on {{event_date}} at {{venue}}. Could you let us know by {{due_date}}?\nThe MUG organisers',
@@ -205,8 +205,8 @@ describe('draftSchema: the model may not write a fact', () => {
 });
 
 describe('substitute', () => {
-  const f = facts('invitation');
-  const req = requiredSlots('invitation', f);
+  const f = facts('chase_reply');
+  const req = requiredSlots('chase_reply', f);
 
   it('fills every placeholder from the event record and records the facts used', () => {
     const out = substitute(
@@ -238,11 +238,11 @@ describe('substitute', () => {
 });
 
 describe('draftPrompt', () => {
-  const f = facts('invitation');
+  const f = facts('chase_reply');
   const prompt = draftPrompt({
-    kind: 'invitation',
+    kind: 'chase_reply',
     facts: f,
-    required: requiredSlots('invitation', f),
+    required: requiredSlots('chase_reply', f),
     theme: 'schema design',
     speakerTopics: ['validation'],
     speakerId: SPEAKER._id,
@@ -271,9 +271,9 @@ describe('draftPrompt', () => {
   it("forbids claiming to know the speaker's work when none of it was retrieved", () => {
     expect(prompt).toMatch(/do not claim to know/);
     const withOwn = draftPrompt({
-      kind: 'invitation',
+      kind: 'chase_reply',
       facts: f,
-      required: requiredSlots('invitation', f),
+      required: requiredSlots('chase_reply', f),
       theme: undefined,
       speakerTopics: [],
       speakerId: SPEAKER._id,

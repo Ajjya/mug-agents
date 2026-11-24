@@ -1,6 +1,10 @@
 import { MemorySaver } from '@langchain/langgraph';
 import { describe, expect, it } from 'vitest';
-import type { MessageStatus } from '../../src/domain/message.schema.js';
+import {
+  type DraftKind,
+  type MessageStatus,
+  messageIdempotencyKey,
+} from '../../src/domain/message.schema.js';
 import type { SpeakerStatus } from '../../src/domain/speaker.schema.js';
 import { IllegalTransitionError } from '../../src/agents/speakers/transitions.js';
 import { MessageNotSendableError } from '../../src/agents/speakers/speakers.store.js';
@@ -110,6 +114,35 @@ export async function seed(
   return { eventId: event._id, otherEventId: other._id, venueName: venue.name, speakers };
 }
 
+/**
+ * A draft that needs a human's approval. Nothing the agent drafts needs one any more (it only continues
+ * conversations), but the approval machinery is real and stays; this puts a draft in front of it the way a
+ * future autonomy row would.
+ */
+export async function queueForReview(
+  h: SpeakersHarness,
+  s: Seeded,
+  name: string,
+  kind: DraftKind = 'chase_abstract',
+  round = 1,
+) {
+  const speakerId = s.speakers[name] ?? '';
+  return await h.repos.messages.insert({
+    eventId: s.eventId,
+    speakerId,
+    kind,
+    channel: 'email',
+    round,
+    subject: `Re: ${s.venueName}`,
+    body: `Hello ${name}, a draft waiting for review.`,
+    facts: {},
+    reason: 'queued for review',
+    needsApproval: true,
+    status: 'draft',
+    idempotencyKey: messageIdempotencyKey(s.eventId, speakerId, kind, round),
+  });
+}
+
 export async function eventMessages(h: SpeakersHarness, eventId: string) {
   return await allPages((after) =>
     h.repos.messages.findByEventId(eventId, { limit: 200, ...(after ? { after } : {}) }),
@@ -154,16 +187,19 @@ export function speakersWorkflowSuite(
     buildSpeakersHarness(await makeRepos(), options());
 
   describe(`speakers workflow (${name})`, () => {
-    it('first contact: drafts once, waits for approval, approval moves draft -> approved', async () => {
+    it('a draft that needs approval waits for it; approval moves draft -> approved', async () => {
       const h = await fresh();
       const s = await seed(h.repos, [
-        { name: 'Wendeline Gooseberry', status: 'idea' },
-        { name: 'Ignatius Fogwhistle', status: 'idea' },
+        { name: 'Wendeline Gooseberry', status: 'confirmed', contacted: true },
+        { name: 'Ignatius Fogwhistle', status: 'confirmed', contacted: true },
       ]);
+      // Nothing the agent drafts needs approval any more (it only continues conversations), but the
+      // machinery is real and stays: a draft queued for review is held until a human decides.
+      await queueForReview(h, s, 'Wendeline Gooseberry');
+      await queueForReview(h, s, 'Ignatius Fogwhistle');
       const r = await h.service.run(s.eventId, { now: day('2026-10-31') });
       expect(r.status).toBe('awaiting_approval');
-      expect(r.created.map((m) => m.kind)).toEqual(['invitation', 'invitation']);
-      expect(r.created.every((m) => m.needsApproval && m.status === 'draft')).toBe(true);
+      expect(r.created).toEqual([]); // the agent drafted nothing of its own
       expect(r.requestId).toBeDefined();
 
       const listing = await h.approvals.list();
@@ -189,44 +225,49 @@ export function speakersWorkflowSuite(
     it('a pending review does not stall the event (review finding 3)', async () => {
       const h = await fresh();
       const s = await seed(h.repos, [
-        { name: 'Wendeline Gooseberry', status: 'idea' },
+        { name: 'Wendeline Gooseberry', status: 'confirmed', contacted: true },
         { name: 'Ignatius Fogwhistle', status: 'confirmed', contacted: true },
       ]);
+      await queueForReview(h, s, 'Wendeline Gooseberry');
       const first = await h.service.run(s.eventId, { now: day('2026-11-01') });
       expect(first.status).toBe('awaiting_approval');
-      // Nobody decides. Two weeks later the confirmed speaker's abstract chase is due.
+      // Nobody decides. Two weeks later the other speaker's abstract chase is due.
       const later = await h.service.run(s.eventId, { now: day('2026-11-14') });
       expect(later.replaced).toBe(first.requestId);
       expect(later.created.map((m) => [m.kind, m.needsApproval])).toEqual([
         ['chase_abstract', false],
       ]);
       expect(later.status).toBe('awaiting_approval');
-      // The old request is retired, not deleted; the new one carries the unapproved invitation.
+      // The old request is retired, not deleted; the new one carries the unapproved draft.
       expect((await h.repos.requests.findById(first.requestId ?? ''))?.status).toBe('expired');
       const pending = (await h.approvals.list()).pending;
       expect(pending.map((p) => [p.request._id, p.orphan])).toEqual([[later.requestId, false]]);
       const payload = pending[0]?.request.payload;
-      expect(payload && 'drafts' in payload ? payload.drafts.map((d) => d.kind) : []).toEqual([
-        'invitation',
-      ]);
+      expect(
+        payload && 'drafts' in payload ? payload.drafts.map((d) => d.speakerName) : [],
+      ).toEqual(['Wendeline Gooseberry']);
       await expect(
         h.approvals.decide(first.requestId ?? '', { decision: 'approve' }, 'vlad'),
       ).rejects.toThrow(/already expired/);
       await h.approvals.decide(later.requestId ?? '', { decision: 'approve' }, 'vlad');
-      const byKind = new Map((await eventMessages(h, s.eventId)).map((m) => [m.kind, m.status]));
-      expect(byKind.get('invitation')).toBe('approved');
-      expect(byKind.get('chase_abstract')).toBe('draft');
+      const bySpeaker = new Map(
+        (await eventMessages(h, s.eventId)).map((m) => [m.speakerId, m.status]),
+      );
+      expect(bySpeaker.get(s.speakers['Wendeline Gooseberry'] ?? '')).toBe('approved');
+      expect(bySpeaker.get(s.speakers['Ignatius Fogwhistle'] ?? '')).toBe('draft');
       expect(await eventMessages(h, s.eventId)).toHaveLength(2);
     });
 
     it("every draft's date, time and venue are the event record's, exactly", async () => {
       const h = await fresh();
-      const s = await seed(h.repos, [{ name: 'Wendeline Gooseberry', status: 'idea' }]);
-      const r = await h.service.run(s.eventId, { now: day('2026-11-02') });
+      const s = await seed(h.repos, [
+        { name: 'Wendeline Gooseberry', status: 'confirmed', contacted: true },
+      ]);
+      const r = await h.service.run(s.eventId, { now: day('2026-11-14') });
       const m = r.created[0];
       expect(m?.facts.event_date).toBe('Saturday 12 December 2026');
       expect(m?.facts.venue).toBe('Cogwheel & Marmalade Ltd., 1 Bramble Lane, Sample City');
-      expect(m?.facts.due_date).toBe('Monday 9 November 2026');
+      expect(m?.facts.due_date).toBe('Saturday 21 November 2026');
       for (const v of Object.values(m?.facts ?? {}))
         expect(`${m?.subject ?? ''}\n${m?.body ?? ''}`).toContain(v);
       // Nothing date- or venue-like in the text except the substituted values.
@@ -248,42 +289,89 @@ export function speakersWorkflowSuite(
       expect((await h.approvals.list()).pending).toEqual([]);
     });
 
-    it('a chase is never scheduled for a draft that was never marked sent', async () => {
+    it('an idea speaker at T-6w: ONE task and ZERO drafts, however often it runs', async () => {
+      const h = await fresh();
+      const s = await seed(h.repos, [{ name: 'Wendeline Gooseberry', status: 'idea' }]);
+      const sp = s.speakers['Wendeline Gooseberry'] ?? '';
+      for (const d of ['2026-10-31', '2026-10-31', '2026-11-05']) {
+        const r = await h.service.run(s.eventId, { now: day(d) });
+        expect(r.created).toEqual([]);
+      }
+      expect(await eventMessages(h, s.eventId)).toEqual([]);
+      expect(h.model.prompts).toHaveLength(0); // the model is never asked to word a first message
+      const tasks = (await h.repos.tasks.findByEventId(s.eventId)).items;
+      expect(tasks.map((t) => [t.title, t.owner, t.source, t.relatedSpeakerId])).toEqual([
+        [
+          'Reach out to Wendeline Gooseberry about MUG Sample City Winter Meetup',
+          'organiser',
+          'agent',
+          sp,
+        ],
+      ]);
+      // It carries a SUGGESTION, never a drafted message.
+      expect(tasks[0]?.notes).toMatch(/Invite Wendeline Gooseberry to speak/);
+      expect(tasks[0]?.notes).toMatch(/Nothing was drafted/);
+    });
+
+    it('a speaker in idea, declined and back to idea: still one reach-out task (per speaker and event)', async () => {
       const h = await fresh();
       const s = await seed(h.repos, [
         { name: 'Wendeline Gooseberry', status: 'idea', contacted: true },
       ]);
-      const r = await h.service.run(s.eventId, { now: day('2026-10-31') });
-      const invitation = r.created[0];
-      expect(invitation?.kind).toBe('invitation');
-      // The speaker is marked invited by hand, but the invitation was never marked sent.
-      await h.service.setStatus(s.speakers['Wendeline Gooseberry'] ?? '', s.eventId, 'invited');
-      for (const d of ['2026-11-07', '2026-11-14', '2026-11-28']) {
-        const later = await h.service.run(s.eventId, { now: day(d) });
-        expect(later.created).toEqual([]);
-      }
-      expect((await eventMessages(h, s.eventId)).filter((m) => m.kind === 'chase_reply')).toEqual(
-        [],
-      );
+      const sp = s.speakers['Wendeline Gooseberry'] ?? '';
+      await h.service.run(s.eventId, { now: day('2026-10-31') });
+      await h.service.setStatus(sp, s.eventId, 'declined', day('2026-11-03'));
+      await h.service.setStatus(sp, s.eventId, 'idea', day('2026-11-12'));
+      const again = await h.service.run(s.eventId, { now: day('2026-11-13') });
+      expect(again.created).toEqual([]);
+      expect((await h.repos.tasks.findByEventId(s.eventId)).items).toHaveLength(1);
+      expect(await eventMessages(h, s.eventId)).toEqual([]);
     });
 
-    it('sent drives the chase clock, moves idea -> invited, and refuses an unapproved first contact', async () => {
+    it('invited with your first message recorded as sent: chased exactly as before', async () => {
       const h = await fresh();
       const s = await seed(h.repos, [{ name: 'Wendeline Gooseberry', status: 'idea' }]);
-      const r = await h.service.run(s.eventId, { now: day('2026-10-31') });
-      const id = r.created[0]?._id ?? '';
-      await expect(h.service.sent(id, 'vlad', day('2026-10-31'))).rejects.toBeInstanceOf(
-        MessageNotSendableError,
+      const sp = s.speakers['Wendeline Gooseberry'] ?? '';
+      await h.service.recordSent(
+        { eventId: s.eventId, speakerId: sp, kind: 'invitation', on: '2026-11-01', by: 'vlad' },
+        day('2026-11-02'),
       );
-      await h.approvals.decide(r.requestId ?? '', { decision: 'approve' }, 'vlad');
-      await h.service.sent(id, 'vlad', day('2026-11-01'));
-      expect(await h.store.currentStatus(s.speakers['Wendeline Gooseberry'] ?? '', s.eventId)).toBe(
-        'invited',
-      );
+      expect(await h.store.currentStatus(sp, s.eventId)).toBe('invited');
       expect((await h.service.run(s.eventId, { now: day('2026-11-07') })).created).toEqual([]);
       const chase = await h.service.run(s.eventId, { now: day('2026-11-08') });
       expect(chase.created.map((m) => [m.kind, m.round, m.needsApproval])).toEqual([
         ['chase_reply', 1, false],
+      ]);
+    });
+
+    it('invited but your first message never recorded: nothing is chased, whatever the date', async () => {
+      const h = await fresh();
+      const s = await seed(h.repos, [
+        { name: 'Wendeline Gooseberry', status: 'invited', contacted: true },
+      ]);
+      for (const d of ['2026-11-07', '2026-11-14', '2026-11-28']) {
+        const later = await h.service.run(s.eventId, { now: day(d) });
+        expect(later.created).toEqual([]);
+      }
+      expect(await eventMessages(h, s.eventId)).toEqual([]);
+    });
+
+    it('sent refuses a draft that still needs approval, then drives the chase clock', async () => {
+      const h = await fresh();
+      const s = await seed(h.repos, [
+        { name: 'Wendeline Gooseberry', status: 'confirmed', contacted: true },
+      ]);
+      const draft = await queueForReview(h, s, 'Wendeline Gooseberry');
+      const r = await h.service.run(s.eventId, { now: day('2026-11-14') });
+      await expect(h.service.sent(draft._id, 'vlad', day('2026-11-14'))).rejects.toBeInstanceOf(
+        MessageNotSendableError,
+      );
+      await h.approvals.decide(r.requestId ?? '', { decision: 'approve' }, 'vlad');
+      await h.service.sent(draft._id, 'vlad', day('2026-11-14'));
+      expect((await h.service.run(s.eventId, { now: day('2026-11-20') })).created).toEqual([]);
+      const chase = await h.service.run(s.eventId, { now: day('2026-11-21') });
+      expect(chase.created.map((m) => [m.kind, m.round, m.needsApproval])).toEqual([
+        ['chase_abstract', 2, false],
       ]);
     });
 
@@ -293,21 +381,31 @@ export function speakersWorkflowSuite(
         { name: 'Wendeline Gooseberry', status: 'idea', contacted: true },
       ]);
       const sp = s.speakers['Wendeline Gooseberry'] ?? '';
-      const r = await h.service.run(s.eventId, { now: day('2026-10-31') });
-      const id = r.created[0]?._id ?? '';
-      // A crash between the two writes: the message is sent, the speaker is still idea.
-      await h.repos.messages.updateWithRetry(id, () => ({
+      // Your own first message, written by hand and recorded: it is the only invitation there can be.
+      const sent = await h.repos.messages.insert({
+        eventId: s.eventId,
+        speakerId: sp,
+        kind: 'invitation',
+        channel: 'linkedin',
+        round: 1,
+        subject: '(sent outside this system)',
+        body: '',
+        facts: {},
+        reason: 'recorded as sent outside this system',
+        needsApproval: false,
         status: 'sent',
+        idempotencyKey: `${s.eventId}:${sp}:invitation:1`,
         sentAt: day('2026-11-01').toISOString(),
-        sentBy: 'vlad',
-      }));
+        sentBy: 'recorded:vlad',
+      });
+      // A crash between the two writes: the message is sent, the speaker is still idea.
       expect(await h.store.currentStatus(sp, s.eventId)).toBe('idea');
-      const again = await h.service.sent(id, 'vlad', day('2026-11-02'));
+      const again = await h.service.sent(sent._id, 'vlad', day('2026-11-02'));
       expect(again.sentAt).toBe(day('2026-11-01').toISOString());
       expect(await h.store.currentStatus(sp, s.eventId)).toBe('invited');
       // Parked later by a human: a stray repeated `sent` must not move them back.
       await h.service.setStatus(sp, s.eventId, 'idea', day('2026-11-05'));
-      await h.service.sent(id, 'vlad', day('2026-11-06'));
+      await h.service.sent(sent._id, 'vlad', day('2026-11-06'));
       expect(await h.store.currentStatus(sp, s.eventId)).toBe('idea');
     });
 
@@ -398,7 +496,11 @@ export function speakersWorkflowSuite(
         .sort();
       const r = await h.service.run(s.eventId, { now: day('2026-11-21') });
       expect(r.created.map((m) => m.kind).sort()).toEqual(dueNow);
-      expect(dueNow).toEqual(['chase_abstract', 'chase_bio', 'invitation']);
+      expect(dueNow).toEqual(['chase_abstract', 'chase_bio']);
+      // The idea speaker is shown as a task for you, and is not in the drafts.
+      expect(listed.rows.find((x) => x.name === 'Ignatius Fogwhistle')?.next).toMatch(
+        /reach out: a task for you/,
+      );
     });
 
     it('candidates --event: topic from the event theme, pipeline members known', async () => {
@@ -409,23 +511,6 @@ export function speakersWorkflowSuite(
       expect([...ctx.inPipeline.entries()]).toEqual([
         [s.speakers['Wendeline Gooseberry'], 'confirmed'],
       ]);
-    });
-
-    it('declined, then moved back to idea: re-approached with a second invitation (review finding 5)', async () => {
-      const h = await fresh();
-      const s = await seed(h.repos, [
-        { name: 'Wendeline Gooseberry', status: 'idea', contacted: true },
-      ]);
-      const sp = s.speakers['Wendeline Gooseberry'] ?? '';
-      const first = await h.service.run(s.eventId, { now: day('2026-10-31') });
-      await h.service.sent(first.created[0]?._id ?? '', 'vlad', day('2026-11-01'));
-      await h.service.setStatus(sp, s.eventId, 'declined', day('2026-11-03'));
-      expect((await h.service.run(s.eventId, { now: day('2026-11-10') })).created).toEqual([]);
-      await h.service.setStatus(sp, s.eventId, 'idea', day('2026-11-12'));
-      const again = await h.service.run(s.eventId, { now: day('2026-11-13') });
-      expect(again.created.map((m) => [m.kind, m.round])).toEqual([['invitation', 2]]);
-      await h.service.sent(again.created[0]?._id ?? '', 'vlad', day('2026-11-14'));
-      expect(await h.store.currentStatus(sp, s.eventId)).toBe('invited');
     });
 
     it('a send recorded outside the system: chases measure from its date (review item 3)', async () => {
@@ -483,24 +568,29 @@ export function speakersWorkflowSuite(
     it('recording refuses: a pending draft of that kind, a future date, a speaker not in the event', async () => {
       const h = await fresh();
       const s = await seed(h.repos, [
-        { name: 'Wendeline Gooseberry', status: 'idea', contacted: true },
+        { name: 'Wendeline Gooseberry', status: 'confirmed', contacted: true },
       ]);
       const sp = s.speakers['Wendeline Gooseberry'] ?? '';
-      const draft = await h.service.run(s.eventId, { now: day('2026-10-31') });
-      const input = { eventId: s.eventId, speakerId: sp, kind: 'invitation' as const, by: 'vlad' };
+      const draft = await h.service.run(s.eventId, { now: day('2026-11-14') });
+      const input = {
+        eventId: s.eventId,
+        speakerId: sp,
+        kind: 'chase_abstract' as const,
+        by: 'vlad',
+      };
       await expect(
-        h.service.recordSent({ ...input, on: '2026-11-01' }, day('2026-11-02')),
+        h.service.recordSent({ ...input, on: '2026-11-13' }, day('2026-11-15')),
       ).rejects.toThrow(new RegExp(`speakers sent ${draft.created[0]?._id ?? ''}`));
       await expect(
-        h.service.recordSent({ ...input, kind: 'chase_bio', on: '2026-12-30' }, day('2026-11-02')),
+        h.service.recordSent({ ...input, kind: 'chase_bio', on: '2026-12-30' }, day('2026-11-15')),
       ).rejects.toThrow(/in the future/);
       await expect(
-        h.service.recordSent({ ...input, kind: 'chase_bio', on: 'last week' }, day('2026-11-02')),
+        h.service.recordSent({ ...input, kind: 'chase_bio', on: 'last week' }, day('2026-11-15')),
       ).rejects.toThrow(/ISO date/);
       await expect(
         h.service.recordSent(
-          { ...input, speakerId: 'f'.repeat(24), on: '2026-11-01' },
-          day('2026-11-02'),
+          { ...input, speakerId: 'f'.repeat(24), on: '2026-11-13' },
+          day('2026-11-15'),
         ),
       ).rejects.toThrow(/no pipeline entry/);
       expect(await eventMessages(h, s.eventId)).toHaveLength(1);
@@ -510,7 +600,7 @@ export function speakersWorkflowSuite(
       const h = await fresh();
       const s = await seed(h.repos, [
         { name: 'Ada One', status: 'confirmed', contacted: true }, // an auto chase, later superseded
-        { name: 'Bea Two', status: 'idea' }, // a first contact, later rejected
+        { name: 'Bea Two', status: 'confirmed', contacted: true }, // a draft queued for review, later rejected
         { name: 'Cy Three', status: 'idea' }, // a send recorded outside the system
       ]);
       const [ada, , cy] = [s.speakers['Ada One'] ?? '', '', s.speakers['Cy Three'] ?? ''];
@@ -518,6 +608,7 @@ export function speakersWorkflowSuite(
         { eventId: s.eventId, speakerId: cy, kind: 'invitation', on: '2026-11-01', by: 'vlad' },
         day('2026-11-02'),
       );
+      await queueForReview(h, s, 'Bea Two', 'chase_abstract');
       const run = await h.service.run(s.eventId, { now: day('2026-11-14') });
       await h.approvals.decide(
         run.requestId ?? '',
@@ -557,10 +648,15 @@ export function speakersWorkflowSuite(
     it('greets by preferredName when there is one, else the full name; recipients stay full names (review item 7)', async () => {
       const h = await fresh();
       const s = await seed(h.repos, [
-        { name: 'Wendeline Gooseberry', preferredName: 'Wen', status: 'idea' },
-        { name: 'Ignatius Fogwhistle', status: 'idea' },
+        {
+          name: 'Wendeline Gooseberry',
+          preferredName: 'Wen',
+          status: 'confirmed',
+          contacted: true,
+        },
+        { name: 'Ignatius Fogwhistle', status: 'confirmed', contacted: true },
       ]);
-      const r = await h.service.run(s.eventId, { now: day('2026-11-02') });
+      const r = await h.service.run(s.eventId, { now: day('2026-11-14') });
       const bySpeaker = new Map(r.created.map((m) => [m.speakerId, m]));
       const wen = bySpeaker.get(s.speakers['Wendeline Gooseberry'] ?? '');
       const ignatius = bySpeaker.get(s.speakers['Ignatius Fogwhistle'] ?? '');
@@ -571,13 +667,7 @@ export function speakersWorkflowSuite(
       expect(ignatius?.facts.speaker_name).toBe('Ignatius Fogwhistle');
       // The model is told to use the name exactly as given: it never sees a way to shorten one.
       expect(h.model.prompts[0]).toMatch(/\{\{speaker_name\}\}: the name to greet the speaker by/);
-      // The recipient a human reviews is the full name; the preferred name is only a greeting.
-      const payload = (await h.approvals.show(r.requestId ?? '')).request.payload;
-      if (!('drafts' in payload)) throw new Error('expected speaker drafts');
-      expect(payload.drafts.map((d) => d.speakerName).sort()).toEqual([
-        'Ignatius Fogwhistle',
-        'Wendeline Gooseberry',
-      ]);
+      // The recipient is the full name; the preferred name is only a greeting.
       expect((await h.service.show(wen?._id ?? '')).speakerName).toBe('Wendeline Gooseberry');
     });
 
@@ -603,7 +693,6 @@ export function speakersWorkflowSuite(
       ]);
       const before = await forbiddenFields(h, s.eventId);
       const r = await h.service.run(s.eventId, { now: day('2026-11-21') });
-      await h.approvals.decide(r.requestId ?? '', { decision: 'approve' }, 'vlad');
       await h.service.sent(r.created[0]?._id ?? '', 'vlad', day('2026-11-21'));
       await h.service.run(s.eventId, { now: day('2026-12-13') });
       expect(await forbiddenFields(h, s.eventId)).toBe(before);
@@ -611,7 +700,9 @@ export function speakersWorkflowSuite(
 
     it('injection: a chunk that orders a new recipient and a promise changes neither', async () => {
       const h = await fresh();
-      const s = await seed(h.repos, [{ name: 'Wendeline Gooseberry', status: 'idea' }]);
+      const s = await seed(h.repos, [
+        { name: 'Wendeline Gooseberry', status: 'confirmed', contacted: true },
+      ]);
       h.context.chunks = [
         {
           id: 'abstracts/evil#0',
@@ -628,7 +719,7 @@ export function speakersWorkflowSuite(
         },
       ];
       h.model.queue = [injectedAnswer, injectedAnswer];
-      const r = await h.service.run(s.eventId, { now: day('2026-11-02') });
+      const r = await h.service.run(s.eventId, { now: day('2026-11-14') });
       const m = r.created[0];
       expect(m?.speakerId).toBe(s.speakers['Wendeline Gooseberry']);
       expect(m?.facts.event_date).toBe('Saturday 12 December 2026');
@@ -640,17 +731,22 @@ export function speakersWorkflowSuite(
 
     it('a dropped required placeholder goes back through the model ladder (spec 5.4)', async () => {
       const h = await fresh();
-      const s = await seed(h.repos, [{ name: 'Wendeline Gooseberry', status: 'idea' }]);
+      const s = await seed(h.repos, [
+        { name: 'Wendeline Gooseberry', status: 'confirmed', contacted: true },
+      ]);
       h.model.queue = [droppedPlaceholderAnswer];
-      const r = await h.service.run(s.eventId, { now: day('2026-11-02') });
+      const r = await h.service.run(s.eventId, { now: day('2026-11-14') });
       expect(r.calls.map((c) => c.outcome)).toEqual(['invalid', 'valid']);
       expect(r.calls[0]?.issues).toEqual(['body: must contain the placeholder {{due_date}}']);
-      expect(r.created[0]?.facts.due_date).toBe('Monday 9 November 2026');
+      expect(r.created[0]?.facts.due_date).toBe('Saturday 21 November 2026');
     });
 
     it('reject: stays on record with the decision time; a plain re-run does not redraft it', async () => {
       const h = await fresh();
-      const s = await seed(h.repos, [{ name: 'Wendeline Gooseberry', status: 'idea' }]);
+      const s = await seed(h.repos, [
+        { name: 'Wendeline Gooseberry', status: 'confirmed', contacted: true },
+      ]);
+      await queueForReview(h, s, 'Wendeline Gooseberry');
       const r = await h.service.run(s.eventId, { now: day('2026-10-31') });
       const decidedAt = day('2026-11-02');
       const decided = await h.approvals.decide(
@@ -668,59 +764,52 @@ export function speakersWorkflowSuite(
       ]);
       expect(m?.rejectedAt).toBe(decided.decision.decidedAt);
       // Nothing happens by itself, however much time passes; the listing says how to act.
-      expect((await h.service.run(s.eventId, { now: day('2026-11-07') })).created).toEqual([]);
-      const listed = await h.service.list(s.eventId, day('2026-11-07'));
+      expect((await h.service.run(s.eventId, { now: day('2026-11-20') })).created).toEqual([]);
+      const listed = await h.service.list(s.eventId, day('2026-11-20'));
       expect(listed.rows[0]?.next).toMatch(/rejected at review.*until you act/);
     });
 
-    it('reject, then a status reset after it: a new round is drafted and reviewed again', async () => {
+    it('reject, then a status reset after it: a new round is drafted', async () => {
       const h = await fresh();
       const s = await seed(h.repos, [{ name: 'Wendeline Gooseberry', status: 'idea' }]);
       const sp = s.speakers['Wendeline Gooseberry'] ?? '';
-      const first = await h.service.run(s.eventId, { now: day('2026-10-31') });
+      await h.service.recordSent(
+        { eventId: s.eventId, speakerId: sp, kind: 'invitation', on: '2026-11-01', by: 'vlad' },
+        day('2026-11-02'),
+      );
+      await queueForReview(h, s, 'Wendeline Gooseberry', 'chase_reply');
+      const first = await h.service.run(s.eventId, { now: day('2026-11-02') });
       await h.approvals.decide(
         first.requestId ?? '',
         { decision: 'reject', reason: 'redo' },
         'vlad',
         day('2026-11-02'),
       );
-      // The human acts: declined, then back to idea (idea -> idea is not a transition).
+      // The human acts: declined, then back to idea, then invited again after writing to them.
       await h.service.setStatus(sp, s.eventId, 'declined', day('2026-11-03'));
       await h.service.setStatus(sp, s.eventId, 'idea', day('2026-11-04'));
-      const again = await h.service.run(s.eventId, { now: day('2026-11-05') });
+      await h.service.setStatus(sp, s.eventId, 'invited', day('2026-11-05'));
+      const again = await h.service.run(s.eventId, { now: day('2026-11-12') });
       expect(again.created.map((m) => [m.kind, m.round, m.status])).toEqual([
-        ['invitation', 2, 'draft'],
+        ['chase_reply', 2, 'draft'],
       ]);
-      expect(again.requestId).toBeDefined();
-      expect(again.requestId).not.toBe(first.requestId);
-      const all = await eventMessages(h, s.eventId);
+      const all = (await eventMessages(h, s.eventId)).filter((m) => m.kind === 'chase_reply');
       expect(all.map((m) => [m.round, m.status])).toEqual([
         [1, 'rejected'],
         [2, 'draft'],
       ]);
-      // The rejected draft is untouched, and the new round is approved like any other.
+      // The rejected draft is untouched.
       expect(all[0]?.rejectedAt).toBe(day('2026-11-02').toISOString());
-      await h.approvals.decide(
-        again.requestId ?? '',
-        { decision: 'approve' },
-        'vlad',
-        day('2026-11-05'),
-      );
-      expect((await eventMessages(h, s.eventId)).map((m) => m.status)).toEqual([
-        'rejected',
-        'approved',
-      ]);
     });
 
     it('reject, then run --redraft for a speaker whose status cannot be reset: a new round', async () => {
       const h = await fresh();
-      // Confirmed from another channel, never messaged by us: the abstract chase is a first contact.
-      const s = await seed(h.repos, [{ name: 'Wendeline Gooseberry', status: 'confirmed' }]);
-      const sp = s.speakers['Wendeline Gooseberry'] ?? '';
-      const first = await h.service.run(s.eventId, { now: day('2026-11-14') });
-      expect(first.created.map((m) => [m.kind, m.needsApproval])).toEqual([
-        ['chase_abstract', true],
+      const s = await seed(h.repos, [
+        { name: 'Wendeline Gooseberry', status: 'confirmed', contacted: true },
       ]);
+      const sp = s.speakers['Wendeline Gooseberry'] ?? '';
+      await queueForReview(h, s, 'Wendeline Gooseberry');
+      const first = await h.service.run(s.eventId, { now: day('2026-11-14') });
       await h.approvals.decide(
         first.requestId ?? '',
         { decision: 'reject', reason: 'too stiff' },
@@ -760,9 +849,11 @@ export function speakersWorkflowSuite(
     it('edit: removing a draft approves the rest and rejects it', async () => {
       const h = await fresh();
       const s = await seed(h.repos, [
-        { name: 'Wendeline Gooseberry', status: 'idea' },
-        { name: 'Ignatius Fogwhistle', status: 'idea' },
+        { name: 'Wendeline Gooseberry', status: 'confirmed', contacted: true },
+        { name: 'Ignatius Fogwhistle', status: 'confirmed', contacted: true },
       ]);
+      await queueForReview(h, s, 'Wendeline Gooseberry');
+      await queueForReview(h, s, 'Ignatius Fogwhistle');
       const r = await h.service.run(s.eventId, { now: day('2026-10-31') });
       const shown = await h.approvals.show(r.requestId ?? '');
       const payload = shown.request.payload;
@@ -788,7 +879,10 @@ export function speakersWorkflowSuite(
       opts.saver ??= new MemorySaver();
       const repos = await makeRepos();
       const a = buildSpeakersHarness(repos, opts);
-      const s = await seed(repos, [{ name: 'Wendeline Gooseberry', status: 'idea' }]);
+      const s = await seed(repos, [
+        { name: 'Wendeline Gooseberry', status: 'confirmed', contacted: true },
+      ]);
+      await queueForReview(a, s, 'Wendeline Gooseberry');
       a.behaviour.crashAfterRequest = true;
       await expect(a.service.run(s.eventId, { now: day('2026-10-31') })).rejects.toBeInstanceOf(
         SimulatedCrash,

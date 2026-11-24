@@ -48,9 +48,9 @@ export class RetrievalDraftContext implements DraftContext {
         limit: CANDIDATES,
       })
     ).filter((c) => c.speakerId?.toLowerCase() === speaker._id.toLowerCase());
-    // Host notes help an invitation or a thank-you sound like we know the place; not a chase.
+    // Host notes help a thank-you sound like we know the place; not a chase.
     const notes =
-      (kind === 'invitation' || kind === 'thank_you') && event.venueOrganisationId
+      kind === 'thank_you' && event.venueOrganisationId
         ? (
             await this.search(event.title, {
               kind: 'host_note',

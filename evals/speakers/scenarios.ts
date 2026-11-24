@@ -9,7 +9,7 @@ import {
 } from '../../test/support/speakers-harness.js';
 import { FakeGmail } from '../../test/support/fake-gmail.js';
 import { NEUTRAL_ANSWER, buildInboxHarness } from '../../test/support/inbox-harness.js';
-import { day, seed } from '../../test/support/speakers-workflow-suite.js';
+import { day, queueForReview, seed } from '../../test/support/speakers-workflow-suite.js';
 
 /**
  * Trajectory evals for the Speakers agent: which path the graph took over time, not what the text
@@ -64,6 +64,24 @@ async function step(ctx: Ctx, date: string, opts: { approve?: boolean; sendAll?:
   return r;
 }
 
+/**
+ * The conversation exists because YOU started it: the agent never writes a first message. You wrote to
+ * the speaker (usually on LinkedIn) on `on`, recorded it, and they are `invited`. Everything the agent does
+ * starts from here.
+ */
+async function writtenTo(ctx: Ctx, name: string, on: string): Promise<void> {
+  await ctx.h.service.recordSent(
+    {
+      eventId: ctx.eventId,
+      speakerId: ctx.speakers[name] ?? '',
+      kind: 'invitation',
+      on,
+      by: 'eval',
+    },
+    day(on),
+  );
+}
+
 const result = (
   name: string,
   expected: string[],
@@ -79,8 +97,9 @@ const result = (
 
 /** Event day Saturday 12 December 2026 (seed). T-6w 31 Oct, T-4w 14 Nov. */
 export async function speakerNeverReplies(): Promise<ScenarioResult> {
+  // Starts from `invited`: you wrote to her on 31 Oct and recorded it. The agent never writes that message.
   const ctx = await setup([{ name: 'Wendeline Gooseberry', status: 'idea' }]);
-  await step(ctx, '2026-10-31', { approve: true, sendAll: true });
+  await writtenTo(ctx, 'Wendeline Gooseberry', '2026-10-31');
   await step(ctx, '2026-11-07', { sendAll: true });
   await step(ctx, '2026-11-14', { sendAll: true });
   await step(ctx, '2026-11-21', { sendAll: true });
@@ -90,13 +109,7 @@ export async function speakerNeverReplies(): Promise<ScenarioResult> {
   );
   return result(
     'Speaker never replies',
-    [
-      '10-31 invitation#1',
-      '11-07 chase_reply#1',
-      '11-14 chase_reply#2',
-      '11-21 task:chase_reply',
-      '11-28 -',
-    ],
+    ['11-07 chase_reply#1', '11-14 chase_reply#2', '11-21 task:chase_reply', '11-28 -'],
     ctx,
     [{ what: 'no third chase exists', ok: replies.length === 2 }],
   );
@@ -105,7 +118,7 @@ export async function speakerNeverReplies(): Promise<ScenarioResult> {
 export async function speakerConfirmsLate(): Promise<ScenarioResult> {
   const ctx = await setup([{ name: 'Wendeline Gooseberry', status: 'idea' }]);
   const sp = ctx.speakers['Wendeline Gooseberry'] ?? '';
-  await step(ctx, '2026-10-31', { approve: true, sendAll: true });
+  await writtenTo(ctx, 'Wendeline Gooseberry', '2026-10-31');
   await step(ctx, '2026-11-07', { sendAll: true });
   // The reply arrives after the first chase; the organiser records it.
   await ctx.h.service.setStatus(sp, ctx.eventId, 'confirmed', day('2026-11-10'));
@@ -113,7 +126,7 @@ export async function speakerConfirmsLate(): Promise<ScenarioResult> {
   await step(ctx, '2026-11-15');
   return result(
     'Speaker confirms late',
-    ['10-31 invitation#1', '11-07 chase_reply#1', '11-14 chase_abstract#1', '11-15 -'],
+    ['11-07 chase_reply#1', '11-14 chase_abstract#1', '11-15 -'],
     ctx,
   );
 }
@@ -121,7 +134,7 @@ export async function speakerConfirmsLate(): Promise<ScenarioResult> {
 export async function speakerDeclines(): Promise<ScenarioResult> {
   const ctx = await setup([{ name: 'Wendeline Gooseberry', status: 'idea' }]);
   const sp = ctx.speakers['Wendeline Gooseberry'] ?? '';
-  await step(ctx, '2026-10-31', { approve: true, sendAll: true });
+  await writtenTo(ctx, 'Wendeline Gooseberry', '2026-10-31');
   await step(ctx, '2026-11-07'); // chase drafted, not sent
   await ctx.h.service.setStatus(sp, ctx.eventId, 'declined', day('2026-11-08'));
   await step(ctx, '2026-11-14');
@@ -130,11 +143,26 @@ export async function speakerDeclines(): Promise<ScenarioResult> {
   const pending = (await ctx.h.repos.messages.findByEventId(ctx.eventId)).items.filter(
     (m) => m.status === 'draft' || m.status === 'approved',
   );
+  return result('Speaker declines', ['11-07 chase_reply#1', '11-14 -', '11-21 -', '12-13 -'], ctx, [
+    { what: 'the unsent chase is superseded, nothing left to send', ok: pending.length === 0 },
+  ]);
+}
+
+/** An `idea` speaker is a TASK for you at T-6w, never a draft; and only one, however often it runs. */
+export async function ideaBecomesATask(): Promise<ScenarioResult> {
+  const ctx = await setup([{ name: 'Wendeline Gooseberry', status: 'idea' }]);
+  await step(ctx, '2026-10-30');
+  await step(ctx, '2026-10-31');
+  await step(ctx, '2026-11-07');
+  const messages = (await ctx.h.repos.messages.findByEventId(ctx.eventId)).items;
   return result(
-    'Speaker declines',
-    ['10-31 invitation#1', '11-07 chase_reply#1', '11-14 -', '11-21 -', '12-13 -'],
+    'An idea speaker is a task, not a draft',
+    ['10-30 -', '10-31 task:reach-out', '11-07 -'],
     ctx,
-    [{ what: 'the unsent chase is superseded, nothing left to send', ok: pending.length === 0 }],
+    [
+      { what: 'no message of any kind exists', ok: messages.length === 0 },
+      { what: 'the model was never called', ok: ctx.h.model.prompts.length === 0 },
+    ],
   );
 }
 
@@ -187,7 +215,17 @@ export async function clockJumpsAMonth(): Promise<ScenarioResult> {
 
 export async function resumeMidApproval(): Promise<ScenarioResult> {
   const saver = new MemorySaver();
-  const ctx = await setup([{ name: 'Wendeline Gooseberry', status: 'idea' }], POLICY, saver);
+  const ctx = await setup(
+    [{ name: 'Wendeline Gooseberry', status: 'confirmed', contacted: true }],
+    POLICY,
+    saver,
+  );
+  // Nothing the agent drafts needs approval, but the machinery stays: a draft queued for review waits.
+  await queueForReview(
+    ctx.h,
+    { eventId: ctx.eventId, otherEventId: '', venueName: '', speakers: ctx.speakers },
+    'Wendeline Gooseberry',
+  );
   const r = await step(ctx, '2026-10-31');
   // A different runtime on the same checkpointer and storage: the "next process".
   const next = buildSpeakersHarness(ctx.h.repos, { saver });
@@ -195,7 +233,7 @@ export async function resumeMidApproval(): Promise<ScenarioResult> {
   const decided = await next.approvals.decide(r.requestId ?? '', { decision: 'approve' }, 'eval');
   const msgs = (await ctx.h.repos.messages.findByEventId(ctx.eventId)).items;
   ctx.path.push(`10-31 resumed: ${decided.thread.status}`);
-  return result('Resume mid-approval', ['10-31 invitation#1', '10-31 resumed: completed'], ctx, [
+  return result('Resume mid-approval', ['10-31 -', '10-31 resumed: completed'], ctx, [
     { what: 'one draft, approved', ok: msgs.length === 1 && msgs[0]?.status === 'approved' },
     {
       what: 'no model call on resume',
@@ -232,18 +270,20 @@ export async function fullPipeline(): Promise<ScenarioResult> {
     { name: 'Bea Two', status: 'confirmed', contacted: true },
     { name: 'Cy Three', status: 'abstract_received', contacted: true },
     { name: 'Di Four', status: 'slides_received', contacted: true },
+    { name: 'Eve Five', status: 'idea', contacted: true },
   ]);
-  await step(ctx, '2026-10-31', { sendAll: true }); // invitation to Ada
-  await step(ctx, '2026-11-14', { sendAll: true }); // abstract chase to Bea
+  await writtenTo(ctx, 'Ada One', '2026-10-31'); // you wrote to Ada: she is invited
+  await step(ctx, '2026-10-31', { sendAll: true }); // Eve is an idea at T-6w: a task for you
+  await step(ctx, '2026-11-14', { sendAll: true }); // reply chase to Ada, abstract chase to Bea
   await step(ctx, '2026-12-05', { sendAll: true }); // slides chase to Cy
   await step(ctx, '2026-12-13', { sendAll: true }); // thank-you to Di
   await step(ctx, '2026-12-14');
   const tasks = (await ctx.h.repos.tasks.findByEventId(ctx.eventId)).items;
   return result(
-    'Full pipeline, four speakers',
+    'Full pipeline, five speakers',
     [
-      '10-31 invitation#1',
-      // Ada's invitation went out 10-31 (14 days ago, so a reply chase); Bea is at T-4w.
+      '10-31 task:reach-out',
+      // Ada was written to 10-31 (14 days ago, so a reply chase); Bea is at T-4w.
       '11-14 chase_reply#1, chase_abstract#1',
       // 21 days on: both are chased a second time; Cy is at T-1w for slides.
       '12-05 chase_reply#2, chase_abstract#2, chase_slides#1',
@@ -252,7 +292,12 @@ export async function fullPipeline(): Promise<ScenarioResult> {
       '12-14 -',
     ],
     ctx,
-    [{ what: 'no task: nobody is stuck', ok: tasks.length === 0 }],
+    [
+      {
+        what: 'the only task is the one reach-out: nobody is stuck',
+        ok: tasks.length === 1 && tasks[0]?.milestoneKey === 'reach-out',
+      },
+    ],
   );
 }
 
@@ -301,7 +346,7 @@ export async function abstractChaseInClosingWindow(): Promise<ScenarioResult> {
 async function replyMidChase(name: string, classifiable: boolean): Promise<ScenarioResult> {
   const ctx = await setup([{ name: 'Wendeline Gooseberry', status: 'idea' }]);
   const sp = ctx.speakers['Wendeline Gooseberry'] ?? '';
-  await step(ctx, '2026-10-31', { approve: true, sendAll: true });
+  await writtenTo(ctx, 'Wendeline Gooseberry', '2026-10-31');
   await step(ctx, '2026-11-07', { sendAll: true });
   const sentBefore = (await ctx.h.repos.messages.findByEventId(ctx.eventId)).items.length;
 
@@ -342,7 +387,7 @@ async function replyMidChase(name: string, classifiable: boolean): Promise<Scena
   const messages = (await ctx.h.repos.messages.findByEventId(ctx.eventId)).items;
   const status = await ctx.h.store.currentStatus(sp, ctx.eventId);
   const listed = await ctx.h.service.list(ctx.eventId, day('2026-11-21'));
-  return result(name, ['10-31 invitation#1', '11-07 chase_reply#1', '11-14 -', '11-21 -'], ctx, [
+  return result(name, ['11-07 chase_reply#1', '11-14 -', '11-21 -'], ctx, [
     {
       what: 'the reply was stored and linked to her by address',
       ok: stored?.linkedSpeakerId === sp,
@@ -369,6 +414,7 @@ export const unclassifiableReplyArrives = (): Promise<ScenarioResult> =>
 
 export const SCENARIOS = [
   speakerNeverReplies,
+  ideaBecomesATask,
   speakerConfirmsLate,
   speakerDeclines,
   eventMovesCloser,

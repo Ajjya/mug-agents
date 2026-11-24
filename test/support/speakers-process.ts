@@ -23,7 +23,7 @@ import { MongoOrganisationsRepository } from '../../src/repositories/organisatio
 import { MongoSpeakersRepository } from '../../src/repositories/speakers.repository.js';
 import { MongoTasksRepository } from '../../src/repositories/tasks.repository.js';
 import { buildSpeakersHarness } from './speakers-harness.js';
-import { day, seed } from './speakers-workflow-suite.js';
+import { day, queueForReview, seed } from './speakers-workflow-suite.js';
 
 const [, , command, a, b] = process.argv;
 const uri = process.env['MONGODB_URI'];
@@ -54,10 +54,16 @@ const out = (v: unknown): void => {
 try {
   switch (command) {
     case 'seed': {
-      const s = await seed(repos, [
-        { name: `Wendeline Gooseberry ${a ?? ''}`.trim(), status: 'idea' },
-        { name: `Ignatius Fogwhistle ${a ?? ''}`.trim(), status: 'idea' },
-      ]);
+      const names = [
+        `Wendeline Gooseberry ${a ?? ''}`.trim(),
+        `Ignatius Fogwhistle ${a ?? ''}`.trim(),
+      ];
+      const s = await seed(
+        repos,
+        names.map((name) => ({ name, status: 'confirmed' as const, contacted: true })),
+      );
+      // Two drafts waiting for a human's review: the approval machinery is what is exercised here.
+      for (const name of names) await queueForReview(h, s, name);
       out({ eventId: s.eventId });
       break;
     }

@@ -54,6 +54,7 @@ export function pipelineInput(
       status: statusFor(s, p.event._id),
       ...sinceOf(s, p.event._id),
       ...inboundOf(s, p.event._id),
+      hasPriorSent: p.priorSent.includes(s._id),
       hasBio: Boolean(s.bio?.trim()),
       hasPhoto: Boolean(s.photoUrl),
     })),

@@ -3,6 +3,7 @@ import {
   type Message,
   type MessageChannel,
   type MessageFacts,
+  type DraftKind,
   type MessageKind,
   isRecordedOutside,
   messageIdempotencyKey,
@@ -32,6 +33,19 @@ export class SpeakerNotInEventError extends Error {
   }
 }
 
+/**
+ * The second layer of the structural guarantee (the first is decideActions): a draft for a speaker to whom
+ * no message of ours has ever been marked sent is refused at the write. The agent never writes first contact.
+ */
+export class FirstContactError extends Error {
+  constructor(public readonly speakerId: string) {
+    super(
+      `Refusing to draft for ${speakerId}: no message of ours has ever been sent to them. The first message is yours to write, by hand.`,
+    );
+    this.name = 'FirstContactError';
+  }
+}
+
 export class MessageNotFoundError extends Error {
   constructor(public readonly messageId: string) {
     super(`No message with id ${messageId}`);
@@ -53,7 +67,7 @@ export class MessageNotSendableError extends Error {
 export interface DraftRecord {
   eventId: string;
   speakerId: string;
-  kind: MessageKind;
+  kind: DraftKind;
   round: number;
   reason: string;
   subject: string;
@@ -77,6 +91,8 @@ const PENDING = new Set(['draft', 'approved']);
 
 export const sendKey = (messageId: string): string => `send:${messageId}`;
 export const FIND_CONTACT_KEY = 'find-contact';
+/** One task per (event, speaker): you write the first message yourself. */
+export const REACH_OUT_KEY = 'reach-out';
 
 /** `chase-limit:<kind>` on a task with relatedSpeakerId: the blocked item's natural key. */
 export const chaseLimitKey = (kind: MessageKind): string => `chase-limit:${kind}`;
@@ -149,6 +165,12 @@ export class SpeakerPipelineStore {
 
   /** Inserts a draft unless its natural key exists; returns the stored one either way. */
   async upsertDraft(draft: DraftRecord): Promise<{ message: Message; created: boolean }> {
+    if (
+      (await this.messages.findBySpeakerAndStatus(draft.speakerId, 'sent', { limit: 1 })).items
+        .length === 0
+    ) {
+      throw new FirstContactError(draft.speakerId);
+    }
     const idempotencyKey = messageIdempotencyKey(
       draft.eventId,
       draft.speakerId,
@@ -250,6 +272,40 @@ export class SpeakerPipelineStore {
     if (task && (task.status === 'open' || task.status === 'doing')) {
       await this.tasks.updateWithRetry(task._id, () => ({ status }));
     }
+  }
+
+  /**
+   * "Reach out to <name> about <event>": one task per (event, speaker), carrying a SUGGESTION (never a draft).
+   * Idempotent: a task for this pair that exists, in any status, is not created again.
+   */
+  async ensureOutreachTask(
+    eventId: string,
+    speakerId: string,
+    speakerName: string,
+    eventTitle: string,
+    suggestion: string,
+  ): Promise<{ task: Task; created: boolean }> {
+    const existing = (
+      await allPages((after) =>
+        this.tasks.findByEventId(eventId, { limit: 200, ...(after ? { after } : {}) }),
+      )
+    ).find(
+      (t) =>
+        t.milestoneKey === REACH_OUT_KEY &&
+        t.relatedSpeakerId?.toLowerCase() === speakerId.toLowerCase(),
+    );
+    if (existing) return { task: existing, created: false };
+    const task = await this.tasks.insert({
+      title: `Reach out to ${speakerName} about ${eventTitle}`,
+      notes: suggestion,
+      owner: this.taskOwner,
+      status: 'open',
+      source: 'agent',
+      relatedEventId: eventId,
+      relatedSpeakerId: speakerId,
+      milestoneKey: REACH_OUT_KEY,
+    });
+    return { task, created: true };
   }
 
   /** One task per (event, speaker) when something is due and there is no way to reach them at all. */

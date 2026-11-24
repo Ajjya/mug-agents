@@ -188,6 +188,9 @@ export class SpeakersService {
         .at(-1);
       const next = [
         ...d.actions.filter((a) => a.speakerId === s._id).map(describe),
+        ...d.outreach
+          .filter((o) => o.speakerId === s._id)
+          .map((o) => `reach out: a task for you (${o.reason})`),
         ...d.noContact
           .filter((a) => a.speakerId === s._id)
           .map((a) => `${a.kind} #${String(a.round)} due: no contact details, find them`),

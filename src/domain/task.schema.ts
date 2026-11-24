@@ -7,6 +7,8 @@ export const TASK_SOURCES = ['manual', 'agent'] as const;
 export const TaskInputSchema = z
   .object({
     title: nonEmpty,
+    /** Detail for the person doing it (a suggestion, never a drafted message). */
+    notes: z.string().optional(),
     owner: nonEmpty,
     dueAt: isoDate.optional(),
     status: z.enum(TASK_STATUSES),

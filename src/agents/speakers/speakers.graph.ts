@@ -29,7 +29,7 @@ import type { ChunkView } from '../../retrieval/vector-store.js';
 import type { ApprovalGate } from '../planner/planner.graph.js';
 import { needsApproval } from './autonomy.js';
 import { type ChasePolicy, type Redraft, decideActions } from './decide.js';
-import { type RoutedDecision, channelOf, routeDelivery } from './delivery.js';
+import { type RoutedDecision, channelOf, outreachSuggestion, routeDelivery } from './delivery.js';
 import { pipelineInput } from './pipeline.js';
 import { buildFacts, draftPrompt, draftSchema, requiredSlots, substitute } from './drafting.js';
 import type { DraftRecord, LoadedPipeline, SpeakerPipelineStore } from './speakers.store.js';
@@ -192,7 +192,7 @@ export async function draftMessages(
       subject: filled.subject,
       body: filled.body,
       facts: filled.facts,
-      needsApproval: needsApproval(action.kind, p.priorSent.includes(speaker._id)),
+      needsApproval: needsApproval(action.kind),
       // The SAME text whatever the channel: a person pastes it into LinkedIn or WhatsApp.
       channel: channelOf(action.delivery) ?? 'email',
     });
@@ -229,6 +229,17 @@ export async function persistDrafts(
   for (const nc of d.noContact) {
     const name = p.speakers.find((x) => x._id === nc.speakerId)?.name ?? nc.speakerId;
     if ((await deps.store.ensureFindContactTask(p.event._id, nc.speakerId, name)).created)
+      tasksCreated++;
+  }
+  // The first message is yours: an `idea` speaker at T-6w is a TASK carrying a suggestion, never a draft.
+  for (const o of d.outreach) {
+    const sp = p.speakers.find((x) => x._id === o.speakerId);
+    if (!sp) continue;
+    const suggestion = outreachSuggestion(sp, p.event);
+    if (
+      (await deps.store.ensureOutreachTask(p.event._id, sp._id, sp.name, p.event.title, suggestion))
+        .created
+    )
       tasksCreated++;
   }
   for (const b of d.blocked) {

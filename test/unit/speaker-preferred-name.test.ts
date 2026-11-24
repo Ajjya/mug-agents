@@ -19,7 +19,7 @@ const facts = (speaker: { name: string; preferredName?: string }) =>
     event: EVENT,
     speaker: { _id: 'd'.repeat(24), ...speaker },
     venue: null,
-    kind: 'invitation',
+    kind: 'chase_reply',
     now: new Date('2026-11-01T09:00:00Z'),
     replyDays: 7,
     timeZone: 'Europe/Lisbon',

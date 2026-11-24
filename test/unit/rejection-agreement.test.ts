@@ -8,7 +8,7 @@ import {
   InMemoryTasksRepository,
 } from '../support/in-memory.repositories.js';
 import { buildSpeakersHarness, inMemorySpeakerRepos } from '../support/speakers-harness.js';
-import { day, eventMessages, seed } from '../support/speakers-workflow-suite.js';
+import { day, eventMessages, queueForReview, seed } from '../support/speakers-workflow-suite.js';
 
 /**
  * One meaning of "reject", in both agents (the planner's: "a rejected plan can be planned again").
@@ -59,8 +59,11 @@ describe('rejection means the same in the planner and the speakers agent', () =>
 
   it('speakers: reject, then a status reset', async () => {
     const h = buildSpeakersHarness(inMemorySpeakerRepos());
-    const s = await seed(h.repos, [{ name: 'Wendeline Gooseberry', status: 'idea' }]);
+    const s = await seed(h.repos, [
+      { name: 'Wendeline Gooseberry', status: 'confirmed', contacted: true },
+    ]);
     const sp = s.speakers['Wendeline Gooseberry'] ?? '';
+    await queueForReview(h, s, 'Wendeline Gooseberry');
     const first = await h.service.run(s.eventId, { now: day('2026-10-31') });
     await h.approvals.decide(
       first.requestId ?? '',
@@ -75,7 +78,7 @@ describe('rejection means the same in the planner and the speakers agent', () =>
     await expect(h.service.sent(rejected?._id ?? '', 'vlad', day('2026-11-03'))).rejects.toThrow(
       /it is rejected/,
     );
-    expect(await h.store.currentStatus(sp, s.eventId)).toBe('idea');
+    expect(await h.store.currentStatus(sp, s.eventId)).toBe('confirmed');
     // 2. reason on record; the request is still there, decided
     expect(rejected?.rejectionReason).toBe('redo');
     expect((await h.repos.requests.findById(first.requestId ?? ''))?.status).toBe('decided');
@@ -83,12 +86,12 @@ describe('rejection means the same in the planner and the speakers agent', () =>
     await expect(
       h.approvals.decide(first.requestId ?? '', { decision: 'approve' }, 'vlad', day('2026-11-03')),
     ).rejects.toThrow(/already decided/);
-    // 4. after the human act: a new proposal, a new request, the same thread
-    await h.service.setStatus(sp, s.eventId, 'declined', day('2026-11-03'));
-    await h.service.setStatus(sp, s.eventId, 'idea', day('2026-11-04'));
-    const again = await h.service.run(s.eventId, { now: day('2026-11-05') });
-    expect(again.status).toBe('awaiting_approval');
-    expect(again.requestId).not.toBe(first.requestId);
+    // 4. after the human act (an explicit redraft): a new round, and the rejected one stays as it was
+    const again = await h.service.run(s.eventId, {
+      now: day('2026-11-16'),
+      redraft: [{ speakerId: sp, kind: 'chase_abstract' }],
+    });
+    expect(again.created.map((m) => [m.kind, m.round])).toEqual([['chase_abstract', 2]]);
     expect(again.threadId).toBe(first.threadId);
     // and the rejected one is exactly as it was
     expect((await eventMessages(h, s.eventId))[0]).toEqual(rejected);

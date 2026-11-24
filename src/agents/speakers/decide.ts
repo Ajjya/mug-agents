@@ -1,4 +1,4 @@
-import type { MessageKind, MessageStatus } from '../../domain/message.schema.js';
+import type { DraftKind, MessageKind, MessageStatus } from '../../domain/message.schema.js';
 import type { SpeakerStatus } from '../../domain/speaker.schema.js';
 
 /**
@@ -30,7 +30,12 @@ export interface PipelineSpeaker {
   id: string;
   name: string;
   status: SpeakerStatus;
-  /** When the status last changed (ISO). A reset to `idea` after a sent invitation re-approaches. */
+  /**
+   * Any message of ours has been marked SENT to this speaker, for any event. Without one there is no conversation:
+   * the agent drafts nothing for them (the first message is yours, by hand), whatever their status says.
+   */
+  hasPriorSent: boolean;
+  /** When the status last changed (ISO). */
   statusSince?: string;
   /**
    * When mail from this speaker last arrived for this event (set by the inbox, any inbound message,
@@ -60,7 +65,7 @@ export interface PipelineMessage {
 /** A human asked for a new round of a kind whose latest draft was rejected. */
 export interface Redraft {
   speakerId: string;
-  kind: MessageKind;
+  kind: DraftKind;
 }
 
 export interface PipelineInput {
@@ -80,7 +85,8 @@ export interface PipelineInput {
 
 export interface PlannedAction {
   speakerId: string;
-  kind: MessageKind;
+  /** Never `invitation`: the agent does not write first messages. */
+  kind: DraftKind;
   round: number;
   reason: string;
   /** The day it became due (YYYY-MM-DD). Oldest first when the per-run cap cuts the list. */
@@ -90,7 +96,7 @@ export interface PlannedAction {
 /** At the chase limit: no message, a task for a human instead. */
 export interface BlockedItem {
   speakerId: string;
-  kind: MessageKind;
+  kind: DraftKind;
   roundsSent: number;
   /** `limit`: CHASE_MAX_ROUNDS chases sent. `no_time`: no further chase fits before the event. */
   why: 'limit' | 'no_time';
@@ -113,8 +119,18 @@ export interface WaitingItem {
   why: string;
 }
 
+/** An `idea` speaker at T-6w: a TASK for a human to write the first message. Never a draft. */
+export interface OutreachItem {
+  speakerId: string;
+  /** The day it became due (YYYY-MM-DD). */
+  dueOn: string;
+  reason: string;
+}
+
 export interface Decision {
   actions: PlannedAction[];
+  /** Speakers the human should reach out to (a task each, deduplicated per speaker and event). */
+  outreach: OutreachItem[];
   /** Due, but over `maxDraftsPerRun`: they come up again on the next run. */
   deferred: PlannedAction[];
   blocked: BlockedItem[];
@@ -124,7 +140,10 @@ export interface Decision {
 }
 
 /**
- * The decision table (M3b spec §5.2, with the answers settled before coding):
+ * The decision table (M3b spec §5.2, revised: the agent never writes the first message):
+ *  - there is NO row for `idea`: first contact is a human act. An `idea` speaker at {@link OUTREACH_OFFSET_DAYS}
+ *    becomes a TASK (`Decision.outreach`), never a draft. The pipeline the agent drives starts at `invited`,
+ *    which the human sets after writing;
  *  - `invited` is chased with its own kind, `chase_reply`, so it does not use up abstract rounds;
  *  - bio/photo come from `speaker.bio` / `speaker.photoUrl` and are chased in `confirmed` and
  *    `abstract_received`;
@@ -132,8 +151,7 @@ export interface Decision {
  * `from` is the first day (event day + offsetDays) the row can fire; pre-event rows stop on the event day.
  */
 export const RULES = [
-  { status: 'idea', kind: 'invitation', offsetDays: -42, label: 'T-6w' },
-  { status: 'invited', kind: 'chase_reply', offsetDays: null, label: 'after the invitation' },
+  { status: 'invited', kind: 'chase_reply', offsetDays: null, label: 'after your first message' },
   { status: 'confirmed', kind: 'chase_abstract', offsetDays: -28, label: 'T-4w' },
   { status: 'confirmed', kind: 'chase_bio', offsetDays: -21, label: 'T-3w' },
   { status: 'confirmed', kind: 'chase_photo', offsetDays: -21, label: 'T-3w' },
@@ -143,15 +161,18 @@ export const RULES = [
   { status: 'slides_received', kind: 'thank_you', offsetDays: 1, label: 'T+1d' },
 ] as const satisfies readonly {
   status: SpeakerStatus;
-  kind: MessageKind;
+  kind: DraftKind;
   offsetDays: number | null;
   label: string;
 }[];
 
+/** The day an `idea` speaker becomes a task for you to reach out: T-6w. */
+export const OUTREACH_OFFSET_DAYS = -42;
+
 export type Rule = (typeof RULES)[number];
 
 /** Kinds that apply in a status (nothing for `declined` and `thanked`). */
-export function kindsFor(status: SpeakerStatus): MessageKind[] {
+export function kindsFor(status: SpeakerStatus): DraftKind[] {
   return RULES.filter((r) => r.status === status).map((r) => r.kind);
 }
 
@@ -159,14 +180,13 @@ const utcDay = (d: Date): number => Date.UTC(d.getUTCFullYear(), d.getUTCMonth()
 const ymd = (ms: number): string => new Date(ms).toISOString().slice(0, 10);
 const daysBetween = (fromMs: number, toMs: number): number => Math.floor((toMs - fromMs) / DAY_MS);
 
-const KIND_ORDER: readonly MessageKind[] = [
+const KIND_ORDER: readonly DraftKind[] = [
   'thank_you',
   'chase_slides',
   'chase_abstract',
   'chase_bio',
   'chase_photo',
   'chase_reply',
-  'invitation',
 ];
 
 const PENDING: readonly MessageStatus[] = ['draft', 'approved'];
@@ -201,7 +221,7 @@ function satisfied(speaker: PipelineSpeaker, kind: MessageKind): boolean {
   return false;
 }
 
-function redraftWhy(speaker: PipelineSpeaker, kind: MessageKind, input: PipelineInput): string {
+function redraftWhy(speaker: PipelineSpeaker, kind: DraftKind, input: PipelineInput): string {
   if (!kindsFor(speaker.status).includes(kind))
     return `${kind} does not apply while the speaker is ${speaker.status}.`;
   if (satisfied(speaker, kind)) return `${kind.replace('chase_', '')} is already on file.`;
@@ -225,6 +245,7 @@ export function decideActions(input: PipelineInput): Decision {
 
   const out: Decision = {
     actions: [],
+    outreach: [],
     deferred: [],
     blocked: [],
     supersede: [],
@@ -244,7 +265,9 @@ export function decideActions(input: PipelineInput): Decision {
 
   for (const speaker of speakers) {
     const mine = input.messages.filter((m) => m.speakerId === speaker.id);
-    const applicable = kindsFor(speaker.status).filter((k) => !satisfied(speaker, k));
+    const applicable: readonly MessageKind[] = kindsFor(speaker.status).filter(
+      (k) => !satisfied(speaker, k),
+    );
 
     // Unsent drafts whose purpose is gone: the status moved on, the data arrived, or the event day
     // came (a pre-event message left "approved" would otherwise mean "send this now" forever).
@@ -265,7 +288,7 @@ export function decideActions(input: PipelineInput): Decision {
     if (!hasDate) continue;
 
     // A reply nobody has acted on pauses EVERYTHING for this speaker: no message of any kind, no
-    // chase-limit task. Pending unsent chases and invitations are superseded so the send queue cannot
+    // chase-limit task. Pending unsent chases are superseded so the send queue cannot
     // contain a message to someone who has just written back.
     if (unhandledReply(speaker, mine)) {
       for (const m of mine) {
@@ -282,6 +305,39 @@ export function decideActions(input: PipelineInput): Decision {
     }
     const lastDraftDay = eventDay - (MIN_NOTICE_DAYS + 1) * DAY_MS;
 
+    // The first message is a human act, never the agent's. An `idea` speaker becomes a TASK at T-6w.
+    if (speaker.status === 'idea') {
+      const from = eventDay + OUTREACH_OFFSET_DAYS * DAY_MS;
+      if (today < from) {
+        out.waiting.push({
+          speakerId: speaker.id,
+          why: `not before T-6w: then a task for you to reach out`,
+          dueOn: ymd(from),
+        });
+      } else if (today > lastDraftDay) {
+        out.waiting.push({
+          speakerId: speaker.id,
+          why: `too close to the event to reach out (${String(MIN_NOTICE_DAYS)} days' notice needed before ${ymd(eventDay)})`,
+        });
+      } else {
+        out.outreach.push({
+          speakerId: speaker.id,
+          dueOn: ymd(from),
+          reason: `status idea and T-6w reached (${ymd(from)}): write to them yourself, then set them to invited`,
+        });
+      }
+      continue;
+    }
+    // STRUCTURAL: nothing is ever drafted for a speaker we have never sent anything to, whatever their
+    // status says (set by hand, or imported). There is no conversation for the agent to continue.
+    if (!speaker.hasPriorSent) {
+      out.waiting.push({
+        speakerId: speaker.id,
+        why: `no message of ours has ever been sent to them: the conversation is yours to start (record it with "speakers sent --kind invitation"); nothing is drafted`,
+      });
+      continue;
+    }
+
     for (const rule of RULES.filter((r) => r.status === speaker.status)) {
       const kind = rule.kind;
       if (satisfied(speaker, kind)) continue;
@@ -296,7 +352,7 @@ export function decideActions(input: PipelineInput): Decision {
       }
       const latest = [...ofKind].sort((a, b) => a.round - b.round).at(-1);
       if (latest?.status === 'rejected') {
-        // A rejection blocks the kind until a human acts, the way a sent invitation does: either a
+        // A rejection blocks the kind until a human acts: either a
         // status change after the rejection (a re-approach), or an explicit --redraft. Either earns
         // the next round; the rejected draft stays on record untouched.
         const asked = redrafts.find((r) => r.speakerId === speaker.id && r.kind === kind);
@@ -315,32 +371,14 @@ export function decideActions(input: PipelineInput): Decision {
       const nextRound = (latest?.round ?? 0) + 1;
       const from = rule.offsetDays === null ? null : eventDay + rule.offsetDays * DAY_MS;
 
-      // ---- one-off messages: the invitation and the thank-you ----
-      if (kind === 'invitation' || kind === 'thank_you') {
-        // A sent invitation is final for the event, unless a human has since moved the speaker back
-        // to `idea` (declined -> idea, or parked): that is a re-approach, and gets a new round.
-        const sentOnes = ofKind.filter((m) => m.status === 'sent');
-        const resetSince = (m: PipelineMessage): boolean =>
-          kind === 'invitation' &&
-          speaker.statusSince !== undefined &&
-          m.sentAt !== undefined &&
-          speaker.statusSince > m.sentAt;
-        if (sentOnes.length > 0 && !sentOnes.every(resetSince)) {
-          wait(
-            kind === 'invitation'
-              ? 'parked: the invitation for this event was already sent; nothing more is drafted for this event'
-              : 'the thank-you was sent',
-          );
+      // ---- the thank-you (one-off) ----
+      if (kind === 'thank_you') {
+        if (ofKind.some((m) => m.status === 'sent')) {
+          wait('the thank-you was sent');
           continue;
         }
         if (from !== null && today < from) {
           wait(`not before ${rule.label}`, ymd(from));
-          continue;
-        }
-        if (kind === 'invitation' && today > lastDraftDay) {
-          wait(
-            `too close to the event to invite (${String(MIN_NOTICE_DAYS)} days' notice needed before ${ymd(eventDay)})`,
-          );
           continue;
         }
         due.push({
@@ -348,10 +386,7 @@ export function decideActions(input: PipelineInput): Decision {
           kind,
           round: nextRound,
           dueOn: ymd(from ?? today),
-          reason:
-            kind === 'invitation'
-              ? `status idea and ${rule.label} reached (${ymd(from ?? today)})`
-              : `slides received and the event is over (${rule.label}, ${ymd(from ?? today)})`,
+          reason: `slides received and the event is over (${rule.label}, ${ymd(from ?? today)})`,
         });
         continue;
       }
@@ -367,18 +402,19 @@ export function decideActions(input: PipelineInput): Decision {
       }
       let anchor: PipelineMessage | undefined;
       if (kind === 'chase_reply') {
-        // A chase follows a SENT invitation; a draft nobody sent is never chased.
+        // A chase follows YOUR first message, recorded as sent (`speakers sent --kind invitation`); with
+        // nothing recorded for this event there is nothing to measure from and nothing is chased.
         const invitationSent = mine.some((m) => m.kind === 'invitation' && m.status === 'sent');
         if (!invitationSent) {
-          wait('the invitation has not been marked sent');
+          wait('your first message to them has not been recorded as sent for this event');
           continue;
         }
         anchor = latestSent(mine.filter((m) => m.kind === 'invitation' || m.kind === kind));
       } else {
         anchor = latestSent(ofKind);
       }
-      // Rounds of a reply chase are counted since the latest sent invitation (a re-approach starts
-      // over); other kinds count every sent chase for the event.
+      // Rounds of a reply chase are counted since your latest recorded first message (a re-approach
+      // starts over); other kinds count every sent chase for the event.
       const lastInvitation =
         kind === 'chase_reply'
           ? latestSent(mine.filter((m) => m.kind === 'invitation'))?.sentAt
@@ -461,6 +497,9 @@ export function decideActions(input: PipelineInput): Decision {
     );
   }
 
+  out.outreach.sort(
+    (a, b) => a.dueOn.localeCompare(b.dueOn) || a.speakerId.localeCompare(b.speakerId),
+  );
   due.sort(
     (a, b) =>
       a.dueOn.localeCompare(b.dueOn) ||

@@ -7,7 +7,7 @@ import {
   type PipelineSpeaker,
   decideActions,
 } from '../../src/agents/speakers/decide.js';
-import type { MessageKind, MessageStatus } from '../../src/domain/message.schema.js';
+import type { DraftKind, MessageKind, MessageStatus } from '../../src/domain/message.schema.js';
 import type { SpeakerStatus } from '../../src/domain/speaker.schema.js';
 
 /** Event day: Saturday 12 December 2026. T-6w = 31 Oct, T-4w = 14 Nov, T-3w = 21 Nov, T-1w = 5 Dec. */
@@ -31,6 +31,8 @@ const speaker = (status: SpeakerStatus, over: Partial<PipelineSpeaker> = {}): Pi
   id: S,
   name: 'Wendeline Gooseberry',
   status,
+  // A conversation exists unless a test says otherwise: the agent drafts nothing for a stranger.
+  hasPriorSent: true,
   hasBio: true,
   hasPhoto: true,
   ...over,
@@ -61,6 +63,7 @@ function decide(
 }
 
 const planned = (d: Decision) => d.actions.map((a) => `${a.kind}#${String(a.round)}`);
+const outreachOf = (d: Decision) => d.outreach.map((o) => o.speakerId);
 
 interface Row {
   name: string;
@@ -68,52 +71,56 @@ interface Row {
   speaker: PipelineSpeaker;
   messages?: PipelineMessage[];
   actions: string[];
+  /** Speakers that become a "reach out" TASK (the agent never drafts first contact). */
+  outreach?: number;
   blocked?: string[];
   supersede?: number;
 }
 
 // Every row of the decision table, with the day before and the day of each boundary.
 const ROWS: Row[] = [
-  // ---- idea -> invitation at T-6w ----
+  // ---- idea -> a TASK at T-6w: the first message is yours, never a draft ----
   { name: 'idea, T-6w minus 1 day', day: '2026-10-30', speaker: speaker('idea'), actions: [] },
-  { name: 'idea, T-6w', day: '2026-10-31', speaker: speaker('idea'), actions: ['invitation#1'] },
   {
-    name: 'idea, T-4d: the last day an invitation can give 3 days notice',
-    day: '2026-12-08',
+    name: 'idea, T-6w: a task, zero drafts',
+    day: '2026-10-31',
     speaker: speaker('idea'),
-    actions: ['invitation#1'],
+    actions: [],
+    outreach: 1,
   },
   {
-    name: 'idea, T-3d: too close to invite',
+    name: 'idea, T-4d: the last day a reach-out can give 3 days notice',
+    day: '2026-12-08',
+    speaker: speaker('idea'),
+    actions: [],
+    outreach: 1,
+  },
+  {
+    name: 'idea, T-3d: too close to reach out',
     day: '2026-12-09',
     speaker: speaker('idea'),
     actions: [],
   },
   { name: 'idea, event day', day: '2026-12-12', speaker: speaker('idea'), actions: [] },
   {
-    name: 'idea, invitation drafted, not sent',
+    name: 'idea, with no message ever sent to them: still a task, never a draft',
+    day: '2026-11-20',
+    speaker: speaker('idea', { hasPriorSent: false }),
+    actions: [],
+    outreach: 1,
+  },
+  {
+    name: 'idea, a legacy invitation draft is superseded: the agent no longer writes those',
     day: '2026-11-01',
     speaker: speaker('idea'),
     messages: [msg('invitation', 'draft')],
     actions: [],
-  },
-  {
-    name: 'idea again (parked) after an invitation was sent',
-    day: '2026-11-20',
-    speaker: speaker('idea'),
-    messages: [msg('invitation', 'sent', '2026-11-01')],
-    actions: [],
-  },
-  {
-    name: 'idea, invitation rejected at review',
-    day: '2026-11-20',
-    speaker: speaker('idea'),
-    messages: [msg('invitation', 'rejected')],
-    actions: [],
+    outreach: 1,
+    supersede: 1,
   },
   // ---- invited -> chase_reply, 7 days after the last sent message ----
   {
-    name: 'invited, invitation never marked sent',
+    name: 'invited, your first message never recorded as sent',
     day: '2026-11-20',
     speaker: speaker('invited'),
     actions: [],
@@ -302,6 +309,7 @@ describe('decideActions: the decision table', () => {
   it.each(ROWS.map((r) => [r.name, r] as const))('%s', (_name, row) => {
     const d = decide(row.day, row.speaker, row.messages);
     expect(planned(d)).toEqual(row.actions);
+    expect(outreachOf(d)).toHaveLength(row.outreach ?? 0);
     expect(d.blocked.map((b) => b.kind)).toEqual(row.blocked ?? []);
     expect(d.supersede).toHaveLength(row.supersede ?? 0);
   });
@@ -326,7 +334,11 @@ describe('decideActions: the decision table', () => {
   it('says why a kind is waiting, with the day it becomes due', () => {
     const d = decide('2026-10-01', speaker('idea'));
     expect(d.waiting).toEqual([
-      { speakerId: S, kind: 'invitation', dueOn: '2026-10-31', why: 'not before T-6w' },
+      {
+        speakerId: S,
+        dueOn: '2026-10-31',
+        why: 'not before T-6w: then a task for you to reach out',
+      },
     ]);
   });
 });
@@ -367,7 +379,7 @@ describe('decideActions: chase policy', () => {
 
   it('MAX_DRAFTS_PER_RUN: a backlog is cut, oldest due first, and the rest deferred', () => {
     const speakers = Array.from({ length: 13 }, (_, i) =>
-      speaker('idea', { id: String(i).padStart(24, '0') }),
+      speaker('confirmed', { id: String(i).padStart(24, '0') }),
     );
     const d = decideActions({
       now: at('2026-11-20'),
@@ -524,17 +536,15 @@ describe('decideActions: every chase kind ends in a task (review findings)', () 
     expect(t.supersede).toEqual([]);
   });
 
-  it('a speaker reset to idea AFTER a sent invitation is re-approached, with a new round (finding 5)', () => {
+  it('a speaker reset to idea after your first message is a reach-out TASK again, never a draft', () => {
     const sent = [msg('invitation', 'sent', '2026-11-01')];
     const reset = speaker('idea', { statusSince: '2026-11-10T08:00:00.000Z' });
     const d = decide('2026-11-20', reset, sent);
-    expect(planned(d)).toEqual(['invitation#2']);
-    // Reset BEFORE the invitation was sent: not a re-approach, still parked.
-    const early = speaker('idea', { statusSince: '2026-10-20T08:00:00.000Z' });
-    expect(planned(decide('2026-11-20', early, sent))).toEqual([]);
+    expect(planned(d)).toEqual([]);
+    expect(outreachOf(d)).toEqual([S]);
   });
 
-  it('after a re-approach, reply chases count from the new invitation', () => {
+  it('after a re-approach, reply chases count from your new first message', () => {
     const msgs = [
       msg('invitation', 'sent', '2026-11-01', 1),
       msg('chase_reply', 'sent', '2026-11-08', 1),
@@ -544,13 +554,6 @@ describe('decideActions: every chase kind ends in a task (review findings)', () 
     const d = decide('2026-11-27', speaker('invited'), msgs);
     expect(planned(d)).toEqual(['chase_reply#3']);
     expect(d.blocked).toEqual([]);
-  });
-
-  it('a parked speaker (invitation already sent) is shown as parked, not silently skipped', () => {
-    const d = decide('2026-11-20', speaker('idea'), [msg('invitation', 'sent', '2026-11-01')]);
-    expect(d.waiting.map((w) => w.why)).toEqual([
-      'parked: the invitation for this event was already sent; nothing more is drafted for this event',
-    ]);
   });
 });
 
@@ -576,32 +579,40 @@ describe('blocked task titles', () => {
 });
 
 describe('decideActions: a rejection blocks the kind until a human acts', () => {
-  it('a rejected invitation waits, and says how to act', () => {
-    const d = decide('2026-11-10', speaker('idea'), [rej('invitation', '2026-11-02')]);
+  it('a rejected chase waits, and says how to act', () => {
+    const d = decide('2026-11-20', speaker('confirmed'), [rej('chase_abstract', '2026-11-16')]);
     expect(planned(d)).toEqual([]);
-    expect(d.waiting[0]?.why).toMatch(/rejected at review.*until you act.*--redraft invitation/);
+    expect(d.waiting[0]?.why).toMatch(
+      /rejected at review.*until you act.*--redraft chase_abstract/,
+    );
   });
 
   it('a status change AFTER the rejection is a re-approach: a new round', () => {
-    const d = decide('2026-11-10', speaker('idea', { statusSince: '2026-11-05T08:00:00.000Z' }), [
-      rej('invitation', '2026-11-02'),
-    ]);
-    expect(planned(d)).toEqual(['invitation#2']);
+    const d = decide(
+      '2026-11-20',
+      speaker('confirmed', { statusSince: '2026-11-17T08:00:00.000Z' }),
+      [rej('chase_abstract', '2026-11-16')],
+    );
+    expect(planned(d)).toEqual(['chase_abstract#2']);
   });
 
   it('a status change BEFORE the rejection is not: still blocked', () => {
-    const d = decide('2026-11-10', speaker('idea', { statusSince: '2026-11-01T08:00:00.000Z' }), [
-      rej('invitation', '2026-11-02'),
-    ]);
+    const d = decide(
+      '2026-11-20',
+      speaker('confirmed', { statusSince: '2026-11-15T08:00:00.000Z' }),
+      [rej('chase_abstract', '2026-11-16')],
+    );
     expect(planned(d)).toEqual([]);
   });
 
   it('a rejection with no recorded time (older data) is never reset by a status change', () => {
-    const old: PipelineMessage = { ...rej('invitation', '2026-11-02') };
+    const old: PipelineMessage = { ...rej('chase_abstract', '2026-11-16') };
     delete old.rejectedAt;
-    const d = decide('2026-11-10', speaker('idea', { statusSince: '2026-11-05T08:00:00.000Z' }), [
-      old,
-    ]);
+    const d = decide(
+      '2026-11-20',
+      speaker('confirmed', { statusSince: '2026-11-17T08:00:00.000Z' }),
+      [old],
+    );
     expect(planned(d)).toEqual([]);
   });
 
@@ -622,7 +633,7 @@ describe('decideActions: a rejection blocks the kind until a human acts', () => 
   });
 
   it('--redraft goes through the same table: a kind that does not apply is refused, with the reason', () => {
-    const redraft = (status: SpeakerStatus, kind: MessageKind, messages: PipelineMessage[]) =>
+    const redraft = (status: SpeakerStatus, kind: DraftKind, messages: PipelineMessage[]) =>
       decideActions({
         now: at('2026-11-20'),
         eventDate: EVENT,
@@ -631,9 +642,11 @@ describe('decideActions: a rejection blocks the kind until a human acts', () => 
         policy: POLICY,
         redraft: [{ speakerId: S, kind }],
       });
-    const declined = redraft('declined', 'invitation', [rej('invitation', '2026-11-02')]);
+    const declined = redraft('declined', 'chase_abstract', [rej('chase_abstract', '2026-11-02')]);
     expect(planned(declined)).toEqual([]);
-    expect(declined.notes[0]).toMatch(/invitation does not apply while the speaker is declined/);
+    expect(declined.notes[0]).toMatch(
+      /chase_abstract does not apply while the speaker is declined/,
+    );
     const notRejected = redraft('confirmed', 'chase_abstract', [msg('chase_abstract', 'approved')]);
     expect(planned(notRejected)).toEqual([]);
     expect(notRejected.notes[0]).toMatch(/is approved, not rejected: reject it first/);
@@ -679,7 +692,6 @@ describe('decideActions: a reply nobody has acted on pauses everything (M4a spec
 
   // Every status, on a day when something would otherwise be due.
   const DUE: [string, SpeakerStatus, string, PipelineMessage[], MessageKind][] = [
-    ['idea', 'idea', '2026-11-20', [], 'invitation'],
     ['invited', 'invited', '2026-11-20', [msg('invitation', 'sent', '2026-11-01')], 'chase_reply'],
     ['confirmed', 'confirmed', '2026-11-20', [], 'chase_abstract'],
     ['abstract_received', 'abstract_received', '2026-12-06', [], 'chase_slides'],
@@ -804,12 +816,10 @@ describe('decideActions: a reply nobody has acted on pauses everything (M4a spec
     expect(decide('2026-11-20', speaker('confirmed'), [pending]).supersede).toEqual([]);
   });
 
-  it('a pending invitation to someone who has replied is superseded too', () => {
-    const pending = msg('invitation', 'draft');
-    const d = decide('2026-11-20', speaker('idea', { lastInboundAt: '2026-11-20T10:00:00.000Z' }), [
-      pending,
-    ]);
-    expect(d.supersede.map((x) => x.reason)).toEqual(['a reply arrived: not sending this']);
+  it('an idea speaker who has written back is not turned into a reach-out task', () => {
+    const d = decide('2026-11-20', speaker('idea', { lastInboundAt: '2026-11-20T10:00:00.000Z' }));
+    expect(outreachOf(d)).toEqual([]);
+    expect(d.waiting[0]?.why).toMatch(/a reply arrived/);
   });
 
   it('a pending thank-you is NOT superseded by a reply (it is not a chase)', () => {

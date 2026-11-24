@@ -16,6 +16,21 @@ export const MESSAGE_KINDS = [
   'thank_you',
 ] as const;
 
+/**
+ * `invitation` is the human's own first message to a speaker, written by hand (usually on LinkedIn) and only ever
+ * RECORDED here (`speakers sent --kind invitation`), after which the speaker is `invited`. The agent never
+ * writes it: no rule produces it and nothing drafts it. Everything the agent drafts is a {@link DraftKind}.
+ */
+export const DRAFT_KINDS = [
+  'chase_reply',
+  'chase_abstract',
+  'chase_bio',
+  'chase_photo',
+  'chase_slides',
+  'thank_you',
+] as const satisfies readonly (typeof MESSAGE_KINDS)[number][];
+export type DraftKind = (typeof DRAFT_KINDS)[number];
+
 export const CHASE_KINDS = [
   'chase_reply',
   'chase_abstract',

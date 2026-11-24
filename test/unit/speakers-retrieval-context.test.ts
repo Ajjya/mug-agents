@@ -67,9 +67,9 @@ describe('RetrievalDraftContext', () => {
     expect(strategies).toEqual([undefined, 'keyword']);
   });
 
-  it("an invitation gets the speaker's own abstracts and this venue's host notes, public only", async () => {
+  it("a thank-you gets the speaker's own abstracts and this venue's host notes, public only", async () => {
     const { asked, ctx } = stub();
-    const chunks = await ctx.forDraft(EVENT, SPEAKER, 'invitation');
+    const chunks = await ctx.forDraft(EVENT, SPEAKER, 'thank_you');
     expect(chunks.map((c) => c.id)).toEqual(['mine', 'our-venue']);
     expect(asked.every((o) => o.classification?.join() === 'public')).toBe(true);
   });
