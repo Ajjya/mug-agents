@@ -80,6 +80,7 @@ export interface RunResult {
 /** A message in the event's pipeline, as `list` shows it. */
 export interface MessageRow {
   id: string;
+  speakerId: string;
   speakerName: string;
   kind: MessageKind;
   round: number;
@@ -214,6 +215,7 @@ export class SpeakersService {
     const shown = p.messages.filter((m) => options.all || !HIDDEN_BY_DEFAULT.includes(m.status));
     const messages = shown.map((m): MessageRow => ({
       id: m._id,
+      speakerId: m.speakerId,
       speakerName: p.speakers.find((s) => s._id === m.speakerId)?.name ?? m.speakerId,
       kind: m.kind,
       round: m.round,
@@ -241,6 +243,7 @@ export class SpeakersService {
 
   async show(messageId: string): Promise<{
     message: Message;
+    speakerId: string;
     speakerName: string;
     emails: string[];
     handles: Speaker['handles'];
@@ -249,6 +252,7 @@ export class SpeakersService {
     const speaker = await this.store.findSpeaker(message.speakerId);
     return {
       message,
+      speakerId: message.speakerId,
       speakerName: speaker?.name ?? message.speakerId,
       emails: speaker?.emails ?? [],
       handles: speaker?.handles ?? {},
@@ -291,6 +295,13 @@ export class SpeakersService {
     now: Date = new Date(),
   ): Promise<{ from: SpeakerStatus; to: SpeakerStatus }> {
     return await this.store.setStatus(speakerId, eventId, to, now);
+  }
+
+  /** Names for ids, so output can say who a line is about (an id the store cannot find maps to itself). */
+  async speakerNames(ids: readonly string[]): Promise<Map<string, string>> {
+    const out = new Map<string, string>();
+    for (const id of new Set(ids)) out.set(id, (await this.store.findSpeaker(id))?.name ?? id);
+    return out;
   }
 
   /** Starts speakers in an event's pipeline (default status `idea`). Idempotent; see the store. */

@@ -13,6 +13,7 @@ import {
   SpeakerNotFoundError,
   SpeakerNotInEventError,
 } from '../src/agents/speakers/speakers.store.js';
+import { who } from '../src/agents/speakers/format.js';
 import { IllegalTransitionError } from '../src/agents/speakers/transitions.js';
 import { DRAFT_KINDS, MESSAGE_KINDS } from '../src/domain/message.schema.js';
 import { SPEAKER_STATUSES } from '../src/domain/speaker.schema.js';
@@ -118,30 +119,37 @@ runCli(
           );
         }
         const d = r.decision;
+        const names = await service.speakerNames([
+          ...(d?.actions ?? []).map((a) => a.speakerId),
+          ...(d?.outreach ?? []).map((o) => o.speakerId),
+          ...(d?.noContact ?? []).map((a) => a.speakerId),
+          ...(d?.blocked ?? []).map((b) => b.speakerId),
+        ]);
+        const w = (id: string): string => who(names.get(id) ?? id, id);
         console.log(`PLANNED (${String(d?.actions.length ?? 0)})`);
         for (const a of d?.actions ?? []) {
           console.log(
-            `  ${a.speakerId}  ${a.kind} #${String(a.round)}  [${a.delivery.replace(':', ' on ')}${a.delivery === 'email' ? '' : ', by hand'}]  ${a.reason}`,
+            `  ${w(a.speakerId)}  ${a.kind} #${String(a.round)}  [${a.delivery.replace(':', ' on ')}${a.delivery === 'email' ? '' : ', by hand'}]  ${a.reason}`,
           );
         }
         if (d && d.outreach.length > 0) {
           console.log(
             `\nREACH OUT YOURSELF (${String(d.outreach.length)}): the agent never writes the first message; one task each, no draft`,
           );
-          for (const o of d.outreach) console.log(`  ${o.speakerId}  ${o.reason}`);
+          for (const o of d.outreach) console.log(`  ${w(o.speakerId)}  ${o.reason}`);
         }
         if (d && d.noContact.length > 0) {
           console.log(
             `\nNO CONTACT DETAILS (${String(d.noContact.length)}): due, but no address or handle; one task each, no draft`,
           );
           for (const a of d.noContact)
-            console.log(`  ${a.speakerId}  ${a.kind} #${String(a.round)}`);
+            console.log(`  ${w(a.speakerId)}  ${a.kind} #${String(a.round)}`);
         }
         if (d && d.blocked.length > 0) {
           console.log(
             `\nAT THE CHASE LIMIT (${String(d.blocked.length)}): a task each, no message`,
           );
-          for (const b of d.blocked) console.log(`  ${b.speakerId}  ${b.kind}  ${b.reason}`);
+          for (const b of d.blocked) console.log(`  ${w(b.speakerId)}  ${b.kind}  ${b.reason}`);
         }
         for (const note of d?.notes ?? []) console.log(`\nNote: ${note}`);
         console.log(`\nDRAFTS WRITTEN (${String(r.created.length)})`);
@@ -166,10 +174,12 @@ runCli(
           all: values.all === true,
         });
         const pad = (s: string, n: number) => (s.length >= n ? s : s + ' '.repeat(n - s.length));
-        console.log(`${pad('SPEAKER', 28)}${pad('STATUS', 19)}${pad('LAST SENT', 28)}NEXT`);
+        console.log(`${pad('SPEAKER', 56)}${pad('STATUS', 19)}${pad('LAST SENT', 28)}NEXT`);
         for (const r of rows) {
           const last = r.lastSent ? `${r.lastSent.kind} ${r.lastSent.at.slice(0, 10)}` : '-';
-          console.log(`${pad(r.name, 28)}${pad(r.status, 19)}${pad(last, 28)}${r.next}`);
+          console.log(
+            `${pad(who(r.name, r.speakerId), 56)}${pad(r.status, 19)}${pad(last, 28)}${r.next}`,
+          );
         }
         console.log(`\nMESSAGES (${String(messages.length)})`);
         for (const m of messages) {
@@ -177,7 +187,7 @@ runCli(
             .filter(Boolean)
             .join(', ');
           console.log(
-            `  ${m.id}  ${pad(m.speakerName, 24)}${pad(`${m.kind} #${String(m.round)}`, 20)}${pad(m.status, 11)}${m.at.slice(0, 10)}${flags ? `  (${flags})` : ''}`,
+            `  ${m.id}  ${pad(who(m.speakerName, m.speakerId), 56)}${pad(`${m.kind} #${String(m.round)}`, 20)}${pad(m.status, 11)}${m.at.slice(0, 10)}${flags ? `  (${flags})` : ''}`,
           );
         }
         if (messages.length === 0) console.log('  none');
@@ -193,12 +203,12 @@ runCli(
       }
       case 'show': {
         if (!target) return usage();
-        const { message: m, speakerName, emails, handles } = await service.show(target);
+        const { message: m, speakerId, speakerName, emails, handles } = await service.show(target);
         console.log(
           `Message ${m._id}  [${m.status}]${m.needsApproval ? '  (first contact: needs approval)' : ''}`,
         );
         console.log(
-          `  to ${speakerName} on ${m.channel}${emails[0] ? ` <${emails[0]}>` : ''}${m.channel !== 'email' ? ` (${handles[m.channel] ?? 'no handle'})` : ''}`,
+          `  to ${who(speakerName, speakerId)} on ${m.channel}${emails[0] ? ` <${emails[0]}>` : ''}${m.channel !== 'email' ? ` (${handles[m.channel] ?? 'no handle'})` : ''}`,
         );
         console.log(`  ${m.kind} round ${String(m.round)}; ${m.reason}`);
         if (m.sentAt) console.log(`  sent ${m.sentAt} by ${m.sentBy ?? '?'}`);
@@ -248,10 +258,10 @@ runCli(
         const status = z.enum(SPEAKER_STATUSES).parse(values.status ?? 'idea');
         const r = await service.addToEvent(refs, values.event, status, now);
         for (const sp of r.added)
-          console.log(`Added ${sp.name} (${sp._id}) to the pipeline as ${status}.`);
+          console.log(`Added ${who(sp.name, sp._id)} to the pipeline as ${status}.`);
         for (const e of r.existed) {
           console.log(
-            `${e.speaker.name} (${e.speaker._id}) already has an entry for this event (${e.status}): nothing changed.`,
+            `${who(e.speaker.name, e.speaker._id)} already has an entry for this event (${e.status}): nothing changed.`,
           );
         }
         console.log(
@@ -266,8 +276,8 @@ runCli(
         const r = await service.removeFromEvent(target, values.event, reason, now);
         console.log(
           r.alreadyDeclined
-            ? `${r.speaker.name} is already declined for this event: nothing changed.`
-            : `${r.speaker.name}: ${r.from} -> declined (reason: ${reason}). This is NOT a delete: the entry, its messages and its history are all still there; "status --set idea" brings them back.`,
+            ? `${who(r.speaker.name, r.speaker._id)} is already declined for this event: nothing changed.`
+            : `${who(r.speaker.name, r.speaker._id)}: ${r.from} -> declined (reason: ${reason}). This is NOT a delete: the entry, its messages and its history are all still there; "status --set idea" brings them back.`,
         );
         return 0;
       }
@@ -275,7 +285,8 @@ runCli(
         if (!target || !values.event || !values.set) return usage();
         const to = z.enum(SPEAKER_STATUSES).parse(values.set);
         const r = await service.setStatus(target, values.event, to, now);
-        console.log(`Speaker ${target}: ${r.from} -> ${r.to}`);
+        const sp = await service.speakerNames([target]);
+        console.log(`${who(sp.get(target) ?? target, target)}: ${r.from} -> ${r.to}`);
         return 0;
       }
       case 'candidates': {
@@ -291,7 +302,7 @@ runCli(
         for (const s of r.suggestions) {
           const status = ctx?.inPipeline.get(s.speaker.id);
           console.log(
-            `${s.speaker.name} (${s.speaker.id})${status ? `  [already in this event's pipeline: ${status}]` : ''}\n  ${s.reason}`,
+            `${who(s.speaker.name, s.speaker.id)}${status ? `  [already in this event's pipeline: ${status}]` : ''}\n  ${s.reason}`,
           );
           for (const c of s.citations) console.log(`  cites ${c.id}`);
         }

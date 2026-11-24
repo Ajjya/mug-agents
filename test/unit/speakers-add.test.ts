@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { who } from '../../src/agents/speakers/format.js';
 import { IllegalTransitionError } from '../../src/agents/speakers/transitions.js';
 import {
   SpeakerNotFoundError,
@@ -222,5 +223,31 @@ describe('speakers remove is NOT a delete', () => {
     await h.service.removeFromEvent(ana._id, event._id, 'gone');
     const r = await h.service.run(event._id, { now: day('2026-11-20') });
     expect(r.created).toEqual([]);
+  });
+});
+
+describe('speakers appear as name + id in CLI output', () => {
+  it('who() is the name, then the id other commands take', () => {
+    expect(who('Ana Pires', 'a'.repeat(24))).toBe(`Ana Pires (${'a'.repeat(24)})`);
+  });
+
+  it('the service gives the CLI the names (run output) and the ids (list and show)', async () => {
+    const { h, event, ana, rui } = await world();
+    await h.service.addToEvent([ana._id, rui._id], event._id, 'invited');
+    const names = await h.service.speakerNames([ana._id, rui._id, 'f'.repeat(24)]);
+    expect(names.get(ana._id)).toBe('Ana Pires');
+    expect(names.get('f'.repeat(24))).toBe('f'.repeat(24)); // unknown: the id itself, never a crash
+    await h.service.recordSent(
+      { eventId: event._id, speakerId: ana._id, kind: 'invitation', on: '2026-11-01', by: 'me' },
+      day('2026-11-02'),
+    );
+    const listed = await h.service.list(event._id, day('2026-11-20'));
+    expect(listed.rows.map((r) => [r.name, r.speakerId])).toContainEqual(['Ana Pires', ana._id]);
+    expect(listed.messages.map((m) => [m.speakerName, m.speakerId])).toContainEqual([
+      'Ana Pires',
+      ana._id,
+    ]);
+    const msg = listed.messages[0];
+    expect((await h.service.show(msg?.id ?? '')).speakerId).toBe(ana._id);
   });
 });
