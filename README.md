@@ -285,7 +285,6 @@ argument, environment variable or config value.
 | `send_external_message`    | approve (nothing sends yet: the entry exists so M4/M5 inherit it) |
 | `delete_anything`          | never                                                             |
 | `draft_speaker_message`    | auto                                                              |
-| `first_contact_message`    | approve (the speaker has never had a message marked sent)         |
 | `chase_in_existing_thread` | auto (a sent message exists; the chase limit is enforced)         |
 | `thank_you_message`        | auto                                                              |
 
@@ -410,9 +409,14 @@ a matrix dimension (`EVAL_EMBEDDERS`), one value today.
 
 ## Speakers agent (M3b)
 
-**How a message reaches a speaker (delivery).** The channel is not a property of a speaker but of the stage of the
-relationship: first contact is usually a person on LinkedIn, and an address appears later, for some, when they reply.
-A speaker has `emails` (may be empty, lower-cased, unique across speakers) and `handles` (`linkedin`, `whatsapp`,
+**The agent never writes the first message to a speaker. You do, by hand, usually on LinkedIn.** Its job starts once a
+conversation exists: it replies, chases and thanks. An `idea` speaker at T-6w becomes a task for you ("Reach out to
+<name> about <event>", carrying a suggestion: who, why now, where to reach them), never a draft; you then record what
+you wrote with `speakers sent --kind invitation` (which sets them `invited`) or set `invited` yourself. There is no
+first-contact approval row: it is structural. No code path can produce a message to a speaker who has no prior sent
+message for any event (the types, `decideActions` and the store each refuse it; `speakers-no-first-contact.test.ts`).
+
+**How a message reaches a speaker (delivery).** Read from what we know now, never stored as a preference. A speaker has `emails` (may be empty, lower-cased, unique across speakers) and `handles` (`linkedin`, `whatsapp`,
 `other`); a speaker with handles and no email is the normal first state. `decideActions` decides only WHAT is due and
 knows nothing about channels. Afterwards `chooseDelivery` reads what we know now: an address -> `email` (a draft, as
 always); no address but a handle -> `manual:<handle>`: the SAME drafted text is stored with channel `linkedin` /
@@ -448,7 +452,7 @@ Recording the same send again changes nothing (an explicit `--round` makes the n
 otherwise a recorded send of the same kind on the same day is the same send), and it is refused if a
 draft of that kind is still waiting (mark that one instead).
 
-Until a draft is marked sent, nothing is ever chased because of it. A `sent` repeated after a crash
+Until a draft is marked sent, nothing is ever chased because of it, and an `invited` speaker whose first message was never recorded is not chased at all. A `sent` repeated after a crash
 finishes the status step it missed. Marking an invitation sent moves
 the speaker `idea → invited`; marking a thank-you sent moves `slides_received → thanked`.
 
@@ -473,20 +477,20 @@ The code decides what to do; the model only writes text. `decideActions`
 in the database, the event date and today. No model, no I/O, no clock of its own. Days are UTC calendar
 days relative to the event day:
 
-| Status                | Trigger                                                    | Message                               |
-| --------------------- | ---------------------------------------------------------- | ------------------------------------- |
-| `idea`                | T-6w reached, before the event day                         | `invitation`                          |
-| `invited`             | invitation marked sent, 7 days since the last sent message | `chase_reply`                         |
-| `confirmed`           | T-4w reached                                               | `chase_abstract`                      |
-| `confirmed`           | T-3w reached, `speaker.bio` / `speaker.photoUrl` empty     | `chase_bio` / `chase_photo`           |
-| `abstract_received`   | T-3w reached, bio / photo empty                            | `chase_bio` / `chase_photo`           |
-| `abstract_received`   | T-1w reached                                               | `chase_slides`                        |
-| `slides_received`     | the day after the event                                    | `thank_you`                           |
-| `declined`, `thanked` | –                                                          | nothing; unsent drafts are superseded |
+| Status                | Trigger                                                 | Message                               |
+| --------------------- | ------------------------------------------------------- | ------------------------------------- |
+| `idea`                | T-6w reached, before the event day                      | a **task** for you, never a message   |
+| `invited`             | your first message recorded sent, 7 days since the last | `chase_reply`                         |
+| `confirmed`           | T-4w reached                                            | `chase_abstract`                      |
+| `confirmed`           | T-3w reached, `speaker.bio` / `speaker.photoUrl` empty  | `chase_bio` / `chase_photo`           |
+| `abstract_received`   | T-3w reached, bio / photo empty                         | `chase_bio` / `chase_photo`           |
+| `abstract_received`   | T-1w reached                                            | `chase_slides`                        |
+| `slides_received`     | the day after the event                                 | `thank_you`                           |
+| `declined`, `thanked` | –                                                       | nothing; unsent drafts are superseded |
 
 **A reply pauses everything.** When the inbox has linked a message from a speaker to the event
 (`speakers.perEvent[].lastInboundAt`), nothing more is drafted for them, no chase-limit task is raised, and unsent
-chases and invitations are superseded, until you act: send something (a recorded send counts) or change their status.
+chases are superseded, until you act: send something (a recorded send counts) or change their status.
 It does not depend on triage: a reply the machine could not classify is still a reply. See [Inbox](#inbox-m4a).
 
 A second chase of a kind needs the previous one marked sent and 7 days elapsed. Messages are only
@@ -500,11 +504,11 @@ applies (the status moved on, the bio arrived) becomes `superseded`; nothing is 
 Rejection means the same here as in the planner: nothing from the rejected proposal is applied, the
 reason and the time of the decision stay on the draft (`rejectionReason`, `rejectedAt`), it is never
 edited or deleted, and an explicit human act produces a **new** draft (a new round) with a new approval
-request on the same thread. Until you act, the kind is held, the way a sent invitation holds it, and
+request on the same thread. Until you act, the kind is held, and
 `list` says how to act. Two ways to act:
 
-- **Reset the speaker's status after the rejection** (`status --set …`): `declined`, then `idea` for an
-  invitation. A status change dated later than `rejectedAt` earns a new round.
+- **Reset the speaker's status after the rejection** (`status --set …`): `declined`, then `idea`, then `invited` once you
+  have written again. A status change dated later than `rejectedAt` earns a new round.
 - **`npm run speakers -- run --event <id> --redraft <kind> --speaker <id>`** for the cases where the
   status cannot be reset (a confirmed speaker's chase). It is a flag on `run`, not a separate command,
   because `run` is the only command that calls a model. It goes through the same table and guards as a
@@ -657,7 +661,7 @@ Linking is deterministic: the sender's address matches a speaker or a contact, o
 name match is **not** a link. Anything else waits for `inbox link`.
 
 What a reply does change is **one fact, `lastInboundAt`** (per speaker and event). Any inbound message, classified or
-not, **pauses everything for that speaker** in the Speakers agent: no chase, no invitation, no chase-limit task, and
+not, **pauses everything for that speaker** in the Speakers agent: no chase, no reach-out task, no chase-limit task, and
 unsent chases are superseded, until you act (send something, or change their status). A reply the machine did not
 understand is still a reply. `contacts` records the sender as `replied_to_us`: a fact about correspondence, not
 permission to write to them (M4b decides that).

@@ -12,6 +12,8 @@ Depends on M0–M3 merged, including the M3 review fixes.
 
 The first real sub-graph: an agent that **runs the speaker pipeline for an event**. It knows who is at which stage, decides what is overdue, drafts the messages, and stops for approval where the autonomy policy says so.
 
+**The agent never writes the first message to a speaker** (revised 2026-11-24). I always do that myself, usually on LinkedIn. The agent's job starts once a conversation exists: it replies, chases and thanks. The pipeline it drives starts at `invited`, which I set (or record with `speakers sent --kind invitation`) after I have written.
+
 It sends nothing. There is no email channel until M4, so drafts land in the database and I copy them out.
 
 ## 2. Out of scope
@@ -34,7 +36,7 @@ Gmail or any sending (M4), tone of voice from past posts (M5), the Venues, Comms
 
 The project doc's `messages` collection, created here. Same schema pattern as M0 (Input / Doc / Patch, `.strict()`, codecs at the boundary).
 
-Fields: `eventId`, `speakerId`, `kind` (`invitation | chase_abstract | chase_bio | chase_photo | chase_slides | thank_you`), `channel` (`email` only for now), `round` (1-based: which chase attempt this is), `subject`, `body`, `facts` (the fact slots used, so a test can assert they match the event), `status` (`draft | approved | rejected | sent | superseded`), `rejectionReason?`, `approvalRequestId?`, `idempotencyKey`, `sentAt?`, `sentBy?`.
+Fields: `eventId`, `speakerId`, `kind` (`chase_reply | chase_abstract | chase_bio | chase_photo | chase_slides | thank_you`, plus `invitation`, which is only ever _recorded_ as my own first message and never drafted by the agent), `channel` (`email` only for now), `round` (1-based: which chase attempt this is), `subject`, `body`, `facts` (the fact slots used, so a test can assert they match the event), `status` (`draft | approved | rejected | sent | superseded`), `rejectionReason?`, `approvalRequestId?`, `idempotencyKey`, `sentAt?`, `sentBy?`.
 
 - `idempotencyKey` is derived from the natural key in §3.3 and has a unique index. A second draft for the same key is a no-op, not a duplicate.
 - Nothing is deleted. A draft replaced by a newer one becomes `superseded`.
@@ -66,21 +68,25 @@ Ingestion in M3 writes chunks only; this milestone keeps the same split. The Spe
 Nodes:
 
 ### 5.1 `loadPipeline` — no model
+
 Reads the event and every speaker with a `perEvent` entry for it. Resolves `now` from state (injectable clock, as the planner does).
 
 ### 5.2 `decideActions` — no model, pure, fully unit-tested
+
 Returns a list of `PlannedAction { speakerId, kind, round, reason }` from status, elapsed time and the event's milestone dates. The rules, as a table in code:
 
-| Status | Trigger | Action |
-|---|---|---|
-| `idea` | event is at T-6w or later | `invitation` |
-| `invited` | ≥7 days since the last message, no reply recorded | `chase_abstract` → but see §7 |
-| `confirmed` | abstract missing and T-4w reached | `chase_abstract` |
-| `confirmed` | bio or photo missing and T-3w reached | `chase_bio` / `chase_photo` |
-| `abstract_received` | slides missing and T-2d reached | `chase_slides` |
-| `slides_received` | event date has passed (T+1d) | `thank_you` |
+| Status              | Trigger                                                                           | Action                                                                                                                                                                                                                 |
+| ------------------- | --------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `idea`              | event is at T-6w or later                                                         | **a task for me, not a message:** `"Reach out to <name> about <event>"`, carrying the suggestion (who, why now, where to reach them), never a draft. One per `(speakerId, eventId)`, deduplicated like the other tasks |
+| `invited`           | ≥7 days since my recorded first message or the last sent chase, no reply recorded | `chase_reply` → but see §7                                                                                                                                                                                             |
+| `confirmed`         | abstract missing and T-4w reached                                                 | `chase_abstract`                                                                                                                                                                                                       |
+| `confirmed`         | bio or photo missing and T-3w reached                                             | `chase_bio` / `chase_photo`                                                                                                                                                                                            |
+| `abstract_received` | slides missing and T-2d reached                                                   | `chase_slides`                                                                                                                                                                                                         |
+| `slides_received`   | event date has passed (T+1d)                                                      | `thank_you`                                                                                                                                                                                                            |
 
 Also returns `blocked: BlockedItem[]` for anything at its chase limit, which becomes tasks rather than messages.
+
+Two structural rules sit on top of the table: a speaker with no sent message of ours for **any** event gets no action at all, whatever their status (§6), and `PlannedAction.kind` cannot be `invitation` (it fails to compile).
 
 **This function is the milestone.** It has no model, no I/O and no clock of its own, so it is exhaustively testable: write a table-driven test with a frozen clock covering every row, every boundary (6 days vs 7), and every status.
 
@@ -94,12 +100,15 @@ Nothing reads an inbox, so the agent cannot know a reply arrived. Two inputs, bo
 State this plainly in the README: between M3b and M4 the pipeline is only as current as what I have told it.
 
 ### 5.4 `draftMessages` — the model
+
 For each planned action: retrieve context (M3's `search`, scope `public`, the speaker's own past abstracts and the event's host notes), fence it, and call the model with the fact slots as given values. Output schema: `subject`, `body`, and `usedFacts` echoing the slots. The schema forbids the model from returning a date, time or venue string of its own — facts are substituted by code after the model answers, into named placeholders the model is told to leave intact. Validate that every placeholder survived; a missing one is a validation failure and goes back through the existing ladder.
 
 ### 5.5 `requestApproval` — `interrupt()`
+
 Per the autonomy table (§6). The payload is the list of drafts with their recipient, kind and reason — not the graph state.
 
 ### 5.6 `persistDrafts`
+
 Upsert by `idempotencyKey`; status `approved` for approved drafts, `draft` for the auto ones; create tasks for `blocked` items. Idempotent on resume.
 
 ## 6. Autonomy and what approval means with no sending
@@ -108,10 +117,11 @@ Add to the existing table:
 
 ```
 draft_speaker_message        -> auto
-first_contact_message        -> approve      // speaker has no prior sent message for any event
 chase_in_existing_thread     -> auto         // prior sent message exists, chase limit not reached
 thank_you_message            -> approve      // it carries thanks on MUG's behalf
 ```
+
+There is **no `first_contact_message` row.** It was `approve`; it is replaced by a structural guarantee, because a message to someone we have never written to should not exist to be approved: no code path can produce a message to a speaker who has no prior sent message for any event. Three layers, asserted the way `no-delete` is (tests that fail if such an action can be emitted, not a policy that asks): the types (`PlannedAction.kind` excludes `invitation`), `decideActions` (nothing for a speaker without a prior sent message), and the store (a draft for one is refused at the write). See `test/unit/speakers-no-first-contact.test.ts`.
 
 **Be honest about what this buys today.** With no sending channel I read every message when I copy it, so approval is not protecting against an unseen send. What it buys is a **work queue**: `approved` means "send this now", `draft` means "written, not reviewed". That distinction is useful by itself, and M4 can turn on sending by consuming `approved` with no redesign. Do not build any approval ceremony beyond that one status distinction.
 
@@ -141,8 +151,9 @@ npm run speakers -- candidates --event <id> --topic "..."   # M3's suggestSpeake
 
 The project doc asks for trajectory tests. Build the harness here, with a stub model and a frozen clock, since the question is which path the graph took, not what the text said:
 
-- **Speaker never replies:** chases at the right days, stops at `CHASE_MAX_ROUNDS`, creates the task, writes no third message.
-- **Speaker confirms late:** after `status --set confirmed`, the next run drafts no invitation and no chase for that kind.
+- **An `idea` speaker is a task, not a draft:** at T-6w one `Reach out to ...` task, zero messages, no model call, however often it runs.
+- **Speaker never replies:** starts from `invited` (I wrote to them and recorded it; the agent did not send an invitation). Chases at the right days, stops at `CHASE_MAX_ROUNDS`, creates the task, writes no third message.
+- **Speaker confirms late:** after `status --set confirmed`, the next run drafts no reply chase and moves on to the abstract chase.
 - **Speaker declines:** no further messages of any kind for that event.
 - **Event date moves closer:** actions that were not yet due become due, and none fire twice.
 - **Clock jumps forward a month:** a backlog does not produce more than `MAX_DRAFTS_PER_RUN` drafts.
@@ -167,7 +178,8 @@ Report as a table: scenario, expected path, actual path, pass/fail. `npm run eva
 - [ ] An illegal status transition is refused
 - [ ] A chase is never scheduled for a draft that was never marked `sent`
 - [ ] The agent creates no speaker and alters no speaker identity field or event date/venue/agenda
-- [ ] `npm run eval:speakers` passes all six scenarios
+- [ ] `npm run eval:speakers` passes every scenario
+- [ ] An `idea` speaker at T-6w produces one task and zero drafts; no code path can draft a message to a speaker with no prior sent message (test)
 - [ ] Approval moves a draft to `approved`; resume across processes creates no duplicates
 - [ ] README: the pipeline, the transition table, the chase policy, and the plain statement that the pipeline is only as current as what I have told it
 
