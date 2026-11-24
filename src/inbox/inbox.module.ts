@@ -71,10 +71,13 @@ export const TRIAGER = Symbol('TRIAGER');
       inject: [APP_CONFIG, INBOX_CONFIG],
       useFactory: (c: AppConfig, config: InboxConfig): GmailClient =>
         new LazyGmailClient(() =>
-          ImapGmailClient.fromCredentials(requireImapCredentials(c), [
-            config.label,
-            config.candidateLabel,
-          ]),
+          ImapGmailClient.fromCredentials(
+            requireImapCredentials(c),
+            [config.label, config.candidateLabel],
+            (message, fields) => {
+              new Logger('Inbox').warn(message, fields);
+            },
+          ),
         ),
     },
     {

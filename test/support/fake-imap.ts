@@ -123,7 +123,25 @@ export class FakeImapSession implements ImapSession {
           replyTo: parseAddressList(m.replyTo),
         };
       }
-      if (query['bodyStructure']) {
+      if (query['bodyStructure'] && m.bodyParts) {
+        out.bodyStructure = {
+          type: 'multipart/alternative',
+          childNodes: [
+            ...m.bodyParts.map((p, i) => ({
+              type: p.type,
+              part: String(i + 1),
+              size: p.content.length,
+            })),
+            ...m.attachments.map((a, i) => ({
+              type: a.mimeType,
+              part: String((m.bodyParts?.length ?? 0) + i + 1),
+              disposition: 'attachment',
+              dispositionParameters: { filename: a.filename },
+              size: a.sizeBytes,
+            })),
+          ],
+        };
+      } else if (query['bodyStructure']) {
         out.bodyStructure =
           m.attachments.length === 0
             ? { type: 'text/plain', size: m.body.length }
@@ -155,7 +173,12 @@ export class FakeImapSession implements ImapSession {
     const uid = Number(range);
     this.downloads.push({ path: this.current, uid, part });
     const m = this.here().get(uid);
-    if (!m || part !== '1') return {};
+    if (!m) return {};
+    if (m.bodyParts) {
+      const p = m.bodyParts[Number(part) - 1];
+      return p ? { content: [Buffer.from(p.content)] as unknown as AsyncIterable<Buffer> } : {};
+    }
+    if (part !== '1') return {};
     const body = Buffer.from(m.body);
     return { content: [body] as unknown as AsyncIterable<Buffer> };
   }

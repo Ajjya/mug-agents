@@ -1,4 +1,5 @@
 import { ImapFlow } from 'imapflow';
+import { isStringifiedNothing } from '../domain/inbox.schema.js';
 import { sanitizeTransportError } from './gmail.errors.js';
 import { isForbiddenFolder } from './folders.js';
 import type {
@@ -206,11 +207,14 @@ export class ImapGmailClient implements GmailClient {
     private readonly connect: () => ImapSession,
     private readonly allowedLabels: readonly string[],
     private readonly secrets: readonly string[] = [],
+    /** Counts and ids only: never a subject, an address or any text from a message. */
+    private readonly warn?: (message: string, fields: Record<string, string>) => void,
   ) {}
 
   static fromCredentials(
     creds: ImapCredentials,
     allowedLabels: readonly string[],
+    warn?: (message: string, fields: Record<string, string>) => void,
   ): ImapGmailClient {
     return new ImapGmailClient(
       () =>
@@ -224,6 +228,7 @@ export class ImapGmailClient implements GmailClient {
       allowedLabels,
       // both spellings of an app password: Google shows it in groups of four
       [creds.appPassword, creds.appPassword.replaceAll(/\s+/g, ''), creds.user],
+      warn,
     );
   }
 
@@ -337,7 +342,21 @@ export class ImapGmailClient implements GmailClient {
           if (d.content) for await (const chunk of d.content) text += chunk.toString();
           (p.type === 'plain' ? plain : html).push(text);
         }
-        const text = plain.length > 0 ? plain.join('\n') : stripHtml(html.join('\n'));
+        // A part is usable when it says something: a blank part, or one whose whole text is the string
+        // "undefined" or "null" (a template that printed a missing value), is not. With no usable text/plain,
+        // the text/html part is converted instead; with nothing usable at all the body is '' and we say so.
+        const usable = (t: string): boolean => t.trim() !== '' && !isStringifiedNothing(t);
+        const usablePlain = plain.filter(usable);
+        let text =
+          usablePlain.length > 0
+            ? usablePlain.join('\n')
+            : stripHtml(html.filter(usable).join('\n'));
+        if (!usable(text)) {
+          text = '';
+          this.warn?.('message has no usable body part: stored with an empty body', {
+            gmailId: ref.id,
+          });
+        }
         const meta = this.toMetadata(m, ref);
         const references = headerValue(m.headers, 'references');
         const listUnsubscribe = boundedHeader(headerValue(m.headers, 'list-unsubscribe'));

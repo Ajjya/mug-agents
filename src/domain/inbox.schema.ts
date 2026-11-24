@@ -128,6 +128,16 @@ export const AttachmentSchema = z
   .object({ filename: z.string(), mimeType: z.string(), sizeBytes: z.number().int().min(0) })
   .strict();
 
+/**
+ * A body that is really the text of a missing value: the exact strings "undefined" and "null" (ignoring the
+ * whitespace around them). The extractor once stored "undefined\r\n" for an HTML-only message; this is the
+ * guard that keeps that whole class of bug from being written again.
+ */
+export const isStringifiedNothing = (text: string): boolean => {
+  const t = text.trim();
+  return t === 'undefined' || t === 'null';
+};
+
 export const TRIAGE_STATES = ['pending', 'done', 'failed'] as const;
 export const LINK_STATES = ['unlinked', 'auto', 'confirmed_by_human'] as const;
 
@@ -147,7 +157,12 @@ export const InboundMessageInputSchema = z
     references: z.array(nonEmpty).optional(),
     subject: z.string(),
     /** The full body. Reachable only through the inbox repository's one explicit raw-body accessor. */
-    bodyText: z.string(),
+    bodyText: z
+      .string()
+      .refine(
+        (v) => !isStringifiedNothing(v),
+        'must be the message text, not the string "undefined" or "null"',
+      ),
     /** Exactly what the provider received (redacted, bounded). */
     bodyRedacted: z.string(),
     bodySnippet: z.string(),

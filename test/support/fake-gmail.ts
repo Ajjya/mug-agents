@@ -23,6 +23,11 @@ export interface FixtureMessage {
   replyTo?: string;
   cc?: string;
   body: string;
+  /**
+   * The MIME text parts the IMAP fake serves, when a test needs a shape other than one text/plain part:
+   * an HTML-only message, a plain part that is literally "undefined", or no text part at all (`[]`).
+   */
+  bodyParts?: { type: 'text/plain' | 'text/html'; content: string }[];
   attachments: { filename: string; mimeType: string; sizeBytes: number }[];
   /** The `List-Unsubscribe` header, when the fixture message has one. */
   listUnsubscribe?: string;
