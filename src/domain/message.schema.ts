@@ -24,7 +24,11 @@ export const CHASE_KINDS = [
   'chase_slides',
 ] as const satisfies readonly (typeof MESSAGE_KINDS)[number][];
 
-export const MESSAGE_CHANNELS = ['email'] as const;
+/**
+ * Where a message is delivered. `email` is sent from the user's mailbox; the others are sent by hand (LinkedIn,
+ * WhatsApp, anything else): the SAME drafted text, a human pastes it, and a task makes sure that happens.
+ */
+export const MESSAGE_CHANNELS = ['email', 'linkedin', 'whatsapp', 'other'] as const;
 
 /**
  *  - draft:      written, not reviewed (or reviewed and not needing approval)
@@ -121,6 +125,7 @@ export const MessagePatchSchema = messageBase
   .partial()
   .strict();
 
+export type MessageChannel = (typeof MESSAGE_CHANNELS)[number];
 export type MessageKind = (typeof MESSAGE_KINDS)[number];
 export type ChaseKind = (typeof CHASE_KINDS)[number];
 export type MessageStatus = (typeof MESSAGE_STATUSES)[number];

@@ -38,6 +38,8 @@ const TriageOutputBaseSchema = z
 export const triageOutputLenientSchema = TriageOutputBaseSchema;
 
 export type TriageOutput = z.infer<typeof TriageOutputBaseSchema>;
+/** What the model returns when the sender is already known: everything except `intent`, which code fixed. */
+export type TriageRestOutput = Omit<TriageOutput, 'intent'>;
 
 /** Whitespace-collapsed, case-folded: "verbatim" tolerates a client's line wrapping, not invention. */
 export const normaliseForSearch = (s: string): string =>
@@ -62,8 +64,18 @@ export function fabricatedSpans(mentions: Mentions, text: string): string[] {
  * Built per message, from the text the model was given. Issue messages never echo a span: they end up
  * in stored records and error messages, and must not carry text the model produced.
  */
-export function triageOutputSchema(text: string) {
-  return TriageOutputBaseSchema.superRefine((value, ctx) => {
+export function triageOutputSchema(text: string): z.ZodType<TriageOutput>;
+export function triageOutputSchema(text: string, intentFixed: true): z.ZodType<TriageRestOutput>;
+export function triageOutputSchema(
+  text: string,
+  intentFixed = false,
+): z.ZodType<TriageOutput> | z.ZodType<TriageRestOutput> {
+  const base: z.ZodType<TriageRestOutput> = intentFixed
+    ? // A model told not to emit `intent` sometimes does anyway. Its value is ignored (code fixed the intent):
+      // refusing the whole answer for an ignored field would only cost a retry.
+      TriageOutputBaseSchema.omit({ intent: true }).extend({ intent: z.unknown().optional() })
+    : TriageOutputBaseSchema;
+  return base.superRefine((value, ctx) => {
     for (const where of fabricatedSpans(value.mentions, text)) {
       const [kind, idx] = where.replace(']', '').split('[') as [string, string];
       ctx.addIssue({

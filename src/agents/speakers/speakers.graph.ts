@@ -28,7 +28,8 @@ import type { StructuredCall } from '../../llm/structured.js';
 import type { ChunkView } from '../../retrieval/vector-store.js';
 import type { ApprovalGate } from '../planner/planner.graph.js';
 import { needsApproval } from './autonomy.js';
-import { type ChasePolicy, type Decision, type Redraft, decideActions } from './decide.js';
+import { type ChasePolicy, type Redraft, decideActions } from './decide.js';
+import { type RoutedDecision, channelOf, routeDelivery } from './delivery.js';
 import { pipelineInput } from './pipeline.js';
 import { buildFacts, draftPrompt, draftSchema, requiredSlots, substitute } from './drafting.js';
 import type { DraftRecord, LoadedPipeline, SpeakerPipelineStore } from './speakers.store.js';
@@ -70,7 +71,7 @@ export const SpeakersStateSchema = z.object({
   redraft: z.custom<Redraft[]>().nullable().optional(),
   runId: z.string().optional(),
   pipeline: z.custom<LoadedPipeline>().nullable().optional(),
-  decision: z.custom<Decision>().nullable().optional(),
+  decision: z.custom<RoutedDecision>().nullable().optional(),
   drafts: z.custom<DraftRecord[]>().nullable().optional(),
   /** What persistDrafts did: ids it created, and the ones awaiting approval. */
   created: z.array(z.string()).nullable().optional(),
@@ -89,6 +90,8 @@ export const SpeakersStateSchema = z.object({
     .register(registry, { reducer: { fn: concat }, default: () => [] }),
 });
 export type SpeakersState = z.infer<typeof SpeakersStateSchema>;
+
+const PENDING_STATUSES: readonly string[] = ['draft', 'approved'];
 
 const nowOf = (state: SpeakersState): Date => (state.nowIso ? new Date(state.nowIso) : new Date());
 
@@ -123,7 +126,20 @@ export function decide(deps: SpeakersGraphDeps, state: SpeakersState): Partial<S
   const p = state.pipeline;
   if (!p) throw new Error('decideActions ran before loadPipeline');
   return {
-    decision: decideActions(pipelineInput(p, nowOf(state), deps.policy, state.redraft ?? [])),
+    // WHAT is due is decided with no draft cap and no idea of channels; HOW it is delivered (and the cap on
+    // drafts) comes after, so a speaker nobody can reach cannot use up the cap.
+    decision: routeDelivery(
+      decideActions(
+        pipelineInput(
+          p,
+          nowOf(state),
+          { ...deps.policy, maxDraftsPerRun: Number.MAX_SAFE_INTEGER },
+          state.redraft ?? [],
+        ),
+      ),
+      p.speakers,
+      deps.policy.maxDraftsPerRun,
+    ),
   };
 }
 
@@ -177,6 +193,8 @@ export async function draftMessages(
       body: filled.body,
       facts: filled.facts,
       needsApproval: needsApproval(action.kind, p.priorSent.includes(speaker._id)),
+      // The SAME text whatever the channel: a person pastes it into LinkedIn or WhatsApp.
+      channel: channelOf(action.delivery) ?? 'email',
     });
   }
   return { drafts, calls };
@@ -193,15 +211,26 @@ export async function persistDrafts(
   requireAutonomy('draft_speaker_message');
   const created: string[] = [];
   const existing: string[] = [];
+  let tasksCreated = 0;
   for (const draft of state.drafts) {
     const r = await deps.store.upsertDraft(draft);
     (r.created ? created : existing).push(r.message._id);
+    // A draft for a channel a person sends by hand comes with a task, so it cannot be forgotten.
+    if (r.message.channel !== 'email' && PENDING_STATUSES.includes(r.message.status)) {
+      const name = p.speakers.find((s) => s._id === draft.speakerId)?.name ?? draft.speakerId;
+      if ((await deps.store.ensureSendTask(r.message, name)).created) tasksCreated++;
+    }
   }
   const superseded: string[] = [];
   for (const s of d.supersede)
     if (await deps.store.supersede(s.messageId)) superseded.push(s.messageId);
   requireAutonomy('create_task');
-  let tasksCreated = 0;
+  // Due, but nobody can be reached: one task to find contact details, and no draft at all.
+  for (const nc of d.noContact) {
+    const name = p.speakers.find((x) => x._id === nc.speakerId)?.name ?? nc.speakerId;
+    if ((await deps.store.ensureFindContactTask(p.event._id, nc.speakerId, name)).created)
+      tasksCreated++;
+  }
   for (const b of d.blocked) {
     const name = p.speakers.find((s) => s._id === b.speakerId)?.name ?? b.speakerId;
     if ((await deps.store.ensureBlockedTask(p.event._id, b, name)).created) tasksCreated++;

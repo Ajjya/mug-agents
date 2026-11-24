@@ -119,7 +119,8 @@ describe('poll -> store -> triage -> link on MongoDB, with a fake Gmail and a st
     });
     const w = await speakers.insert({
       name: 'Wendeline Gooseberry',
-      email: 'wendeline@speakers.invalid',
+      emails: ['wendeline@speakers.invalid'],
+      handles: {},
       topics: [],
       links: {},
       perEvent: [{ eventId: event._id, status: 'invited', updatedAt: '2026-10-01T00:00:00.000Z' }],

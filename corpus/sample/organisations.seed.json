@@ -1,0 +1,11 @@
+{
+  "organisations": [
+    {
+      "name": "The Cogwheel Annex",
+      "kind": "venue",
+      "capacity": 80,
+      "address": "1 Marmalade Row, Gearton"
+    },
+    { "name": "Sprocket & Grommet Works", "kind": "sponsor", "notes": "Fictional sample sponsor." }
+  ]
+}

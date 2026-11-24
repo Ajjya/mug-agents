@@ -337,12 +337,12 @@ export function speakersContract(create: Factory<SpeakersRepository>): void {
       input: (n) =>
         speakerInput({
           name: `Speaker ${String(n)}`,
-          email: `s${String(n)}-${String(seq++)}@example.com`,
+          emails: [`s${String(n)}-${String(seq++)}@example.com`],
         }),
       patch: { bio: 'Hello' },
       patched: ['bio', 'Hello'],
       unknownFieldInput: { ...speakerInput(), surprise: 1 },
-      invalidPatch: { email: 'bad' },
+      invalidPatch: { emails: ['bad'] },
     });
 
     describe('finders and rules', () => {
@@ -352,8 +352,8 @@ export function speakersContract(create: Factory<SpeakersRepository>): void {
       });
 
       it('lower-cases emails on write; findByEmail is case-insensitive', async () => {
-        const doc = await repo.insert(speakerInput({ email: 'Ada@Example.COM' }));
-        expect(doc.email).toBe('ada@example.com');
+        const doc = await repo.insert(speakerInput({ emails: ['Ada@Example.COM'] }));
+        expect(doc.emails).toEqual(['ada@example.com']);
         expect((await repo.findByEmail('ADA@example.com'))?._id).toBe(doc._id);
         expect(await repo.findByEmail('nobody@example.com')).toBeNull();
         expect(await repo.findByEmail('not an email')).toBeNull();
@@ -373,21 +373,21 @@ export function speakersContract(create: Factory<SpeakersRepository>): void {
       });
 
       it('a duplicate email (any case) on insert throws DuplicateKeyError naming the key', async () => {
-        await repo.insert(speakerInput({ email: 'dup@example.com' }));
+        await repo.insert(speakerInput({ emails: ['dup@example.com'] }));
         const err = await repo
-          .insert(speakerInput({ email: 'DUP@example.com' }))
+          .insert(speakerInput({ emails: ['DUP@example.com'] }))
           .catch((e: unknown) => e);
         expect(err).toBeInstanceOf(DuplicateKeyError);
-        expect(err).toMatchObject({ collection: 'speakers', keyPattern: { email: 1 } });
+        expect(err).toMatchObject({ collection: 'speakers', keyPattern: { emails: 1 } });
         expect((err as Error).message).not.toContain('dup@example.com'); // no personal data
         expect(await repo.count()).toBe(1);
       });
 
       it('a duplicate email on update throws DuplicateKeyError and changes nothing', async () => {
-        await repo.insert(speakerInput({ name: 'A', email: 'a@example.com' }));
-        const b = await repo.insert(speakerInput({ name: 'B', email: 'b@example.com' }));
+        await repo.insert(speakerInput({ name: 'A', emails: ['a@example.com'] }));
+        const b = await repo.insert(speakerInput({ name: 'B', emails: ['b@example.com'] }));
         await expect(
-          repo.updateById(b._id, { email: 'a@example.com' }, b.version),
+          repo.updateById(b._id, { emails: ['a@example.com'] }, b.version),
         ).rejects.toBeInstanceOf(DuplicateKeyError);
         expect(await repo.findById(b._id)).toEqual(b);
       });

@@ -1,0 +1,30 @@
+{
+  "id": "f12",
+  "source": "fictional",
+  "seededBy": "hand",
+  "attachments": [],
+  "body": "Hey,\n\nI drafted the run-of-show for the winter meetup: doors 18:00, two talks, a break, one lightning round. Can you check the timings and tell me who is handling the slides laptop?\n\nThanks,\nA fellow organiser at Sample City MUG",
+  "expected": {
+    "intent": {
+      "value": "coorganiser",
+      "status": "verified"
+    },
+    "sentiment_decision": {
+      "value": "asks_question",
+      "status": "verified"
+    },
+    "materials": {
+      "value": {
+        "abstract": false,
+        "bio": false,
+        "photo": false,
+        "slides": false
+      },
+      "status": "verified"
+    },
+    "needs_human": {
+      "value": false,
+      "status": "verified"
+    }
+  }
+}

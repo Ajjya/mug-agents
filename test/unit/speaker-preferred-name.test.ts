@@ -27,7 +27,7 @@ const facts = (speaker: { name: string; preferredName?: string }) =>
 
 describe('preferredName', () => {
   it('is optional and cannot be blank', () => {
-    const base = { name: 'A', topics: [], links: {}, perEvent: [] };
+    const base = { name: 'A', emails: [], handles: {}, topics: [], links: {}, perEvent: [] };
     expect(SpeakerInputSchema.safeParse(base).success).toBe(true);
     expect(SpeakerInputSchema.safeParse({ ...base, preferredName: 'Al' }).success).toBe(true);
     expect(SpeakerInputSchema.safeParse({ ...base, preferredName: '  ' }).success).toBe(false);

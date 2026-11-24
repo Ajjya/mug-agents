@@ -29,7 +29,14 @@ export const INDEXES: Record<CollectionName, IndexDescription[]> = {
     { key: { phase: 1 }, name: 'events_phase' },
   ],
   speakers: [
-    { key: { email: 1 }, name: 'speakers_email_unique', unique: true, sparse: true },
+    // Multikey and unique across speakers. An EMPTY array is indexed too (as one `undefined` key), which a plain
+    // unique index would reject for the second speaker with no address: only documents with a string are indexed.
+    {
+      key: { emails: 1 },
+      name: 'speakers_emails_unique',
+      unique: true,
+      partialFilterExpression: { emails: { $type: 'string' } },
+    },
     { key: { handle: 1 }, name: 'speakers_handle_unique', unique: true, sparse: true },
     // The pipeline query: every speaker with an entry for an event (findByEventId). Multikey.
     { key: { 'perEvent.eventId': 1 }, name: 'speakers_perEvent_eventId' },

@@ -66,6 +66,7 @@ export const TEST_INBOX_CONFIG: InboxConfig = {
   triageMaxChars: 6000,
   sweepMaxPages: 20,
   sweepPageSize: 200,
+  documentShareSenders: ['drive-shares-dm-noreply@google.com'],
 };
 
 export interface InboxHarness {

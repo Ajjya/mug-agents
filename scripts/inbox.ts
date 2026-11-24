@@ -1,15 +1,20 @@
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { userInfo } from 'node:os';
 import { parseArgs } from 'node:util';
 import { z } from 'zod';
 import { ConfigError } from '../src/config/env.schema.js';
 import { GmailTransportError } from '../src/inbox/gmail.errors.js';
+import { CONTACT_ROLES } from '../src/domain/inbox.schema.js';
 import {
   GoldenNotVerifiedError,
   UntrackedPathRequiredError,
+  assertNotTracked,
   checkGolden,
   exportGolden,
 } from '../src/inbox/golden.js';
-import { formatPollReport } from '../src/inbox/format.js';
+import { renderValidation, validateRules } from '../src/inbox/rule-validation.js';
+import { formatPollReport, formatTriageRouting } from '../src/inbox/format.js';
 import type { GmailClient } from '../src/inbox/gmail.transport.js';
 import { GMAIL_CLIENT, INBOX_CONFIG, InboxModule, TRIAGER } from '../src/inbox/inbox.module.js';
 import {
@@ -55,9 +60,20 @@ with EXAMINE, and INBOX and [Gmail]/All Mail are never opened.
   include-thread <threadId>               lift an exclusion
   list [--limit n]                        stored messages: id, date, sender, triage, link
   show <messageId> [--raw]                one message and its summary; --raw prints the stored body
-  link <messageId> --speaker <id> --event <id>
-                                          link a message to a speaker and event (pauses chasing)
+  link <messageId> --speaker <id> --event <id> [--adopt-address]
+                                          link a message to a speaker and event (pauses chasing).
+                                          --adopt-address also records the sender's address on the speaker
+                                          (the only way an address is added; without it nothing about the speaker changes)
   retry-triage <messageId>                run triage again for a message whose triage failed
+  retriage                                run EVERY stored message through the current triage (lookup, rules,
+                                          then the model for what is left). Raises no tasks
+  backfill-structure                      read List-Unsubscribe and the calendar part of stored messages that
+                                          pre-date them (headers and BODYSTRUCTURE only: no body, read-only)
+  set-role <address> <role>               what a sender IS to us; roles: ${CONTACT_ROLES.join(' | ')}.
+                                          A known sender fixes the intent with no model call
+  import-roles --file <json>              {"address": "role", ...}; the file holds addresses: keep it git-ignored
+  validate-rules [--out <md>]             where the rules and the model's earlier verdicts disagree (names
+                                          senders and subjects: --out must be git-ignored)
   export-golden --out <dir> [--mapping <file>] [--limit n]
                                           anonymised bodies + the model's proposed labels, all "unverified"
   check-golden <dir>                      how many golden fields are still unverified (the eval refuses them)
@@ -75,9 +91,11 @@ const { values, positionals } = parseArgs({
     limit: { type: 'string' },
     raw: { type: 'boolean' },
     speaker: { type: 'string' },
+    'adopt-address': { type: 'boolean' },
     event: { type: 'string' },
     out: { type: 'string' },
     mapping: { type: 'string' },
+    file: { type: 'string' },
     help: { type: 'boolean', short: 'h' },
   },
 });
@@ -176,6 +194,8 @@ runCli(
         })) {
           console.log(line);
         }
+        if (values['dry-run'] !== true)
+          for (const line of formatTriageRouting(r)) console.log(line);
         return 0;
       }
       case 'candidates': {
@@ -274,7 +294,14 @@ runCli(
       }
       case 'link': {
         if (!target || !values.speaker || !values.event) return usage();
-        const m = await inbox.link(target, values.speaker, values.event);
+        const m = await inbox.link(target, values.speaker, values.event, {
+          adoptAddress: values['adopt-address'] === true,
+        });
+        if (m.adoptedAddress) {
+          console.log(
+            `Recorded the sender's address on the speaker: their next message will be an email draft.`,
+          );
+        }
         console.log(
           `Linked ${m._id} to speaker ${values.speaker} for event ${values.event} (confirmed by you). Chasing for that speaker and event is paused until you act.`,
         );
@@ -284,6 +311,62 @@ runCli(
         if (!target) return usage();
         const m = await inbox.retryTriage(target);
         console.log(`Triage is now: ${m.triageState}`);
+        return 0;
+      }
+      case 'retriage': {
+        const r = await inbox.retriage();
+        console.log(
+          `Triaged ${String(r.triaged)}; triage failed ${String(r.triageFailed)}; left pending (provider outage) ${String(r.triagePending)}.`,
+        );
+        console.log(`Considered ${String(r.considered)} stored message(s).`);
+        for (const line of formatTriageRouting(r)) console.log(line);
+        return 0;
+      }
+      case 'backfill-structure': {
+        const r = await inbox
+          .backfillStructure()
+          .finally(() => app.get<GmailClient>(GMAIL_CLIENT, { strict: false }).close());
+        console.log(
+          `Needed ${String(r.needed)}; checked ${String(r.checked)} (List-Unsubscribe on ${String(r.withListUnsubscribe)}, calendar part on ${String(r.withCalendarPart)}); not found in either label folder ${String(r.notFound)}.`,
+        );
+        return 0;
+      }
+      case 'set-role': {
+        const role = positionals[2];
+        if (!target || !role || !(CONTACT_ROLES as readonly string[]).includes(role)) {
+          console.error(`role must be one of: ${CONTACT_ROLES.join(', ')}`);
+          return 2;
+        }
+        const r = await inbox.setContactRole(target, role as (typeof CONTACT_ROLES)[number], by);
+        console.log(`${target}: ${role} (${r}).`);
+        return 0;
+      }
+      case 'import-roles': {
+        if (!values.file) return usage();
+        assertNotTracked(values.file);
+        const raw: unknown = JSON.parse(readFileSync(values.file, 'utf8'));
+        const map = z.record(z.string(), z.enum(CONTACT_ROLES)).parse(raw);
+        const counts = { created: 0, updated: 0, unchanged: 0 };
+        for (const [address, role] of Object.entries(map)) {
+          counts[await inbox.setContactRole(address, role, by)]++;
+        }
+        console.log(
+          `Roles imported: ${String(counts.created)} contacts created, ${String(counts.updated)} updated, ${String(counts.unchanged)} unchanged.`,
+        );
+        return 0;
+      }
+      case 'validate-rules': {
+        const report = validateRules(await inbox.validationInputs());
+        const md = renderValidation(report);
+        if (values.out) {
+          assertNotTracked(values.out);
+          mkdirSync(dirname(values.out), { recursive: true });
+          writeFileSync(values.out, `${md}\n`);
+          console.log(`Wrote ${values.out} (names senders and subjects: it is git-ignored).`);
+        }
+        console.log(
+          `${String(report.modelNoise)} model-noise message(s): rules agree on ${String(report.noiseVerdicts.caughtAsNoise)}, say something else on ${String(report.noiseVerdicts.ruleSaysOther)}, no rule matched ${String(report.noiseVerdicts.notCaught)}, not judged ${String(report.noiseVerdicts.unjudged)}. ${String(report.disagreements.length)} disagreement(s) in total.`,
+        );
         return 0;
       }
       case 'export-golden': {

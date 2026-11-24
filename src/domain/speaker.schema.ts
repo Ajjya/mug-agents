@@ -11,6 +11,21 @@ export const SPEAKER_STATUSES = [
   'declined',
 ] as const;
 
+/**
+ * How to reach a speaker where email does not (yet) apply. First contact is usually a person on LinkedIn;
+ * an address appears later, for some, when they reply. A speaker with handles and no email is the normal
+ * first state, not an error.
+ */
+export const SPEAKER_HANDLE_KINDS = ['linkedin', 'whatsapp', 'other'] as const;
+export type SpeakerHandleKind = (typeof SPEAKER_HANDLE_KINDS)[number];
+export const SpeakerHandlesSchema = z
+  .object({
+    linkedin: nonEmpty.optional(),
+    whatsapp: nonEmpty.optional(),
+    other: nonEmpty.optional(),
+  })
+  .strict();
+
 export const SpeakerLinksSchema = z
   .object({
     linkedin: z.url().optional(),
@@ -49,8 +64,15 @@ export const SpeakerInputSchema = z
       .string()
       .regex(SPEAKER_HANDLE_RE, 'must be a lower-case slug like "ana-ferreira"')
       .optional(),
-    // Lower-cased so the unique index on email is effectively case-insensitive.
-    email: z.email().toLowerCase().optional(),
+    /**
+     * Every address this person writes from: may be empty, lower-cased (so the unique index is effectively
+     * case-insensitive), unique across speakers. Added by a human (`inbox link --adopt-address`), never
+     * guessed and never written by an agent.
+     */
+    emails: z
+      .array(z.email().toLowerCase())
+      .refine((a) => new Set(a).size === a.length, 'must not repeat an address'),
+    handles: SpeakerHandlesSchema,
     topics: z.array(nonEmpty),
     bio: z.string().optional(),
     photoUrl: z.url().optional(),

@@ -18,6 +18,8 @@ export const eventInput = (over: Partial<EventInput> = {}): EventInput => ({
 
 export const speakerInput = (over: Partial<SpeakerInput> = {}): SpeakerInput => ({
   name: 'Ada Lovelace',
+  emails: [],
+  handles: {},
   topics: ['aggregation'],
   links: {},
   perEvent: [],

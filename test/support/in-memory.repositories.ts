@@ -242,11 +242,11 @@ export class InMemorySpeakersRepository
   constructor() {
     super({ input: SpeakerInputSchema, doc: SpeakerSchema, patch: SpeakerPatchSchema });
   }
-  /** MongoDB enforces these with the unique sparse indexes on email and handle. */
+  /** MongoDB enforces these with the unique indexes on emails and handle. */
   protected override beforeWrite(next: Speaker): void {
     const others = this.all().filter((s) => s._id !== next._id);
-    if (next.email !== undefined && others.some((s) => s.email === next.email)) {
-      throw new DuplicateKeyError('speakers', { email: 1 });
+    if (next.emails.some((e) => others.some((s) => s.emails.includes(e)))) {
+      throw new DuplicateKeyError('speakers', { emails: 1 });
     }
     if (next.handle !== undefined && others.some((s) => s.handle === next.handle)) {
       throw new DuplicateKeyError('speakers', { handle: 1 });
@@ -256,8 +256,9 @@ export class InMemorySpeakersRepository
     const normalised = normaliseEmail(email);
     if (normalised === null) return null;
     return (
-      (await this.findMany({ limit: MAX_PAGE_SIZE })).items.find((s) => s.email === normalised) ??
-      null
+      (await this.findMany({ limit: MAX_PAGE_SIZE })).items.find((s) =>
+        s.emails.includes(normalised),
+      ) ?? null
     );
   }
   async findByEventId(eventId: EntityId, options?: FindManyOptions): Promise<Page<Speaker>> {
@@ -289,6 +290,10 @@ export class InMemoryOrganisationsRepository
   async findByKind(kind: OrganisationKind, options?: FindManyOptions): Promise<Page<Organisation>> {
     const valid = OrganisationInputSchema.shape.kind.parse(kind);
     return this.where((d) => d.kind === valid, options);
+  }
+  async findByNameAndKind(name: string, kind: OrganisationKind): Promise<Organisation | null> {
+    const page = await this.findByKind(kind, { limit: 1000 });
+    return page.items.find((d) => d.name === name) ?? null;
   }
 }
 
@@ -641,6 +646,25 @@ export class InMemoryInboundMessagesRepository implements InboundMessagesReposit
     this.docs.set(view.data._id, view.data);
     this.bodies.set(view.data._id, bodyText);
     return { message: structuredClone(view.data), created: true };
+  }
+  /** Test lever: a message stored before the structure fields existed. */
+  clearStructure(id: EntityId): void {
+    const d = this.docs.get(id.toLowerCase());
+    if (!d) return;
+    delete d.listUnsubscribe;
+    delete d.hasCalendarPart;
+    delete d.structureCheckedAt;
+  }
+  /** Test lever: the stored verdict is the model's, with this intent (what a pre-rules run left behind). */
+  forceIntent(gmailId: string, intent: string): void {
+    const d = [...this.docs.values()].find((x) => x.gmailId === gmailId);
+    if (!d?.triage) return;
+    d.triage = {
+      ...d.triage,
+      intent: intent as never,
+      model: 'ollama:stub-triage',
+      decidedBy: 'model',
+    };
   }
   async findById(id: EntityId) {
     const d = isEntityId(id) ? this.docs.get(id.toLowerCase()) : undefined;

@@ -33,7 +33,7 @@ export interface SpeakersRepository extends Repository<SpeakerInput, Speaker, Sp
 
 /** The same normalisation the schema applies on write (trim/lower-case + format check). */
 export function normaliseEmail(email: string): string | null {
-  const emailSchema = SpeakerInputSchema.shape.email.unwrap();
+  const emailSchema = SpeakerInputSchema.shape.emails.element;
   const result = emailSchema.safeParse(email.trim());
   return result.success ? result.data : null;
 }
@@ -54,7 +54,7 @@ export class MongoSpeakersRepository
   async findByEmail(email: string): Promise<Speaker | null> {
     const normalised = normaliseEmail(email);
     if (normalised === null) return null;
-    const page = await this.findWhere({ email: normalised }, { limit: 1 });
+    const page = await this.findWhere({ emails: normalised }, { limit: 1 });
     return page.items[0] ?? null;
   }
 

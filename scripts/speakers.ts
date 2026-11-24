@@ -106,7 +106,16 @@ runCli(
         const d = r.decision;
         console.log(`PLANNED (${String(d?.actions.length ?? 0)})`);
         for (const a of d?.actions ?? []) {
-          console.log(`  ${a.speakerId}  ${a.kind} #${String(a.round)}  ${a.reason}`);
+          console.log(
+            `  ${a.speakerId}  ${a.kind} #${String(a.round)}  [${a.delivery.replace(':', ' on ')}${a.delivery === 'email' ? '' : ', by hand'}]  ${a.reason}`,
+          );
+        }
+        if (d && d.noContact.length > 0) {
+          console.log(
+            `\nNO CONTACT DETAILS (${String(d.noContact.length)}): due, but no address or handle; one task each, no draft`,
+          );
+          for (const a of d.noContact)
+            console.log(`  ${a.speakerId}  ${a.kind} #${String(a.round)}`);
         }
         if (d && d.blocked.length > 0) {
           console.log(
@@ -164,11 +173,13 @@ runCli(
       }
       case 'show': {
         if (!target) return usage();
-        const { message: m, speakerName, email } = await service.show(target);
+        const { message: m, speakerName, emails, handles } = await service.show(target);
         console.log(
           `Message ${m._id}  [${m.status}]${m.needsApproval ? '  (first contact: needs approval)' : ''}`,
         );
-        console.log(`  to ${speakerName}${email ? ` <${email}>` : ''}`);
+        console.log(
+          `  to ${speakerName} on ${m.channel}${emails[0] ? ` <${emails[0]}>` : ''}${m.channel !== 'email' ? ` (${handles[m.channel] ?? 'no handle'})` : ''}`,
+        );
         console.log(`  ${m.kind} round ${String(m.round)}; ${m.reason}`);
         if (m.sentAt) console.log(`  sent ${m.sentAt} by ${m.sentBy ?? '?'}`);
         if (m.rejectionReason)

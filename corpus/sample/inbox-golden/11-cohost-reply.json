@@ -1,0 +1,30 @@
+{
+  "id": "f11",
+  "source": "fictional",
+  "seededBy": "hand",
+  "attachments": [],
+  "body": "Hi,\n\nThe Gearton Gophers user group would be glad to co-host the December meetup with you. We can bring about 30 members and handle the second round of drinks. Shall we split the promotion between our two newsletters?\n\nCheers,\nThe Gearton Gophers organisers\n\n-- \nGearton Gophers User Group\nhttps://gophers.example.invalid",
+  "expected": {
+    "intent": {
+      "value": "cohost_reply",
+      "status": "verified"
+    },
+    "sentiment_decision": {
+      "value": "accepts",
+      "status": "verified"
+    },
+    "materials": {
+      "value": {
+        "abstract": false,
+        "bio": false,
+        "photo": false,
+        "slides": false
+      },
+      "status": "verified"
+    },
+    "needs_human": {
+      "value": false,
+      "status": "verified"
+    }
+  }
+}

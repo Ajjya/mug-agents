@@ -58,6 +58,7 @@ with a list of every problem.
 | `IMAP_USER` / `IMAP_APP_PASSWORD`                 | to read Gmail       | –                                                             | A Gmail address and an **app password** (see Inbox). Secrets: never logged, never in an error                |
 | `IMAP_HOST` / `IMAP_PORT`                         | no                  | `imap.gmail.com` / `993`                                      | The IMAP server (TLS)                                                                                        |
 | `TRIAGE_START_MODEL`                              | no                  | `ollama:gpt-oss:20b`                                          | Ladder rung triage starts on (must be in `LLM_MODEL_LADDER`)                                                 |
+| `INBOX_DOCUMENT_SHARE_SENDERS`                    | no                  | Google drive/docs notification senders                        | Addresses or `@domain`, comma-separated: mail from them is `document_share`, decided in code with no model   |
 | `TRIAGE_MAX_CHARS`                                | no                  | `6000`                                                        | Bound on the redacted text a triage prompt carries (cut from the end, with a marker)                         |
 | `GMAIL_SWEEP_MAX_PAGES` / `GMAIL_SWEEP_PAGE_SIZE` | no                  | `20` / `200`                                                  | UIDs read per page, and pages per folder per poll: bounds a first backfill and a UIDVALIDITY re-sweep        |
 | `LLM_MAX_ATTEMPTS`                                | no                  | 2 × ladder length                                             | Total provider calls per structured call; must let every rung be reached (3 rungs need ≥ 5), else boot fails |
@@ -318,6 +319,7 @@ Ingestion fails on a file without a manifest entry, an entry without a file, or 
 
 ```bash
 npm run seed-speakers -- --corpus corpus/sample   # idempotent by handle; seeds BEFORE ingest
+npm run seed-organisations -- --corpus corpus/sample   # venues, sponsors, groups; idempotent by (name, kind)
 npm run ingest -- --corpus corpus/sample          # chunks + local embeddings; writes chunks only
 ```
 
@@ -407,6 +409,24 @@ no-answer correctness, forbidden (personal) documents returned, latency and corp
 a matrix dimension (`EVAL_EMBEDDERS`), one value today.
 
 ## Speakers agent (M3b)
+
+**How a message reaches a speaker (delivery).** The channel is not a property of a speaker but of the stage of the
+relationship: first contact is usually a person on LinkedIn, and an address appears later, for some, when they reply.
+A speaker has `emails` (may be empty, lower-cased, unique across speakers) and `handles` (`linkedin`, `whatsapp`,
+`other`); a speaker with handles and no email is the normal first state. `decideActions` decides only WHAT is due and
+knows nothing about channels. Afterwards `chooseDelivery` reads what we know now: an address -> `email` (a draft, as
+always); no address but a handle -> `manual:<handle>`: the SAME drafted text is stored with channel `linkedin` /
+`whatsapp` / `other`, plus a task "Send to <name> on <channel>" (closed when you mark the message sent or it is
+superseded); nothing at all -> no draft and one task "Find contact details for <name>". The draft cap counts only what
+can actually be drafted. Chase rounds and intervals are the same on every channel, so nobody is chased forever.
+
+On manual channels nothing reads replies: record them yourself. `speakers sent <messageId>` (or `speakers sent
+--speaker ... --kind ... --on <date>` for something you sent outside the system, stored with the speaker's current
+channel) starts the chase clock; `speakers status --set` records what happened. When someone replies by email,
+`npm run inbox -- link <messageId> --speaker <id> --event <id> --adopt-address` also records the sender's address on the
+speaker, so their next message is an email draft. Without `--adopt-address` nothing about the speaker changes, and the
+agent never writes a speaker's identity fields. Seed `handles` in `speakers.seed.json`; addresses are never seeded.
+Existing databases: `npm run migrate-speaker-contacts` (once; moves `email` into `emails`).
 
 Runs the speaker pipeline for one event: knows who is at which stage, decides what is overdue, drafts
 the messages, and stops for approval where the autonomy table says so. **It sends nothing.** There is no

@@ -1,9 +1,14 @@
 import { formatModelRef } from '../config/env.schema.js';
-import type { TriageSummary } from '../domain/inbox.schema.js';
+import type { DecidedBy, TriageSummary } from '../domain/inbox.schema.js';
 import type { LlmCallRecord } from '../llm/model.types.js';
 import { StructuredOutputError } from '../llm/errors.js';
 import type { StructuredCall } from '../llm/structured.js';
-import { type AttachmentInfo, crossCheckMaterials, triageOutputSchema } from './triage.schema.js';
+import {
+  type AttachmentInfo,
+  type TriageOutput,
+  crossCheckMaterials,
+  triageOutputSchema,
+} from './triage.schema.js';
 
 /**
  * The ONE model call that ever sees a mail body (spec 5.1), and it sees the REDACTED body (spec 2):
@@ -12,7 +17,11 @@ import { type AttachmentInfo, crossCheckMaterials, triageOutputSchema } from './
  *  - the body is fenced and declared to be data to describe, never instructions to follow.
  * Nothing here returns the text it was given: the result is the validated summary and call records.
  */
-export function triagePrompt(redactedBody: string, attachments: readonly AttachmentInfo[]): string {
+export function triagePrompt(
+  redactedBody: string,
+  attachments: readonly AttachmentInfo[],
+  fixedIntent?: TriageSummary['intent'],
+): string {
   // Attachment filenames can carry names, so the model gets only the kinds, never the names.
   const kinds =
     attachments.length === 0
@@ -25,7 +34,11 @@ export function triagePrompt(redactedBody: string, attachments: readonly Attachm
     `<<<EMAIL>>>\n${redactedBody}\n<<<END EMAIL>>>`,
     [
       'Fill the fields as follows.',
-      '- intent: what kind of mail this is.',
+      ...(fixedIntent
+        ? [
+            `- The sender is already known and the kind of mail is settled (${fixedIntent}). Do NOT output an intent field.`,
+          ]
+        : ['- intent: what kind of mail this is.']),
       '- sentiment_decision: whether the sender accepts, declines, asks a question, sends material, or it is unclear.',
       '- mentions: dates, people and organisations the text mentions, each copied EXACTLY as written in the email (a span you can find in the text). Do not normalise a date, do not invent a name, and leave a list empty rather than guess.',
       '- materials: which of abstract, bio, photo and slides the sender says they are providing.',
@@ -34,6 +47,12 @@ export function triagePrompt(redactedBody: string, attachments: readonly Attachm
       '- confidence: low, medium or high.',
     ].join('\n'),
   ].join('\n\n');
+}
+
+/** Set by code when the sender is known: the model is then not asked for `intent`. */
+export interface FixedIntent {
+  intent: TriageSummary['intent'];
+  decidedBy: DecidedBy;
 }
 
 export type TriageOutcome =
@@ -55,20 +74,33 @@ export class Triager {
    * model's raw output), NOT an exception: the message is still stored and still pauses chasing. A
    * provider outage is thrown (ProviderUnavailableError) so the message stays pending for the next poll.
    */
-  async run(redactedBody: string, attachments: readonly AttachmentInfo[]): Promise<TriageOutcome> {
+  async run(
+    redactedBody: string,
+    attachments: readonly AttachmentInfo[],
+    fixed?: FixedIntent,
+  ): Promise<TriageOutcome> {
     try {
-      const r = await this.options.call(
-        triageOutputSchema(redactedBody),
-        triagePrompt(redactedBody, attachments),
-        { node: 'triage', startAt: this.options.startAt },
-      );
+      const options = { node: 'triage', startAt: this.options.startAt };
+      const r = fixed
+        ? await this.options.call(
+            triageOutputSchema(redactedBody, true),
+            triagePrompt(redactedBody, attachments, fixed.intent),
+            options,
+          )
+        : await this.options.call(
+            triageOutputSchema(redactedBody),
+            triagePrompt(redactedBody, attachments),
+            options,
+          );
       return {
         ok: true,
         calls: r.calls,
         summary: {
           ...r.value,
+          intent: fixed ? fixed.intent : (r.value as TriageOutput).intent,
           attachmentChecks: crossCheckMaterials(r.value.materials, attachments),
           model: formatModelRef(r.model),
+          decidedBy: fixed ? fixed.decidedBy : 'model',
         },
       };
     } catch (err) {

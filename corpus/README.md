@@ -42,9 +42,16 @@ Both roots have the same layout; every command takes the root as an argument (`-
 
 ## speakers.seed.json
 
-`{ "speakers": [ { "handle", "name", "topics", "links", "perEvent" } ] }`. No email addresses in git.
+`{ "speakers": [ { "handle", "name", "topics", "links", "perEvent", "handles"? } ] }`. `handles` (`linkedin`, `whatsapp`, `other`) is how to reach someone before they have an email; a speaker with handles and no address is the normal first state. No email addresses in git.
 Seeded by `npm run seed-speakers -- --corpus <root>`, idempotent by handle. Seeding fails if the manifest
 references a handle the seed does not define.
+
+## organisations.seed.json
+
+`{ "organisations": [ { "name", "kind", "capacity"?, "address"?, "notes"? } ] }`. Seeded by
+`npm run seed-organisations -- --corpus <root>`, idempotent by the exact `(name, kind)` pair. No contacts
+and no email addresses in git, and no `history` (it needs event ids); add those in the database. Re-seeding
+updates only the fields in the file and never touches contacts or history already on the organisation.
 
 ## inbox-golden/ (a different dataset, not corpus documents)
 
