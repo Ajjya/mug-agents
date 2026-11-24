@@ -30,6 +30,15 @@ export function formatPollReport(
     `Dropped (not in scope, nothing stored or fetched): ${String(r.dropped)}; excluded threads: ${String(r.droppedExcluded)}; new candidate threads: ${String(r.candidatesRecorded)}; own sent mail skipped: ${String(r.skippedOutbound)}.`,
     `Cursor: ${r.uidValidityReset ? 'a folder was recreated (UIDVALIDITY changed): its cursor was discarded and it was swept again' : 'by UID within each label folder'}.${r.sweepTruncated ? ' A sweep hit its page limit (GMAIL_SWEEP_MAX_PAGES): the rest is picked up by the next poll.' : ''}`,
   );
+  const platform = Object.entries(r.platform).sort(
+    (a, b) => b[1] - a[1] || a[0].localeCompare(b[0]),
+  );
+  if (platform.length > 0) {
+    const total = platform.reduce((n, [, c]) => n + c, 0);
+    out.push(
+      `Platform mail (kept, no model, no task, never linked, never pauses a chase): ${String(total)}: ${platform.map(([a, c]) => `${a} ${String(c)}`).join(', ')}.`,
+    );
+  }
   return out;
 }
 

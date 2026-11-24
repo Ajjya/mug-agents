@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { classify, parseSenderList, ruleSummary, senderOnList } from '../../src/inbox/rules.js';
+import { formatPollReport } from '../../src/inbox/format.js';
 import { renderValidation, validateRules } from '../../src/inbox/rule-validation.js';
 import { FakeGmail, type FixtureMessage } from '../support/fake-gmail.js';
 import { NEUTRAL_ANSWER, buildInboxHarness } from '../support/inbox-harness.js';
@@ -46,6 +47,14 @@ describe('classify (pure)', () => {
     expect(classify({ ...base, contactRole: 'noise' }, SHARE).verdict).toMatchObject({
       mode: 'rule',
       intent: 'newsletter_or_noise',
+    });
+  });
+
+  it('role platform: the intent is platform_notification, decided by lookup, with NO model call', () => {
+    expect(classify({ ...base, contactRole: 'platform' }, SHARE).verdict).toEqual({
+      mode: 'rule',
+      intent: 'platform_notification',
+      decidedBy: 'lookup_contact',
     });
   });
 
@@ -258,5 +267,129 @@ describe('validateRules', () => {
       allHaveListUnsubscribe: true,
     });
     expect(renderValidation(report)).toContain('Every disagreement (1)');
+  });
+});
+
+describe('platform mail (Meetup, Luma, Slack): kept, cheap, and never correspondence', () => {
+  const PLATFORM = 'Meetup <info@meetup.invalid>';
+
+  it('is decided by lookup with no model call, even with List-Unsubscribe and a calendar part, and counted per sender', async () => {
+    const h = harnessWith(
+      msg({
+        id: 'p1',
+        threadId: 't1',
+        from: PLATFORM,
+        listUnsubscribe: '<x>',
+        subject: '3 new RSVPs',
+      }),
+      msg({ id: 'p2', threadId: 't2', from: PLATFORM, hasCalendarPart: true }),
+      msg({ id: 'p3', threadId: 't3', from: 'Luma <notify@luma.invalid>' }),
+      msg({ id: 'u1', threadId: 't4' }),
+    );
+    for (const a of ['info@meetup.invalid', 'notify@luma.invalid'])
+      await h.service.setContactRole(a, 'platform', 'test');
+    const r = await h.service.poll({ now: NOW });
+    expect(h.model.prompts).toHaveLength(1); // only the unknown sender
+    for (const id of ['p1', 'p2', 'p3']) {
+      expect((await h.repos.inbound.findByGmailId(id))?.triage).toMatchObject({
+        intent: 'platform_notification',
+        decidedBy: 'lookup_contact',
+        model: 'none',
+      });
+    }
+    // Kept: stored in full, not discarded like noise.
+    expect(
+      await h.repos.inbound.getRawBody((await h.repos.inbound.findByGmailId('p1'))?._id ?? ''),
+    ).toContain('Body of p1');
+    expect(r.platform).toEqual({ 'info@meetup.invalid': 2, 'notify@luma.invalid': 1 });
+  });
+
+  it('raises no task, links to no speaker, and never moves lastInboundAt (so it cannot pause a chase)', async () => {
+    const h = harnessWith(
+      msg({
+        id: 'a1',
+        threadId: 'th-ana',
+        from: 'Ana <ana@speakers.invalid>',
+        receivedAt: '2026-10-28T09:00:00.000Z',
+      }),
+      // a Slack relay lands in the speaker's own thread, later: still not hers
+      msg({
+        id: 'p1',
+        threadId: 'th-ana',
+        from: 'Slack <notify@slack.invalid>',
+        receivedAt: '2026-10-30T09:00:00.000Z',
+      }),
+    );
+    await h.service.setContactRole('notify@slack.invalid', 'platform', 'test');
+    const event = await h.repos.events.insert({
+      title: 'Meetup',
+      phase: 'planning',
+      date: '2026-12-12T00:00:00.000Z',
+      coHostOrganisationIds: [],
+      agenda: [],
+    });
+    const ana = await h.repos.speakers.insert({
+      name: 'Ana',
+      emails: ['ana@speakers.invalid'],
+      handles: {},
+      topics: [],
+      links: {},
+      perEvent: [{ eventId: event._id, status: 'invited', updatedAt: '2026-10-01T00:00:00.000Z' }],
+    });
+    await h.service.poll({ now: NOW });
+    const p = await h.repos.inbound.findByGmailId('p1');
+    expect(p?.linkState).toBe('unlinked');
+    expect(p?.linkedSpeakerId).toBeUndefined();
+    // Her own message set it; the later platform message did not move it.
+    expect((await h.repos.speakers.findById(ana._id))?.perEvent[0]?.lastInboundAt).toBe(
+      '2026-10-28T09:00:00.000Z',
+    );
+    expect((await h.repos.tasks.findMany({ limit: 50 })).items).toEqual([]);
+    // And no contact was written as "replied to us".
+    expect((await h.repos.contacts.findByAddress('notify@slack.invalid'))?.source).toBe(
+      'added_by_human',
+    );
+  });
+
+  it('even a model that calls an unknown sender platform_notification and asks for a human raises no task', async () => {
+    const h = harnessWith(
+      msg({ id: 'u1', threadId: 't1', from: 'New <hello@newplatform.invalid>' }),
+    );
+    h.model.queue = [
+      () =>
+        JSON.stringify({
+          ...JSON.parse(NEUTRAL_ANSWER),
+          intent: 'platform_notification',
+          needs_human: true,
+          reason: 'looks important',
+        }),
+    ];
+    await h.service.poll({ now: NOW });
+    expect((await h.repos.inbound.findByGmailId('u1'))?.triage?.intent).toBe(
+      'platform_notification',
+    );
+    expect((await h.repos.tasks.findMany({ limit: 50 })).items).toEqual([]);
+  });
+
+  it('the poll output shows the volume per sender, and nothing when there is none', async () => {
+    const h = harnessWith(
+      msg({ id: 'p1', threadId: 't1', from: PLATFORM }),
+      msg({ id: 'p2', threadId: 't2', from: PLATFORM }),
+      msg({ id: 'p3', threadId: 't3', from: 'Luma <notify@luma.invalid>' }),
+    );
+    for (const a of ['info@meetup.invalid', 'notify@luma.invalid'])
+      await h.service.setContactRole(a, 'platform', 'test');
+    const text = formatPollReport(await h.service.poll({ now: NOW }), {
+      dryRun: false,
+      label: 'x',
+    }).join('\n');
+    expect(text).toContain('Platform mail');
+    expect(text).toContain(': 3: info@meetup.invalid 2, notify@luma.invalid 1.');
+    const none = buildInboxHarness();
+    expect(
+      formatPollReport(await none.service.poll({ now: NOW }), { dryRun: false, label: 'x' }).join(
+        '\n',
+      ),
+    ).not.toContain('Platform mail');
   });
 });

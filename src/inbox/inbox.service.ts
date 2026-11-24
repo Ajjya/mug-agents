@@ -19,7 +19,7 @@ import { UNKNOWN_SENDER, parseAddress, parseAddressList } from './address.js';
 import { observeCandidateRefs, recordCandidate } from './candidates.js';
 import type { GmailClient, GmailMetadata, MessageRef } from './gmail.transport.js';
 import type { InboxConfig } from './inbox.config.js';
-import { recordInbound, resolveLink } from './linking.js';
+import { type LinkResult, recordInbound, resolveLink } from './linking.js';
 import { redactForTriage } from './redact.js';
 import { classify, ruleSummary, type Classification } from './rules.js';
 import type {
@@ -99,6 +99,11 @@ export interface PollReport {
    * noise); `rule_*` never reached a model.
    */
   decidedBy: Record<DecidedBy, number>;
+  /**
+   * Platform mail (a contact with role `platform`: Meetup, Luma, Slack) that arrived in this poll, per sender.
+   * Kept and decided with no model call; counted so the volume is visible before anything is built on it.
+   */
+  platform: Record<string, number>;
   /** Messages for which a provider call was made (decidedBy `model`, or a lookup that still asked the model). */
   reachedModel: number;
   /** Messages where two deciders gave DIFFERENT intents: the earlier won and the disagreement is counted here. */
@@ -139,6 +144,7 @@ const emptyReport = (): PollReport => ({
   uidValidityReset: false,
   sweepTruncated: false,
   decidedBy: Object.fromEntries(DECIDED_BY.map((d) => [d, 0])) as Record<DecidedBy, number>,
+  platform: {},
   reachedModel: 0,
   ruleConflicts: 0,
   elapsedMs: 0,
@@ -421,15 +427,17 @@ export class InboxService {
       return;
     }
     const from = parseAddress(full.headers.from) ?? UNKNOWN_SENDER;
-    const link = await resolveLink(
-      { fromAddress: from.address, threadId: full.threadId },
-      this.deps,
-    );
+    // A platform (Meetup, Luma, Slack) is data, not correspondence: it is never linked to a speaker,
+    // never moves `lastInboundAt` (so it can never pause a chase), and is not recorded as having "replied".
+    const platform = await this.isPlatformSender(from.address);
+    const link: LinkResult = platform
+      ? { linkState: 'unlinked', eventIds: [] }
+      : await resolveLink({ fromAddress: from.address, threadId: full.threadId }, this.deps);
     // Effects first and idempotent: a crash before the insert leaves chasing PAUSED, the safe side.
     if (link.speakerId && link.eventIds.length > 0) {
       await recordInbound(this.deps.speakers, link.speakerId, link.eventIds, full.receivedAt);
     }
-    await this.noteContact(from, link);
+    if (!platform) await this.noteContact(from, link);
     const redacted = redactForTriage(full.bodyText, this.deps.config.triageMaxChars);
     const input: InboundMessageInput = {
       gmailId: full.id,
@@ -461,8 +469,17 @@ export class InboxService {
       linkState: link.linkState,
     };
     const { created } = await this.deps.inbound.insert(input);
+    if (created && platform) {
+      ctx.report.platform[from.address] = (ctx.report.platform[from.address] ?? 0) + 1;
+    }
     if (created) ctx.report.stored.push(full.id);
     else ctx.report.alreadyStored++;
+  }
+
+  /** A contact a human has told us is a platform: its mail is operational data, not correspondence. */
+  private async isPlatformSender(address: string): Promise<boolean> {
+    if (address === UNKNOWN_SENDER.address) return false;
+    return (await this.deps.contacts.findByAddress(address))?.role === 'platform';
   }
 
   /** A person who writes to us is a fact about correspondence, not permission to write to them. */
@@ -596,6 +613,8 @@ export class InboxService {
    * classification. A task title never carries text a model or a sender wrote beyond the sender's name.
    */
   private async raiseTask(m: InboundMessage, summary: InboundMessage['triage']): Promise<void> {
+    // Platform mail is data waiting for a parser, never correspondence: no task, whatever the summary says.
+    if (summary?.intent === 'platform_notification') return;
     const who = m.from.name?.trim() || m.from.address;
     let title: string | null = null;
     if (!summary) title = `Read the reply from ${who}: triage could not classify it`;

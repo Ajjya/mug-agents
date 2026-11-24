@@ -12,7 +12,8 @@ import {
  * Order of precedence, and why:
  *  1. a sender a human has told us about (a contact's `role`, else a speaker's email): that is knowledge,
  *     the rest are inferences from headers. It fixes `intent`; the model is still asked for the rest,
- *     EXCEPT for role `noise`, which has nothing left to ask;
+ *     EXCEPT for roles `noise` and `platform`, which have nothing left to ask (a platform notification
+ *     is data for a future parser, not correspondence to read);
  *  2. a calendar MIME part (`text/calendar` / `application/ics`): `calendar_invite`;
  *  3. a sender on the configurable document-share list: `document_share`;
  *  4. a `List-Unsubscribe` header: `newsletter_or_noise`.
@@ -89,8 +90,12 @@ export function classify(f: SenderFacts, documentShareSenders: readonly string[]
   const winner = all[0];
   if (!winner) return { verdict: { mode: 'model' }, overridden: [] };
   const isLookup = winner.decidedBy === 'lookup_contact' || winner.decidedBy === 'lookup_speaker';
-  // A lookup fixes the intent and still asks the model for the rest, except `noise`: nothing left to ask.
-  const noModel = !isLookup || winner.intent === 'newsletter_or_noise';
+  // A lookup fixes the intent and still asks the model for the rest, except `noise` and `platform`:
+  // nothing left to ask.
+  const noModel =
+    !isLookup ||
+    winner.intent === 'newsletter_or_noise' ||
+    winner.intent === 'platform_notification';
   return {
     verdict: {
       mode: noModel ? 'rule' : 'fixed-intent',

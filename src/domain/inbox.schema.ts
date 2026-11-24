@@ -21,6 +21,8 @@ export const TRIAGE_INTENTS = [
   'community_manager',
   'calendar_invite',
   'document_share',
+  // Automated mail from a service we use (Meetup, Luma, Slack): operational data about our events, waiting for a parser.
+  'platform_notification',
   'other',
 ] as const;
 
@@ -35,6 +37,12 @@ export const CONTACT_ROLES = [
   'coorganiser',
   'community_manager',
   'sponsor',
+  /**
+   * An automated sender from a service we use, whose mail carries operational data about our events
+   * (registrations, RSVP counts, relayed messages). Not a person and not noise: kept, cheap, and never
+   * treated as correspondence (no task, no chase pause, no speaker link).
+   */
+  'platform',
   'noise',
 ] as const;
 export type ContactRole = (typeof CONTACT_ROLES)[number];
@@ -46,6 +54,7 @@ export const INTENT_BY_ROLE: Record<ContactRole, (typeof TRIAGE_INTENTS)[number]
   coorganiser: 'coorganiser',
   community_manager: 'community_manager',
   sponsor: 'sponsor_enquiry',
+  platform: 'platform_notification',
   noise: 'newsletter_or_noise',
 };
 
