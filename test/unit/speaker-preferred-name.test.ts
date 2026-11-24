@@ -2,6 +2,7 @@ import { cpSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { chooseDelivery } from '../../src/agents/speakers/delivery.js';
 import { buildFacts } from '../../src/agents/speakers/drafting.js';
 import { SpeakerInputSchema } from '../../src/domain/speaker.schema.js';
 import { seedSpeakers } from '../../src/retrieval/seed-speakers.js';
@@ -87,5 +88,88 @@ describe('no name splitting anywhere', () => {
     ['venue.address.split("\\n")', false],
   ])('the matcher: %s', (source, hit) => {
     expect(SPLITS_A_NAME.test(source)).toBe(hit);
+  });
+});
+
+describe('a LinkedIn URL has one home: handles.linkedin', () => {
+  const entry = (over: Record<string, unknown>) => ({
+    handle: 'ana-pires',
+    name: 'Ana Pires',
+    topics: [],
+    links: {},
+    perEvent: [],
+    ...over,
+  });
+
+  it('a seed with links.linkedin (and nothing in handles) leaves the speaker reachable as manual:linkedin', async () => {
+    // the sample corpus manifest references other handles: seed those too (unchanged) by keeping the sample
+    const dir = mkdtempSync(join(tmpdir(), 'seed-li-'));
+    cpSync(SAMPLE, dir, { recursive: true });
+    const file = join(dir, 'speakers.seed.json');
+    const seed = JSON.parse(readFileSync(file, 'utf8')) as { speakers: Record<string, unknown>[] };
+    seed.speakers.push(
+      entry({
+        links: { linkedin: 'https://linkedin.com/in/ana-pires', github: 'https://github.com/ana' },
+      }),
+    );
+    writeFileSync(file, JSON.stringify(seed));
+    const repo = new InMemorySpeakersRepository();
+    await seedSpeakers(dir, repo);
+    const ana = await repo.findByHandle('ana-pires');
+    expect(ana?.handles).toEqual({ linkedin: 'https://linkedin.com/in/ana-pires' });
+    expect(ana?.links).toEqual({ github: 'https://github.com/ana' }); // links keeps only github and website
+    expect(chooseDelivery(ana ?? { emails: [], handles: {} })).toBe('manual:linkedin');
+    // re-seeding is a no-op
+    expect((await seedSpeakers(dir, repo)).updated).toEqual([]);
+  });
+
+  it('an explicit handles.linkedin wins over links.linkedin, and a LinkedIn handle a human has is never overwritten by a re-seed', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'seed-li-'));
+    cpSync(SAMPLE, dir, { recursive: true });
+    const file = join(dir, 'speakers.seed.json');
+    const seed = JSON.parse(readFileSync(file, 'utf8')) as { speakers: Record<string, unknown>[] };
+    seed.speakers.push(
+      entry({
+        links: { linkedin: 'https://linkedin.com/in/old' },
+        handles: { linkedin: 'https://linkedin.com/in/new' },
+      }),
+    );
+    writeFileSync(file, JSON.stringify(seed));
+    const repo = new InMemorySpeakersRepository();
+    await seedSpeakers(dir, repo);
+    expect((await repo.findByHandle('ana-pires'))?.handles.linkedin).toBe(
+      'https://linkedin.com/in/new',
+    );
+    // a speaker whose LinkedIn only came from links never has an existing handle replaced
+    const other = seed.speakers.at(-1);
+    if (other) other['handles'] = undefined;
+    const repo2 = new InMemorySpeakersRepository();
+    const ana = await repo2.insert({
+      handle: 'ana-pires',
+      name: 'Ana Pires',
+      emails: [],
+      handles: { linkedin: 'https://linkedin.com/in/humans' },
+      topics: [],
+      links: {},
+      perEvent: [],
+    });
+    seed.speakers[seed.speakers.length - 1] = entry({
+      links: { linkedin: 'https://linkedin.com/in/from-links' },
+    });
+    writeFileSync(file, JSON.stringify(seed));
+    await seedSpeakers(dir, repo2);
+    expect((await repo2.findById(ana._id))?.handles.linkedin).toBe(
+      'https://linkedin.com/in/humans',
+    );
+  });
+
+  it('the stored schema no longer accepts links.linkedin: one home, enforced', () => {
+    const base = { name: 'A', emails: [], handles: {}, topics: [], perEvent: [] };
+    expect(
+      SpeakerInputSchema.safeParse({ ...base, links: { linkedin: 'https://x.invalid' } }).success,
+    ).toBe(false);
+    expect(
+      SpeakerInputSchema.safeParse({ ...base, links: { github: 'https://github.com/a' } }).success,
+    ).toBe(true);
   });
 });

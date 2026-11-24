@@ -20,7 +20,11 @@ export const SeedSpeakerSchema = z
     preferredName: SpeakerInputSchema.shape.preferredName,
     topics: SpeakerInputSchema.shape.topics,
     bio: SpeakerInputSchema.shape.bio,
-    links: SpeakerInputSchema.shape.links,
+    /**
+     * `links.linkedin` is still accepted here (existing seed files have it) and is ROUTED to `handles.linkedin`:
+     * a LinkedIn URL has one home. An explicit `handles.linkedin` in the same entry wins.
+     */
+    links: SpeakerInputSchema.shape.links.extend({ linkedin: z.url().optional() }).strict(),
     perEvent: SpeakerInputSchema.shape.perEvent,
     /** How to reach them where email does not apply (yet). No `emails`: an address never goes into git. */
     handles: SpeakerInputSchema.shape.handles.optional(),
@@ -77,7 +81,17 @@ export async function seedSpeakers(
   }
 
   const result: SeedResult = { created: [], updated: [], unchanged: [] };
-  for (const s of seed.speakers) {
+  for (const entry of seed.speakers) {
+    // links.linkedin is a way to REACH someone: it belongs in handles (an explicit handles.linkedin wins).
+    const { linkedin: legacyLinkedin, ...links } = entry.links;
+    const routed = legacyLinkedin !== undefined && entry.handles?.linkedin === undefined;
+    const s = {
+      ...entry,
+      links,
+      ...(routed || entry.handles !== undefined
+        ? { handles: { ...(routed ? { linkedin: legacyLinkedin } : {}), ...(entry.handles ?? {}) } }
+        : {}),
+    };
     const wanted: SpeakerInput = {
       handle: s.handle,
       name: s.name,
@@ -95,12 +109,17 @@ export async function seedSpeakers(
       result.created.push(s.handle);
       continue;
     }
+    // A LinkedIn URL that only came from the legacy `links.linkedin` fills a gap and never overwrites a handle
+    // somebody (a human) already has; an explicit `handles` in the seed is the author's statement and replaces.
+    const fillLinkedin =
+      routed && entry.handles === undefined && existing.handles.linkedin === undefined;
     const changed =
+      fillLinkedin ||
       existing.name !== wanted.name ||
       !same(existing.topics, wanted.topics) ||
       !same(existing.links, wanted.links) ||
       !same(existing.perEvent, wanted.perEvent) ||
-      (s.handles !== undefined && !same(existing.handles, s.handles)) ||
+      (entry.handles !== undefined && !same(existing.handles, s.handles)) ||
       (wanted.bio !== undefined && existing.bio !== wanted.bio) ||
       (wanted.preferredName !== undefined && existing.preferredName !== wanted.preferredName);
     if (!changed) {
@@ -113,7 +132,11 @@ export async function seedSpeakers(
       links: wanted.links,
       perEvent: wanted.perEvent,
       // emails are never in a seed file, so a re-seed leaves the ones a human adopted alone
-      ...(s.handles === undefined ? {} : { handles: s.handles }),
+      ...(entry.handles !== undefined
+        ? { handles: s.handles ?? {} }
+        : fillLinkedin
+          ? { handles: { ...existing.handles, linkedin: legacyLinkedin } }
+          : {}),
       ...(wanted.bio === undefined ? {} : { bio: wanted.bio }),
       ...(wanted.preferredName === undefined ? {} : { preferredName: wanted.preferredName }),
     }));

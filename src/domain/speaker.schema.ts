@@ -26,9 +26,12 @@ export const SpeakerHandlesSchema = z
   })
   .strict();
 
+/**
+ * Where a speaker can be READ about, never how to REACH them: `handles` owns everything used to reach a
+ * person (LinkedIn included). A LinkedIn URL has exactly one home, `handles.linkedin`.
+ */
 export const SpeakerLinksSchema = z
   .object({
-    linkedin: z.url().optional(),
     github: z.url().optional(),
     website: z.url().optional(),
   })

@@ -42,7 +42,7 @@ Both roots have the same layout; every command takes the root as an argument (`-
 
 ## speakers.seed.json
 
-`{ "speakers": [ { "handle", "name", "topics", "links", "perEvent", "handles"? } ] }`. `handles` (`linkedin`, `whatsapp`, `other`) is how to reach someone before they have an email; a speaker with handles and no address is the normal first state. No email addresses in git.
+`{ "speakers": [ { "handle", "name", "topics", "links", "perEvent", "handles"? } ] }`. `handles` (`linkedin`, `whatsapp`, `other`) is how to reach someone before they have an email; a speaker with handles and no address is the normal first state. `links` keeps only `github` and `website`: a LinkedIn URL lives in `handles.linkedin` (one home; everything used to REACH someone is in `handles`). A seed file that still has `links.linkedin` keeps working: the loader routes it to `handles.linkedin` (an explicit `handles.linkedin` in the same entry wins, and a handle a human already has is never overwritten). For speakers already in the database run `npm run migrate:speaker-contacts` once. No email addresses in git.
 Seeded by `npm run seed-speakers -- --corpus <root>`, idempotent by handle. Seeding fails if the manifest
 references a handle the seed does not define.
 
