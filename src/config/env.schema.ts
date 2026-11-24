@@ -230,6 +230,8 @@ const baseEnvSchema = z.object({
    * message is marked failed with the reason, and the batch moves on.
    */
   TRIAGE_MESSAGE_DEADLINE_MS: z.coerce.number().int().min(1).default(120_000),
+  /** The most of a message body that is STORED (after normalisation); a longer one is cut and marked truncated. */
+  INBOX_BODY_MAX_CHARS: z.coerce.number().int().min(1000).max(1_000_000).default(20_000),
   TRIAGE_MAX_CHARS: z.coerce.number().int().min(500).max(50_000).default(6000),
   /**
    * Senders whose mail is `document_share`, decided in code with no model call: exact addresses, or

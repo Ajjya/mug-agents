@@ -68,6 +68,7 @@ export const TEST_INBOX_CONFIG: InboxConfig = {
   candidateLabel: 'mug-maybe',
   triageStartRung: 0,
   triageMaxChars: 6000,
+  bodyMaxChars: 20_000,
   triageDeadlineMs: 120_000,
   sweepMaxPages: 20,
   sweepPageSize: 200,

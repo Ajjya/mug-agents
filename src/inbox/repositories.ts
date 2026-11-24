@@ -80,7 +80,19 @@ export interface InboundMessagesRepository {
   findRecent(limit: number): Promise<InboundMessage[]>;
   update(id: EntityId, patch: InboundMessagePatch): Promise<InboundMessage | null>;
   getRawBody(id: EntityId): Promise<string | null>;
+  /**
+   * Rewrites the stored body and what is derived from it. The ONLY write that touches an existing body, and only
+   * `inbox repair-bodies --write` calls it. The same bodyText guard as an insert applies.
+   */
+  repairBody(id: EntityId, fields: BodyRepair): Promise<boolean>;
   count(): Promise<number>;
+}
+
+export interface BodyRepair {
+  bodyText: string;
+  bodyRedacted: string;
+  bodySnippet: string;
+  bodyTruncated: boolean;
 }
 
 const FullInboundSchema = InboundMessageInputSchema.extend(documentShape);
@@ -197,6 +209,16 @@ export class MongoInboundMessagesRepository implements InboundMessagesRepository
     if (!isEntityId(id)) return null;
     const raw = await this.col.findOne({ _id: toObjectId(id) }, { projection: { bodyText: 1 } });
     return raw ? String(raw['bodyText'] ?? '') : null;
+  }
+
+  async repairBody(id: EntityId, fields: BodyRepair): Promise<boolean> {
+    if (!isEntityId(id)) return false;
+    InboundMessageInputSchema.shape.bodyText.parse(fields.bodyText); // the same guard as an insert
+    const r = await this.col.updateOne(
+      { _id: toObjectId(id) },
+      { $set: { ...fields, updatedAt: new Date() }, $inc: { version: 1 } },
+    );
+    return r.matchedCount > 0;
   }
 
   count(): Promise<number> {

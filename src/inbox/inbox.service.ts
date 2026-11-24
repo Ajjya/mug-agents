@@ -1,5 +1,6 @@
 import {
   DECIDED_BY,
+  isStringifiedNothing,
   type CandidateThread,
   type ContactRole,
   type DecidedBy,
@@ -20,6 +21,7 @@ import { observeCandidateRefs, recordCandidate } from './candidates.js';
 import type { GmailClient, GmailMetadata, MessageRef } from './gmail.transport.js';
 import type { InboxConfig } from './inbox.config.js';
 import { type LinkResult, recordInbound, resolveLink } from './linking.js';
+import { normaliseBody } from './normalise.js';
 import { redactForTriage } from './redact.js';
 import { classify, ruleSummary, type Classification } from './rules.js';
 import type {
@@ -132,6 +134,21 @@ export interface RelinkReport {
   /** In an excluded thread: left alone. */
   skippedExcluded: number;
   dryRun: boolean;
+}
+
+export interface RepairBodiesReport {
+  /** Stored messages looked at. */
+  considered: number;
+  /** Messages whose stored body normalisation would change (changed, when `written`). */
+  wouldChange: number;
+  /** Of those, how many the INBOX_BODY_MAX_CHARS cap would cut. */
+  wouldTruncate: number;
+  /** Characters of body that would go. */
+  charsRemoved: number;
+  alreadyNormalised: number;
+  /** A stored body that is the string "undefined" or "null": it needs a re-fetch, not a repair. Left alone. */
+  leftAloneBadBody: number;
+  written: boolean;
 }
 
 export class InboxLabelMissingError extends Error {
@@ -460,7 +477,10 @@ export class InboxService {
       await recordInbound(this.deps.speakers, link.speakerId, link.eventIds, full.receivedAt);
     }
     if (!platform) await this.noteContact(from, link);
-    const redacted = redactForTriage(full.bodyText, this.deps.config.triageMaxChars);
+    // Normalised at ingestion (new messages only): entities decoded, invisible padding and runs of whitespace
+    // collapsed, the stored body capped. Stored documents are never rewritten by a poll (`repair-bodies`).
+    const body = normaliseBody(full.bodyText, this.deps.config.bodyMaxChars);
+    const redacted = redactForTriage(body.text, this.deps.config.triageMaxChars);
     const input: InboundMessageInput = {
       gmailId: full.id,
       threadId: full.threadId,
@@ -475,7 +495,8 @@ export class InboxService {
         ? { references: full.headers.references.split(/\s+/).filter(Boolean) }
         : {}),
       subject: full.headers.subject ?? '',
-      bodyText: full.bodyText,
+      bodyText: body.text,
+      bodyTruncated: body.truncated,
       bodyRedacted: redacted,
       bodySnippet: redacted.slice(0, 200),
       labelIds: full.labelIds,
@@ -705,6 +726,51 @@ export class InboxService {
       if (report.triagePending > 0) break; // a provider outage: the rest stay as they were
     }
     report.elapsedMs = Date.now() - startedAt;
+    return report;
+  }
+
+  /**
+   * Applies body normalisation to STORED messages (`inbox repair-bodies`). A dry run (the default) counts and
+   * writes nothing; `write: true` is required to change a document, and only the body and what is derived from
+   * it (redacted text, snippet, truncation flag) are rewritten: never the triage result, so run `retriage` after
+   * if the new input should be triaged. Idempotent: normalising normalised text changes nothing.
+   */
+  async repairBodies(options: { write?: boolean } = {}): Promise<RepairBodiesReport> {
+    const report: RepairBodiesReport = {
+      considered: 0,
+      wouldChange: 0,
+      wouldTruncate: 0,
+      charsRemoved: 0,
+      alreadyNormalised: 0,
+      leftAloneBadBody: 0,
+      written: options.write === true,
+    };
+    const { config } = this.deps;
+    for (const m of await this.deps.inbound.findRecent(100_000)) {
+      report.considered++;
+      const raw = await this.deps.inbound.getRawBody(m._id);
+      if (raw === null) continue;
+      if (isStringifiedNothing(raw)) {
+        report.leftAloneBadBody++;
+        continue;
+      }
+      const n = normaliseBody(raw, config.bodyMaxChars);
+      if (n.text === raw && m.bodyTruncated === n.truncated) {
+        report.alreadyNormalised++;
+        continue;
+      }
+      report.wouldChange++;
+      if (n.truncated) report.wouldTruncate++;
+      report.charsRemoved += raw.length - n.text.length;
+      if (options.write !== true) continue;
+      const redacted = redactForTriage(n.text, config.triageMaxChars);
+      await this.deps.inbound.repairBody(m._id, {
+        bodyText: n.text,
+        bodyRedacted: redacted,
+        bodySnippet: redacted.slice(0, 200),
+        bodyTruncated: n.truncated,
+      });
+    }
     return report;
   }
 

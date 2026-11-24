@@ -67,6 +67,10 @@ with EXAMINE, and INBOX and [Gmail]/All Mail are never opened.
   relink [--dry-run] [--limit n]          re-run the deterministic linking rules (sender address against speakers and
                                           contacts, then thread inheritance) over stored messages still 'unlinked'.
                                           No Gmail, no model, no name matching. 'confirmed_by_human' is never touched
+  repair-bodies [--write]                 apply body normalisation (entities decoded, invisible padding and runs of
+                                          whitespace collapsed, the INBOX_BODY_MAX_CHARS cap) to STORED messages. A
+                                          dry run by default: prints how many it would change and writes nothing;
+                                          --write is required to change a document. Triage results are not touched
   retry-triage <messageId>                run triage again for a message whose triage failed
   retriage                                run EVERY stored message through the current triage (lookup, rules,
                                           then the model for what is left). Raises no tasks
@@ -89,6 +93,7 @@ const { values, positionals } = parseArgs({
   options: {
     since: { type: 'string' },
     'dry-run': { type: 'boolean' },
+    write: { type: 'boolean' },
     by: { type: 'string' },
     reason: { type: 'string' },
     limit: { type: 'string' },
@@ -314,6 +319,17 @@ runCli(
         if (!target) return usage();
         const m = await inbox.retryTriage(target);
         console.log(`Triage is now: ${m.triageState}`);
+        return 0;
+      }
+      case 'repair-bodies': {
+        const r = await inbox.repairBodies({ write: values.write === true });
+        console.log(
+          `${r.written ? 'WRITTEN' : 'DRY RUN: nothing written (add --write to apply)'}. Considered ${String(r.considered)} stored message(s): ${r.written ? 'changed' : 'would change'} ${String(r.wouldChange)} (${String(r.wouldTruncate)} cut by the cap; ${String(r.charsRemoved)} characters of body removed); already normalised ${String(r.alreadyNormalised)}; left alone because the stored body is "undefined" or "null" (re-fetch it instead) ${String(r.leftAloneBadBody)}.`,
+        );
+        if (r.written && r.wouldChange > 0)
+          console.log(
+            'Triage results were not touched: run "inbox retriage" to triage the new input.',
+          );
         return 0;
       }
       case 'relink': {

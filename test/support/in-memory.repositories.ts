@@ -655,6 +655,20 @@ export class InMemoryInboundMessagesRepository implements InboundMessagesReposit
     delete d.hasCalendarPart;
     delete d.structureCheckedAt;
   }
+  async repairBody(
+    id: EntityId,
+    f: { bodyText: string; bodyRedacted: string; bodySnippet: string; bodyTruncated: boolean },
+  ): Promise<boolean> {
+    const d = isEntityId(id) ? this.docs.get(id.toLowerCase()) : undefined;
+    if (!d) return false;
+    InboundMessageInputSchema.shape.bodyText.parse(f.bodyText);
+    d.bodyRedacted = f.bodyRedacted;
+    d.bodySnippet = f.bodySnippet;
+    d.bodyTruncated = f.bodyTruncated;
+    d.version += 1;
+    this.bodies.set(d._id, f.bodyText);
+    return true;
+  }
   /** Test lever: data written before the bodyText guard existed (the guard would refuse it today). */
   legacyBody(id: EntityId, bodyText: string): void {
     this.bodies.set(id.toLowerCase(), bodyText);

@@ -163,6 +163,11 @@ export const InboundMessageInputSchema = z
         (v) => !isStringifiedNothing(v),
         'must be the message text, not the string "undefined" or "null"',
       ),
+    /**
+     * The body was cut at INBOX_BODY_MAX_CHARS when it was stored. Set only on messages ingested after body
+     * normalisation existed (or repaired by `inbox repair-bodies`): absent means "stored as it arrived".
+     */
+    bodyTruncated: z.boolean().optional(),
     /** Exactly what the provider received (redacted, bounded). */
     bodyRedacted: z.string(),
     bodySnippet: z.string(),
