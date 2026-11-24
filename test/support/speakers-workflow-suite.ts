@@ -68,7 +68,8 @@ export async function seed(
     const s = await repos.speakers.insert({
       name: p.name,
       ...(p.preferredName ? { preferredName: p.preferredName } : {}),
-      email: `${p.name.toLowerCase().replace(/[^a-z]+/g, '.')}@speakers.invalid`,
+      emails: [`${p.name.toLowerCase().replace(/[^a-z]+/g, '.')}@speakers.invalid`],
+      handles: {},
       topics: ['validation'],
       links: {},
       ...(p.bio === false ? {} : { bio: 'Builds things with documents.' }),
@@ -128,7 +129,8 @@ async function forbiddenFields(h: SpeakersHarness, eventId: string): Promise<str
     speakers: speakers.map((s) => [
       s._id,
       s.name,
-      s.email,
+      s.emails,
+      s.handles,
       s.preferredName,
       s.bio,
       s.photoUrl,

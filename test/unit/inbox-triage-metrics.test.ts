@@ -148,13 +148,13 @@ describe('scoreModel', () => {
 
 describe('baselines (what a constant answer scores)', () => {
   const sample = loadGolden('corpus/sample/inbox-golden').map((g) => g.golden);
-  it('the committed sample: speaker_reply is the majority class at 50%, one case is 10%', () => {
+  it('the committed sample: speaker_reply is the majority class at 33%, one case is 7%', () => {
     const b = baselines(sample);
-    expect(b.messages).toBe(10);
-    expect(b.majorityIntent).toEqual({ intent: 'speaker_reply', count: 5, share: 0.5 });
-    expect(b.oneCase).toBe(0.1);
+    expect(b.messages).toBe(15);
+    expect(b.majorityIntent).toEqual({ intent: 'speaker_reply', count: 5, share: 5 / 15 });
+    expect(b.oneCase).toBeCloseTo(1 / 15);
     expect(b.needsHumanPositives).toBe(2);
-    expect(b.alwaysNoHumanAccuracy).toBe(0.8);
+    expect(b.alwaysNoHumanAccuracy).toBeCloseTo(13 / 15);
   });
 
   it('a model that always answers the majority class scores exactly the baseline', () => {
@@ -183,12 +183,12 @@ describe('renderReport', () => {
   });
 
   it('states the corpus size, the per-class counts and the majority-class baseline next to the numbers', () => {
-    expect(report).toContain('**10 messages**');
+    expect(report).toContain('**15 messages**');
     expect(report).toContain('speaker_reply 5');
     expect(report).toMatch(
-      /\*\*Majority-class baseline for intent: 50% \(always answering `speaker_reply`, 5 of 10\)/,
+      /\*\*Majority-class baseline for intent: 33% \(always answering `speaker_reply`, 5 of 15\)/,
     );
-    expect(report).toContain('one case is 10% of a score');
+    expect(report).toContain('one case is 7% of a score');
   });
   it('says which model seeded the labels, that escalation is off and that decoding is not constrained', () => {
     expect(report).toContain('**Labels seeded by:** hand');

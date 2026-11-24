@@ -1,6 +1,7 @@
 import type { Event } from '../../domain/event.schema.js';
 import {
   type Message,
+  type MessageChannel,
   type MessageFacts,
   type MessageKind,
   isRecordedOutside,
@@ -18,6 +19,7 @@ import type { SpeakersRepository } from '../../repositories/speakers.repository.
 import type { TasksRepository } from '../../repositories/tasks.repository.js';
 import { EventNotFoundError, allPages } from '../planner/plan-persistence.js';
 import type { BlockedItem } from './decide.js';
+import { channelOf, chooseDelivery } from './delivery.js';
 import { assertTransition } from './transitions.js';
 
 export class SpeakerNotInEventError extends Error {
@@ -58,6 +60,8 @@ export interface DraftRecord {
   body: string;
   facts: MessageFacts;
   needsApproval: boolean;
+  /** Where it is delivered: `email`, or the handle a person sends it on by hand. */
+  channel: MessageChannel;
 }
 
 export interface LoadedPipeline {
@@ -70,6 +74,9 @@ export interface LoadedPipeline {
 }
 
 const PENDING = new Set(['draft', 'approved']);
+
+export const sendKey = (messageId: string): string => `send:${messageId}`;
+export const FIND_CONTACT_KEY = 'find-contact';
 
 /** `chase-limit:<kind>` on a task with relatedSpeakerId: the blocked item's natural key. */
 export const chaseLimitKey = (kind: MessageKind): string => `chase-limit:${kind}`;
@@ -153,7 +160,6 @@ export class SpeakerPipelineStore {
     try {
       const message = await this.messages.insert({
         ...draft,
-        channel: 'email',
         status: 'draft',
         idempotencyKey,
       });
@@ -174,6 +180,7 @@ export class SpeakerPipelineStore {
     const updated = await this.messages.updateWithRetry(messageId, (m) => ({
       status: PENDING.has(m.status) ? 'superseded' : m.status,
     }));
+    if (updated?.status === 'superseded') await this.closeSendTask(updated, 'cancelled');
     return updated?.status === 'superseded';
   }
 
@@ -202,6 +209,73 @@ export class SpeakerPipelineStore {
       relatedEventId: eventId,
       relatedSpeakerId: item.speakerId,
       milestoneKey: key,
+    });
+    return { task, created: true };
+  }
+
+  /** The task for one message a person sends by hand, if it exists. Natural key: `send:<message id>`. */
+  private async findSendTask(eventId: string, messageId: string): Promise<Task | undefined> {
+    return (
+      await allPages((after) =>
+        this.tasks.findByEventId(eventId, { limit: 200, ...(after ? { after } : {}) }),
+      )
+    ).find((t) => t.milestoneKey === sendKey(messageId));
+  }
+
+  /**
+   * "Send to <name> on <channel>": one task per drafted message whose channel a person sends on by hand,
+   * so a draft nobody pastes into LinkedIn cannot be forgotten. Idempotent by message.
+   */
+  async ensureSendTask(
+    message: Pick<Message, '_id' | 'eventId' | 'speakerId' | 'channel'>,
+    speakerName: string,
+  ): Promise<{ task: Task; created: boolean }> {
+    const existing = await this.findSendTask(message.eventId, message._id);
+    if (existing) return { task: existing, created: false };
+    const task = await this.tasks.insert({
+      title: `Send to ${speakerName} on ${message.channel}`,
+      owner: this.taskOwner,
+      status: 'open',
+      source: 'agent',
+      relatedEventId: message.eventId,
+      relatedSpeakerId: message.speakerId,
+      milestoneKey: sendKey(message._id),
+    });
+    return { task, created: true };
+  }
+
+  /** A task for a message that was sent or no longer applies is finished with it. Only ever closes an open one. */
+  private async closeSendTask(message: Message, status: 'done' | 'cancelled'): Promise<void> {
+    const task = await this.findSendTask(message.eventId, message._id);
+    if (task && (task.status === 'open' || task.status === 'doing')) {
+      await this.tasks.updateWithRetry(task._id, () => ({ status }));
+    }
+  }
+
+  /** One task per (event, speaker) when something is due and there is no way to reach them at all. */
+  async ensureFindContactTask(
+    eventId: string,
+    speakerId: string,
+    speakerName: string,
+  ): Promise<{ task: Task; created: boolean }> {
+    const existing = (
+      await allPages((after) =>
+        this.tasks.findByEventId(eventId, { limit: 200, ...(after ? { after } : {}) }),
+      )
+    ).find(
+      (t) =>
+        t.milestoneKey === FIND_CONTACT_KEY &&
+        t.relatedSpeakerId?.toLowerCase() === speakerId.toLowerCase(),
+    );
+    if (existing) return { task: existing, created: false };
+    const task = await this.tasks.insert({
+      title: `Find contact details for ${speakerName}`,
+      owner: this.taskOwner,
+      status: 'open',
+      source: 'agent',
+      relatedEventId: eventId,
+      relatedSpeakerId: speakerId,
+      milestoneKey: FIND_CONTACT_KEY,
     });
     return { task, created: true };
   }
@@ -269,6 +343,7 @@ export class SpeakerPipelineStore {
     // parked back to idea) is never undone.
     if (sent.sentAt)
       await this.followStatus(m.kind, m.speakerId, m.eventId, sent.sentAt, now, false);
+    if (sent.status === 'sent') await this.closeSendTask(sent, 'done');
     return sent;
   }
 
@@ -309,10 +384,15 @@ export class SpeakerPipelineStore {
       sentAt: string;
       by: string;
       round?: number;
+      /** Where it was sent; default: how this speaker is reached now (a handle, else email). */
+      channel?: MessageChannel;
     },
     now: Date,
   ): Promise<{ message: Message; created: boolean }> {
     await this.entry(input.speakerId, input.eventId); // the speaker must be in this event's pipeline
+    const speaker = await this.speakers.findById(input.speakerId);
+    const channel =
+      input.channel ?? (speaker ? (channelOf(chooseDelivery(speaker)) ?? 'other') : 'email');
     const mine = (await this.eventMessages(input.eventId)).filter(
       (m) => m.speakerId.toLowerCase() === input.speakerId.toLowerCase() && m.kind === input.kind,
     );
@@ -338,7 +418,7 @@ export class SpeakerPipelineStore {
         eventId: input.eventId,
         speakerId: input.speakerId,
         kind: input.kind,
-        channel: 'email',
+        channel,
         round,
         subject: '(sent outside this system)',
         body: '',

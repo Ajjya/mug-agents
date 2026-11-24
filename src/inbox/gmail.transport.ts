@@ -39,6 +39,8 @@ export interface GmailHeaders {
   /** Where a reply should go when it is not the sender, and who else was copied. */
   replyTo?: string;
   cc?: string;
+  /** `List-Unsubscribe`, verbatim (bounded). Its presence marks a mailing-list message. */
+  listUnsubscribe?: string;
 }
 
 /** Headers, labels and the received time. No body, no snippet: there is nowhere to put one. */
@@ -62,6 +64,15 @@ export interface GmailAttachmentInfo {
 export interface GmailFullMessage extends GmailMetadata {
   bodyText: string;
   attachments: GmailAttachmentInfo[];
+  /** A `text/calendar` / `application/ics` MIME part exists. */
+  hasCalendarPart: boolean;
+}
+
+/** The two structural facts the deterministic rules use. No body, no text part. */
+export interface GmailStructure {
+  id: string;
+  listUnsubscribe?: string;
+  hasCalendarPart: boolean;
 }
 
 export interface ListQuery {
@@ -93,6 +104,8 @@ export interface GmailMetadataClient {
 
 export interface GmailClient extends GmailMetadataClient {
   getFull(ref: MessageRef): Promise<GmailFullMessage>;
+  /** Headers and BODYSTRUCTURE only (no part downloaded): for backfilling messages stored before the rules. */
+  getStructure(ref: MessageRef): Promise<GmailStructure>;
   /** Ends the session. Safe to call when nothing was ever connected. */
   close(): Promise<void>;
 }

@@ -225,6 +225,15 @@ const baseEnvSchema = z.object({
   TRIAGE_START_MODEL: z.string().trim().min(1).default('ollama:gpt-oss:20b'),
   /** Bound on the redacted text a triage prompt may carry (truncated from the end, with a marker). */
   TRIAGE_MAX_CHARS: z.coerce.number().int().min(500).max(50_000).default(6000),
+  /**
+   * Senders whose mail is `document_share`, decided in code with no model call: exact addresses, or
+   * `@domain` for a whole domain, comma-separated. These are Google's own notification senders.
+   */
+  INBOX_DOCUMENT_SHARE_SENDERS: z
+    .string()
+    .default(
+      'drive-shares-dm-noreply@google.com,drive-shares-noreply@google.com,comments-noreply@docs.google.com',
+    ),
   /** Pages of UIDs one folder sweep may read per poll: bounds a first backfill and a UIDVALIDITY re-sweep. */
   GMAIL_SWEEP_MAX_PAGES: z.coerce.number().int().min(1).max(100).default(20),
   GMAIL_SWEEP_PAGE_SIZE: z.coerce.number().int().min(1).max(500).default(200),

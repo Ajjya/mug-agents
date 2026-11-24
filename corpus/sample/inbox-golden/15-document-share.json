@@ -1,0 +1,30 @@
+{
+  "id": "f15",
+  "source": "fictional",
+  "seededBy": "hand",
+  "attachments": [],
+  "body": "Sample Organiser shared a document with you\n\n\"Winter meetup run of show\"\n\nOpen in Docs: https://docs.example.invalid/d/abc123\n\nYou received this email because a document was shared with you.",
+  "expected": {
+    "intent": {
+      "value": "document_share",
+      "status": "verified"
+    },
+    "sentiment_decision": {
+      "value": "unclear",
+      "status": "verified"
+    },
+    "materials": {
+      "value": {
+        "abstract": false,
+        "bio": false,
+        "photo": false,
+        "slides": false
+      },
+      "status": "verified"
+    },
+    "needs_human": {
+      "value": false,
+      "status": "verified"
+    }
+  }
+}

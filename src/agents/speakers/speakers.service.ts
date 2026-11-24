@@ -1,3 +1,4 @@
+import { type RoutedDecision, routeDelivery } from './delivery.js';
 import { z } from 'zod';
 import {
   MESSAGE_KINDS,
@@ -5,7 +6,7 @@ import {
   type MessageKind,
   isRecordedOutside,
 } from '../../domain/message.schema.js';
-import type { SpeakerStatus } from '../../domain/speaker.schema.js';
+import type { Speaker, SpeakerStatus } from '../../domain/speaker.schema.js';
 import { threadIdFor } from '../../graph/thread.js';
 import { ProviderUnavailableError, StructuredOutputError } from '../../llm/errors.js';
 import type { LlmCallRecord } from '../../llm/model.types.js';
@@ -13,13 +14,7 @@ import type {
   ApprovalDecisionsRepository,
   ApprovalRequestsRepository,
 } from '../../approvals/approvals.repository.js';
-import {
-  type ChasePolicy,
-  type Decision,
-  decideActions,
-  type PlannedAction,
-  type Redraft,
-} from './decide.js';
+import { type ChasePolicy, decideActions, type PlannedAction, type Redraft } from './decide.js';
 import { NODE_REQUEST_APPROVAL } from './speakers.graph.js';
 import type { SpeakersRuntime, SpeakersThreadView } from './speakers.runtime.js';
 import { pipelineInput, statusFor } from './pipeline.js';
@@ -44,7 +39,7 @@ const ids = z.array(z.string()).nullable().optional();
 const RunSummarySchema = z.looseObject({
   eventId: z.string().optional(),
   decision: z
-    .custom<Decision>((v) => v === null || v === undefined || typeof v === 'object')
+    .custom<RoutedDecision>((v) => v === null || v === undefined || typeof v === 'object')
     .nullable()
     .optional(),
   created: ids,
@@ -71,7 +66,7 @@ export interface RunResult {
   threadId: string;
   /** The pending approval request this run retired (its drafts are asked for again). */
   replaced?: string;
-  decision: Decision | null;
+  decision: RoutedDecision | null;
   /** Drafts this run created (a second run for the same day creates none). */
   created: Message[];
   existing: number;
@@ -177,10 +172,15 @@ export class SpeakersService {
     options: { all?: boolean } = {},
   ): Promise<{ rows: PipelineRow[]; notes: string[]; messages: MessageRow[]; hidden: number }> {
     const p = await this.store.load(eventId);
-    const d = decideActions(
-      pipelineInput(p, now, { ...this.policy, maxDraftsPerRun: Number.MAX_SAFE_INTEGER }),
+    const d = routeDelivery(
+      decideActions(
+        pipelineInput(p, now, { ...this.policy, maxDraftsPerRun: Number.MAX_SAFE_INTEGER }),
+      ),
+      p.speakers,
+      Number.MAX_SAFE_INTEGER,
     );
-    const describe = (a: PlannedAction): string => `${a.kind} #${String(a.round)} due now`;
+    const describe = (a: PlannedAction & { delivery?: string }): string =>
+      `${a.kind} #${String(a.round)} due now${a.delivery && a.delivery !== 'email' ? ` (${a.delivery.replace(':', ' on ')}, by hand)` : ''}`;
     const rows = p.speakers.map((s): PipelineRow => {
       const sent = p.messages
         .filter((m) => m.speakerId === s._id && m.status === 'sent' && m.sentAt)
@@ -188,6 +188,9 @@ export class SpeakersService {
         .at(-1);
       const next = [
         ...d.actions.filter((a) => a.speakerId === s._id).map(describe),
+        ...d.noContact
+          .filter((a) => a.speakerId === s._id)
+          .map((a) => `${a.kind} #${String(a.round)} due: no contact details, find them`),
         ...d.blocked
           .filter((b) => b.speakerId === s._id)
           .map((b) => `${b.kind}: chase limit, call them`),
@@ -233,15 +236,19 @@ export class SpeakersService {
     };
   }
 
-  async show(
-    messageId: string,
-  ): Promise<{ message: Message; speakerName: string; email?: string }> {
+  async show(messageId: string): Promise<{
+    message: Message;
+    speakerName: string;
+    emails: string[];
+    handles: Speaker['handles'];
+  }> {
     const message = await this.store.findMessage(messageId);
     const speaker = await this.store.findSpeaker(message.speakerId);
     return {
       message,
       speakerName: speaker?.name ?? message.speakerId,
-      ...(speaker?.email ? { email: speaker.email } : {}),
+      emails: speaker?.emails ?? [],
+      handles: speaker?.handles ?? {},
     };
   }
 

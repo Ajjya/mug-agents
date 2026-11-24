@@ -3,6 +3,7 @@ import type {
   GmailClient,
   GmailFullMessage,
   GmailMetadata,
+  GmailStructure,
   ListPage,
   ListQuery,
   MessageRef,
@@ -23,6 +24,10 @@ export interface FixtureMessage {
   cc?: string;
   body: string;
   attachments: { filename: string; mimeType: string; sizeBytes: number }[];
+  /** The `List-Unsubscribe` header, when the fixture message has one. */
+  listUnsubscribe?: string;
+  /** A text/calendar MIME part exists. */
+  hasCalendarPart?: boolean;
 }
 
 interface Fixture {
@@ -37,6 +42,8 @@ export interface Calls {
   /** Gmail ids whose ENVELOPE was read / whose body was fetched. */
   metadata: string[];
   full: string[];
+  /** Gmail ids whose structure (headers + BODYSTRUCTURE, no body) was read. */
+  structure: string[];
   /** Folders opened (EXAMINE). The fake serves nothing else. */
   opened: string[];
   closed: number;
@@ -64,6 +71,7 @@ export class FakeGmail implements GmailClient {
     list: [],
     metadata: [],
     full: [],
+    structure: [],
     opened: [],
     closed: 0,
   };
@@ -274,6 +282,22 @@ export class FakeGmail implements GmailClient {
       labelIds: [...(this.fullLabels.get(m.id) ?? m.labels)],
       bodyText: m.body,
       attachments: structuredClone(m.attachments),
+      hasCalendarPart: m.hasCalendarPart ?? false,
+      headers: {
+        ...this.toMetadata(m).headers,
+        ...(m.listUnsubscribe ? { listUnsubscribe: m.listUnsubscribe } : {}),
+      },
+    });
+  }
+
+  getStructure(ref: MessageRef): Promise<GmailStructure> {
+    this.calls.structure.push(ref.id);
+    this.calls.opened.push(ref.folder);
+    const m = this.must(ref.id);
+    return Promise.resolve({
+      id: m.id,
+      hasCalendarPart: m.hasCalendarPart ?? false,
+      ...(m.listUnsubscribe ? { listUnsubscribe: m.listUnsubscribe } : {}),
     });
   }
 

@@ -1,0 +1,30 @@
+{
+  "id": "f13",
+  "source": "fictional",
+  "seededBy": "hand",
+  "attachments": [],
+  "body": "Hello,\n\nI look after the user group community programme at the database vendor. We have a new speaker toolkit and a few swag boxes for groups that run events this quarter. Could you tell me your expected attendance so I can size the shipment?\n\nBest,\nCommunity team, Database Vendor Ltd.",
+  "expected": {
+    "intent": {
+      "value": "community_manager",
+      "status": "verified"
+    },
+    "sentiment_decision": {
+      "value": "asks_question",
+      "status": "verified"
+    },
+    "materials": {
+      "value": {
+        "abstract": false,
+        "bio": false,
+        "photo": false,
+        "slides": false
+      },
+      "status": "verified"
+    },
+    "needs_human": {
+      "value": false,
+      "status": "verified"
+    }
+  }
+}

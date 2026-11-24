@@ -22,6 +22,8 @@ export const SeedSpeakerSchema = z
     bio: SpeakerInputSchema.shape.bio,
     links: SpeakerInputSchema.shape.links,
     perEvent: SpeakerInputSchema.shape.perEvent,
+    /** How to reach them where email does not apply (yet). No `emails`: an address never goes into git. */
+    handles: SpeakerInputSchema.shape.handles.optional(),
   })
   .strict();
 
@@ -82,6 +84,8 @@ export async function seedSpeakers(
       topics: s.topics,
       links: s.links,
       perEvent: s.perEvent,
+      emails: [],
+      handles: s.handles ?? {},
       ...(s.bio === undefined ? {} : { bio: s.bio }),
       ...(s.preferredName === undefined ? {} : { preferredName: s.preferredName }),
     };
@@ -96,6 +100,7 @@ export async function seedSpeakers(
       !same(existing.topics, wanted.topics) ||
       !same(existing.links, wanted.links) ||
       !same(existing.perEvent, wanted.perEvent) ||
+      (s.handles !== undefined && !same(existing.handles, s.handles)) ||
       (wanted.bio !== undefined && existing.bio !== wanted.bio) ||
       (wanted.preferredName !== undefined && existing.preferredName !== wanted.preferredName);
     if (!changed) {
@@ -107,6 +112,8 @@ export async function seedSpeakers(
       topics: wanted.topics,
       links: wanted.links,
       perEvent: wanted.perEvent,
+      // emails are never in a seed file, so a re-seed leaves the ones a human adopted alone
+      ...(s.handles === undefined ? {} : { handles: s.handles }),
       ...(wanted.bio === undefined ? {} : { bio: wanted.bio }),
       ...(wanted.preferredName === undefined ? {} : { preferredName: wanted.preferredName }),
     }));

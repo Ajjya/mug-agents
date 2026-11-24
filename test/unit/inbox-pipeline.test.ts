@@ -64,7 +64,8 @@ async function seedDomain(h: InboxHarness) {
   });
   const wendeline = await h.repos.speakers.insert({
     name: 'Wendeline Gooseberry',
-    email: 'wendeline@speakers.invalid',
+    emails: ['wendeline@speakers.invalid'],
+    handles: {},
     topics: ['validation'],
     links: {},
     perEvent: [
@@ -74,7 +75,8 @@ async function seedDomain(h: InboxHarness) {
   });
   const ignatius = await h.repos.speakers.insert({
     name: 'Ignatius Fogwhistle',
-    email: 'ignatius@speakers.invalid',
+    emails: ['ignatius@speakers.invalid'],
+    handles: {},
     topics: ['aggregation'],
     links: {},
     perEvent: [{ eventId: event._id, status: 'idea', updatedAt: '2026-10-01T00:00:00.000Z' }],
@@ -367,7 +369,8 @@ describe('the attack (spec 5): a message that instructs the reader', () => {
       speakers: speakers.map((s) => ({
         id: s._id,
         name: s.name,
-        email: s.email,
+        emails: s.emails,
+        handles: s.handles,
         bio: s.bio,
         photoUrl: s.photoUrl,
         handle: s.handle,

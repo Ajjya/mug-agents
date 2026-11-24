@@ -71,12 +71,12 @@ describe('the committed sample set (what CI and a fresh clone run)', () => {
   const check = checkGolden(SAMPLE);
   const set = loadGolden(SAMPLE);
 
-  it('is fully verified, valid, and 8-10 messages', () => {
+  it('is fully verified, valid, and 8-15 messages', () => {
     expect(check.problems).toEqual([]);
     expect(check.unverified).toBe(0);
     expect(check.ok).toBe(true);
     expect(check.files).toBeGreaterThanOrEqual(8);
-    expect(check.files).toBeLessThanOrEqual(10);
+    expect(check.files).toBeLessThanOrEqual(15);
   });
 
   it('has at least one injection message and one that must come out needs_human', () => {
@@ -103,8 +103,13 @@ describe('the committed sample set (what CI and a fresh clone run)', () => {
       speaker_reply: 5,
       venue_reply: 1,
       sponsor_enquiry: 1,
+      cohost_reply: 1,
+      coorganiser: 1,
+      community_manager: 1,
+      calendar_invite: 1,
+      document_share: 1,
     });
-    expect(check.majority).toEqual({ intent: 'speaker_reply', count: 5, share: 0.5 });
+    expect(check.majority).toEqual({ intent: 'speaker_reply', count: 5, share: 5 / 15 });
   });
 
   it('keeps quoted history and signatures in the bodies, so the eval exercises the real redaction', () => {
@@ -218,7 +223,8 @@ describe('export-golden', () => {
     const excluded = new InMemoryExcludedThreadsRepository();
     await speakers.insert({
       name: 'Rui Alves',
-      email: 'rui@real-speakers.com',
+      emails: ['rui@real-speakers.com'],
+      handles: {},
       topics: [],
       links: {},
       perEvent: [],

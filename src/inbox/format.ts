@@ -32,3 +32,17 @@ export function formatPollReport(
   );
   return out;
 }
+
+/**
+ * How the triaged messages were decided, and how many reached a model. Counts only: nothing about a message.
+ * `reached a model` is the number that matters for cost, time and what leaves the machine.
+ */
+export function formatTriageRouting(r: PollReport): string[] {
+  const d = r.decidedBy;
+  const n = (k: keyof typeof d): string => String(d[k]);
+  const decided = Object.values(d).reduce((a, b) => a + b, 0);
+  return [
+    `Intent decided by (${String(decided)} message(s) triaged): List-Unsubscribe ${n('rule_list_unsubscribe')}; calendar part ${n('rule_calendar')}; document-share sender ${n('rule_sender_list')}; known speaker ${n('lookup_speaker')}; known contact ${n('lookup_contact')}; model alone ${n('model')}.`,
+    `Reached a model: ${String(r.reachedModel)} of ${String(decided + r.triageFailed)}. Rule/lookup disagreements (earlier decider won, counted not hidden): ${String(r.ruleConflicts)}. Wall-clock: ${(r.elapsedMs / 1000).toFixed(1)}s.`,
+  ];
+}

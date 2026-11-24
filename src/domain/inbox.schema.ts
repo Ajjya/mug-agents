@@ -15,8 +15,50 @@ export const TRIAGE_INTENTS = [
   'sponsor_enquiry',
   'attendee_question',
   'newsletter_or_noise',
+  // Added after the first real run (467 messages: 33% landed in `other`, so the taxonomy did not cover the mailbox).
+  'cohost_reply',
+  'coorganiser',
+  'community_manager',
+  'calendar_invite',
+  'document_share',
   'other',
 ] as const;
+
+/**
+ * What a contact IS to us, set by a human. A known sender fixes the triage `intent` without a model call.
+ * Intents with no role (attendee_question, calendar_invite, document_share, other) are never decided by lookup.
+ */
+export const CONTACT_ROLES = [
+  'speaker',
+  'venue',
+  'cohost',
+  'coorganiser',
+  'community_manager',
+  'sponsor',
+  'noise',
+] as const;
+export type ContactRole = (typeof CONTACT_ROLES)[number];
+
+export const INTENT_BY_ROLE: Record<ContactRole, (typeof TRIAGE_INTENTS)[number]> = {
+  speaker: 'speaker_reply',
+  venue: 'venue_reply',
+  cohost: 'cohost_reply',
+  coorganiser: 'coorganiser',
+  community_manager: 'community_manager',
+  sponsor: 'sponsor_enquiry',
+  noise: 'newsletter_or_noise',
+};
+
+/** How the intent was decided. Absent on summaries stored before this field existed: those were the model. */
+export const DECIDED_BY = [
+  'model',
+  'lookup_speaker',
+  'lookup_contact',
+  'rule_list_unsubscribe',
+  'rule_calendar',
+  'rule_sender_list',
+] as const;
+export type DecidedBy = (typeof DECIDED_BY)[number];
 export const TRIAGE_DECISIONS = [
   'accepts',
   'declines',
@@ -54,7 +96,9 @@ export const TriageSummarySchema = z
     reason: z.string(),
     confidence: z.enum(TRIAGE_CONFIDENCE),
     attachmentChecks: z.array(z.string()),
+    /** `none` when no model was called for this message. */
     model: nonEmpty,
+    decidedBy: z.enum(DECIDED_BY).optional(),
   })
   .strict();
 export type Mentions = z.infer<typeof MentionsSchema>;
@@ -101,6 +145,15 @@ export const InboundMessageInputSchema = z
     /** Stored so a later audit can show the label was present. */
     labelIds: z.array(z.string()),
     attachments: z.array(AttachmentSchema),
+    /**
+     * The `List-Unsubscribe` header, verbatim and bounded (its PRESENCE is what the newsletter rule uses).
+     * Absent on messages stored before it was read, until `inbox backfill-structure` has checked them.
+     */
+    listUnsubscribe: z.string().max(1000).optional(),
+    /** A `text/calendar` (or `application/ics`) MIME part is present. Same backfill note as above. */
+    hasCalendarPart: z.boolean().optional(),
+    /** When listUnsubscribe/hasCalendarPart were read from the mailbox: distinguishes "absent" from "never looked". */
+    structureCheckedAt: isoDate.optional(),
     classification: z.literal('personal'),
     triageState: z.enum(TRIAGE_STATES),
     triage: TriageSummarySchema.optional(),
@@ -120,6 +173,9 @@ export const InboundMessageViewSchema = InboundMessageInputSchema.omit({ bodyTex
 );
 /** Only triage and link state change after creation. */
 export const InboundMessagePatchSchema = InboundMessageInputSchema.pick({
+  listUnsubscribe: true,
+  hasCalendarPart: true,
+  structureCheckedAt: true,
   triageState: true,
   triage: true,
   triageFailure: true,
@@ -213,7 +269,7 @@ export const ContactInputSchema = z
   .object({
     name: z.string().optional(),
     address: z.email().toLowerCase(),
-    role: nonEmpty.optional(),
+    role: z.enum(CONTACT_ROLES).optional(),
     speakerId: entityId.optional(),
     organisationId: entityId.optional(),
     addedBy: nonEmpty,

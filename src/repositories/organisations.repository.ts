@@ -27,6 +27,8 @@ export interface OrganisationsRepository extends Repository<
   OrganisationPatch
 > {
   findByKind(kind: OrganisationKind, options?: FindManyOptions): Promise<Page<Organisation>>;
+  /** Exact match on the stored `name` and `kind`: the identity a seed file uses (there is no handle). */
+  findByNameAndKind(name: string, kind: OrganisationKind): Promise<Organisation | null>;
 }
 
 @Injectable()
@@ -48,5 +50,16 @@ export class MongoOrganisationsRepository
 
   async findByKind(kind: OrganisationKind, options?: FindManyOptions): Promise<Page<Organisation>> {
     return await this.findWhere({ kind: OrganisationInputSchema.shape.kind.parse(kind) }, options);
+  }
+
+  async findByNameAndKind(name: string, kind: OrganisationKind): Promise<Organisation | null> {
+    const page = await this.findWhere(
+      {
+        name: OrganisationInputSchema.shape.name.parse(name),
+        kind: OrganisationInputSchema.shape.kind.parse(kind),
+      },
+      { limit: 1 },
+    );
+    return page.items[0] ?? null;
   }
 }

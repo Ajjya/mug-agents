@@ -109,14 +109,14 @@ describe('Speaker', () => {
     const s = toStorage(
       SpeakerInputSchema,
       speakerInput({
-        email: 'a@b.pt',
+        emails: ['a@b.pt'],
         perEvent: [{ eventId: ID_A, status: 'invited', updatedAt: ISO }],
       }),
     );
     expect(s.perEvent[0]?.updatedAt).toBeInstanceOf(Date);
   });
   it('rejects invalid email, status and unknown fields', () => {
-    expect(() => toStorage(SpeakerInputSchema, speakerInput({ email: 'nope' }))).toThrow(
+    expect(() => toStorage(SpeakerInputSchema, speakerInput({ emails: ['nope'] }))).toThrow(
       z.ZodError,
     );
     expect(() =>

@@ -1,0 +1,30 @@
+{
+  "id": "f14",
+  "source": "fictional",
+  "seededBy": "hand",
+  "attachments": [],
+  "body": "Invitation: Winter meetup planning call\n\nWhen: Tuesday 3 November 2026, 17:00-17:30 (Europe/Lisbon)\nWhere: https://meet.example.invalid/planning\n\nSample Organiser has invited you to this event. Reply Yes, No or Maybe.",
+  "expected": {
+    "intent": {
+      "value": "calendar_invite",
+      "status": "verified"
+    },
+    "sentiment_decision": {
+      "value": "unclear",
+      "status": "verified"
+    },
+    "materials": {
+      "value": {
+        "abstract": false,
+        "bio": false,
+        "photo": false,
+        "slides": false
+      },
+      "status": "verified"
+    },
+    "needs_human": {
+      "value": false,
+      "status": "verified"
+    }
+  }
+}

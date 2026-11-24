@@ -26,7 +26,7 @@ export const ManifestEntrySchema = z
 export type ManifestEntry = z.infer<typeof ManifestEntrySchema>;
 
 export const ManifestSchema = z
-  .object({ documents: z.array(ManifestEntrySchema).min(1) })
+  .object({ documents: z.array(ManifestEntrySchema) })
   .strict()
   .superRefine((m, ctx) => {
     const seen = new Set<string>();

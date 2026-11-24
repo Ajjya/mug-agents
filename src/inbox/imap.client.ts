@@ -6,6 +6,7 @@ import type {
   GmailClient,
   GmailFullMessage,
   GmailHeaders,
+  GmailStructure,
   GmailMetadata,
   ListPage,
   ListQuery,
@@ -123,17 +124,22 @@ function headersOf(m: FetchedMessage): GmailHeaders {
   return out;
 }
 
-/** `References: <a> <b>` out of the raw header block fetched alongside the body. */
-function referencesOf(raw: Buffer | undefined): string | undefined {
+/** One header's value (unfolded) out of the raw header block fetched alongside the body. */
+function headerValue(raw: Buffer | undefined, name: string): string | undefined {
   if (!raw) return undefined;
   const unfolded = raw.toString('utf8').replace(/\r?\n[ \t]+/g, ' ');
-  const line = /^references:\s*(.*)$/im.exec(unfolded);
+  const line = new RegExp(`^${name}:\\s*(.*)$`, 'im').exec(unfolded);
   return line?.[1]?.trim() || undefined;
 }
+
+/** Bounded: only its presence is used, and nothing about a message should grow without limit. */
+const boundedHeader = (v: string | undefined): string | undefined => v?.slice(0, 1000);
 
 interface Walked {
   textParts: { part: string; type: 'plain' | 'html' }[];
   attachments: GmailAttachmentInfo[];
+  /** A `text/calendar` or `application/ics` part exists (named or not): never downloaded. */
+  hasCalendarPart: boolean;
 }
 
 /** Walks BODYSTRUCTURE: text parts are listed to be downloaded, attachments are LISTED and never opened. */
@@ -144,6 +150,9 @@ function walk(node: BodyNode, acc: Walked, isRoot: boolean): Walked {
     return acc;
   }
   const filename = node.dispositionParameters?.['filename'] ?? node.parameters?.['name'];
+  if (type === 'text/calendar' || type === 'application/ics' || /\.ics$/i.test(filename ?? '')) {
+    acc.hasCalendarPart = true;
+  }
   if (node.disposition?.toLowerCase() === 'attachment' || (filename && !type.startsWith('text/'))) {
     acc.attachments.push({
       filename: filename ?? 'unnamed',
@@ -314,11 +323,11 @@ export class ImapGmailClient implements GmailClient {
         const m = await this.fetchOne(s, ref, {
           ...ENVELOPE_QUERY,
           bodyStructure: true,
-          headers: ['references'],
+          headers: ['references', 'list-unsubscribe'],
         });
         const walked = m.bodyStructure
-          ? walk(m.bodyStructure, { textParts: [], attachments: [] }, true)
-          : { textParts: [], attachments: [] };
+          ? walk(m.bodyStructure, { textParts: [], attachments: [], hasCalendarPart: false }, true)
+          : { textParts: [], attachments: [], hasCalendarPart: false };
         const plain: string[] = [];
         const html: string[] = [];
         for (const p of walked.textParts) {
@@ -330,15 +339,46 @@ export class ImapGmailClient implements GmailClient {
         }
         const text = plain.length > 0 ? plain.join('\n') : stripHtml(html.join('\n'));
         const meta = this.toMetadata(m, ref);
-        const references = referencesOf(m.headers);
+        const references = headerValue(m.headers, 'references');
+        const listUnsubscribe = boundedHeader(headerValue(m.headers, 'list-unsubscribe'));
         return {
           ...meta,
-          headers: { ...meta.headers, ...(references ? { references } : {}) },
+          headers: {
+            ...meta.headers,
+            ...(references ? { references } : {}),
+            ...(listUnsubscribe ? { listUnsubscribe } : {}),
+          },
+          hasCalendarPart: walked.hasCalendarPart,
           bodyText:
             text.length > MAX_BODY_CHARS
               ? `${text.slice(0, MAX_BODY_CHARS)}\n[... body truncated]`
               : text,
           attachments: walked.attachments,
+        };
+      }),
+    );
+  }
+
+  /**
+   * Headers and BODYSTRUCTURE only: no part is downloaded. For messages stored before the structure rules
+   * existed (`inbox backfill-structure`); the same read-only folder rules apply.
+   */
+  async getStructure(ref: MessageRef): Promise<GmailStructure> {
+    return await this.guard('UID FETCH (BODYSTRUCTURE, List-Unsubscribe)', async () =>
+      this.withFolder(ref.folder, async (s) => {
+        const m = await this.fetchOne(s, ref, {
+          ...ENVELOPE_QUERY,
+          bodyStructure: true,
+          headers: ['list-unsubscribe'],
+        });
+        const walked = m.bodyStructure
+          ? walk(m.bodyStructure, { textParts: [], attachments: [], hasCalendarPart: false }, true)
+          : { hasCalendarPart: false };
+        const listUnsubscribe = boundedHeader(headerValue(m.headers, 'list-unsubscribe'));
+        return {
+          id: ref.id,
+          hasCalendarPart: walked.hasCalendarPart,
+          ...(listUnsubscribe ? { listUnsubscribe } : {}),
         };
       }),
     );
@@ -399,6 +439,9 @@ export class LazyGmailClient implements GmailClient {
   }
   getFull(ref: MessageRef) {
     return this.c().getFull(ref);
+  }
+  getStructure(ref: MessageRef) {
+    return this.c().getStructure(ref);
   }
   async close() {
     await this.inner?.close();

@@ -1,9 +1,12 @@
-import type {
-  CandidateThread,
-  FolderCursor,
-  InboundMessage,
-  InboundMessageInput,
-  InboxCursor,
+import {
+  DECIDED_BY,
+  type CandidateThread,
+  type ContactRole,
+  type DecidedBy,
+  type FolderCursor,
+  type InboundMessage,
+  type InboundMessageInput,
+  type InboxCursor,
 } from '../domain/inbox.schema.js';
 import { ProviderUnavailableError } from '../llm/errors.js';
 import { DuplicateKeyError } from '../repositories/base.repository.js';
@@ -18,6 +21,7 @@ import type { GmailClient, GmailMetadata, MessageRef } from './gmail.transport.j
 import type { InboxConfig } from './inbox.config.js';
 import { recordInbound, resolveLink } from './linking.js';
 import { redactForTriage } from './redact.js';
+import { classify, ruleSummary, type Classification } from './rules.js';
 import type {
   AdmittedThreadsRepository,
   CandidateThreadsRepository,
@@ -44,6 +48,22 @@ export interface InboxDeps {
   config: InboxConfig;
   /** Counts and flags only. Never a subject, an address or any text from a message. */
   log: (message: string, fields?: Record<string, number | string | boolean>) => void;
+}
+
+export interface RetriageReport extends PollReport {
+  /** Messages considered for re-triage. */
+  considered: number;
+}
+
+export interface BackfillReport {
+  /** Stored messages whose structure had never been read. */
+  needed: number;
+  checked: number;
+  /** Of those checked: how many carry a List-Unsubscribe header / a calendar part. */
+  withListUnsubscribe: number;
+  withCalendarPart: number;
+  /** Stored messages whose Gmail id was not found in either label folder (moved or unlabelled since). */
+  notFound: number;
 }
 
 export interface PollOptions {
@@ -73,6 +93,18 @@ export interface PollReport {
   uidValidityReset: boolean;
   /** A sweep hit GMAIL_SWEEP_MAX_PAGES: the rest is picked up by the next poll. */
   sweepTruncated: boolean;
+  /**
+   * Of the messages triaged by this run, how each one's intent was decided. `model` is the model alone;
+   * `lookup_*` is a known sender (intent fixed, the model still asked for the rest unless the role is
+   * noise); `rule_*` never reached a model.
+   */
+  decidedBy: Record<DecidedBy, number>;
+  /** Messages for which a provider call was made (decidedBy `model`, or a lookup that still asked the model). */
+  reachedModel: number;
+  /** Messages where two deciders gave DIFFERENT intents: the earlier won and the disagreement is counted here. */
+  ruleConflicts: number;
+  /** Wall-clock of the whole poll. */
+  elapsedMs: number;
   /** `--dry-run` only. */
   wouldStore: { gmailId: string; threadId: string; receivedAt: string; subject: string }[];
 }
@@ -106,6 +138,10 @@ const emptyReport = (): PollReport => ({
   triageSkippedExcluded: 0,
   uidValidityReset: false,
   sweepTruncated: false,
+  decidedBy: Object.fromEntries(DECIDED_BY.map((d) => [d, 0])) as Record<DecidedBy, number>,
+  reachedModel: 0,
+  ruleConflicts: 0,
+  elapsedMs: 0,
   wouldStore: [],
 });
 
@@ -193,6 +229,7 @@ export class InboxService {
    */
   async poll(options: PollOptions = {}): Promise<PollReport> {
     const now = options.now ?? new Date();
+    const startedAt = Date.now();
     const dry = options.dryRun === true;
     const { gmail, config } = this.deps;
     const report = emptyReport();
@@ -222,6 +259,7 @@ export class InboxService {
       // With --since the sweep re-read old UIDs on purpose and the cursor is left where it was.
       if (!since) await this.saveCursor(cursor, [labelled.state], now, report);
     }
+    report.elapsedMs = Date.now() - startedAt;
     this.deps.log('inbox poll', {
       stored: report.stored.length,
       alreadyStored: report.alreadyStored,
@@ -232,6 +270,9 @@ export class InboxService {
       triaged: report.triaged,
       triageFailed: report.triageFailed,
       triagePending: report.triagePending,
+      reachedModel: report.reachedModel,
+      ruleConflicts: report.ruleConflicts,
+      elapsedMs: report.elapsedMs,
       uidValidityReset: report.uidValidityReset,
       sweepTruncated: report.sweepTruncated,
       dryRun: dry,
@@ -409,6 +450,9 @@ export class InboxService {
       bodySnippet: redacted.slice(0, 200),
       labelIds: full.labelIds,
       attachments: full.attachments,
+      ...(full.headers.listUnsubscribe ? { listUnsubscribe: full.headers.listUnsubscribe } : {}),
+      hasCalendarPart: full.hasCalendarPart,
+      structureCheckedAt: ctx.now.toISOString(),
       classification: 'personal',
       triageState: 'pending',
       ...(link.speakerId ? { linkedSpeakerId: link.speakerId } : {}),
@@ -462,7 +506,11 @@ export class InboxService {
   // =============================================================================================
 
   /** Triages whatever is pending. The model sees the REDACTED body, which is what is stored. */
-  private async triagePending(report: PollReport, only?: readonly InboundMessage[]): Promise<void> {
+  private async triagePending(
+    report: PollReport,
+    only?: readonly InboundMessage[],
+    options: { tasks: boolean } = { tasks: true },
+  ): Promise<void> {
     for (const m of only ?? (await this.deps.inbound.findByTriageState('pending', 200))) {
       // Exclusion is checked HERE, at the moment of the provider call, not when the message was stored:
       // a thread excluded after its messages were stored (while the provider was down, say) must not
@@ -472,8 +520,30 @@ export class InboxService {
         continue;
       }
       try {
-        const out = await this.deps.triager.run(m.bodyRedacted, m.attachments);
+        const { verdict, overridden } = await this.classifyStored(m);
+        if (overridden.length > 0) report.ruleConflicts++;
         const triagedAt = new Date().toISOString();
+        if (verdict.mode === 'rule') {
+          // Decided in code: no model, no provider call, nothing leaves the machine.
+          const summary = ruleSummary(verdict.intent, verdict.decidedBy);
+          await this.deps.inbound.update(m._id, {
+            triageState: 'done',
+            triage: summary,
+            triagedAt,
+          });
+          report.triaged++;
+          report.decidedBy[verdict.decidedBy]++;
+          if (options.tasks) await this.raiseTask(m, summary);
+          continue;
+        }
+        const out = await this.deps.triager.run(
+          m.bodyRedacted,
+          m.attachments,
+          verdict.mode === 'fixed-intent'
+            ? { intent: verdict.intent, decidedBy: verdict.decidedBy }
+            : undefined,
+        );
+        report.reachedModel++;
         if (out.ok) {
           await this.deps.inbound.update(m._id, {
             triageState: 'done',
@@ -481,6 +551,7 @@ export class InboxService {
             triagedAt,
           });
           report.triaged++;
+          report.decidedBy[verdict.mode === 'fixed-intent' ? verdict.decidedBy : 'model']++;
         } else {
           await this.deps.inbound.update(m._id, {
             triageState: 'failed',
@@ -489,13 +560,34 @@ export class InboxService {
           });
           report.triageFailed++;
         }
-        await this.raiseTask(m, out.ok ? out.summary : undefined);
+        if (options.tasks) await this.raiseTask(m, out.ok ? out.summary : undefined);
       } catch (err) {
         if (!(err instanceof ProviderUnavailableError)) throw err;
         report.triagePending++;
         return; // an outage: leave the rest pending, retry next poll
       }
     }
+  }
+
+  /**
+   * Who is this sender to us, and what do the message's own headers say? Resolved from the speakers and
+   * contacts a human maintains, then from the stored structure (List-Unsubscribe, calendar part).
+   */
+  private async classifyStored(m: InboundMessage): Promise<Classification> {
+    const [speaker, contact] = await Promise.all([
+      this.deps.speakers.findByEmail(m.from.address),
+      this.deps.contacts.findByAddress(m.from.address),
+    ]);
+    return classify(
+      {
+        fromAddress: m.from.address,
+        listUnsubscribe: m.listUnsubscribe,
+        hasCalendarPart: m.hasCalendarPart,
+        isSpeaker: speaker !== null,
+        contactRole: contact?.role,
+      },
+      this.deps.config.documentShareSenders,
+    );
   }
 
   /**
@@ -553,6 +645,120 @@ export class InboxService {
     };
     if (current) await this.deps.cursor.updateWithRetry(current._id, () => patch);
     else await this.deps.cursor.insert({ key: 'gmail', ...patch });
+  }
+
+  /**
+   * Runs every stored message through the CURRENT triage (lookup, rules, then the model for what is left),
+   * replacing its summary. For when the taxonomy or the rules changed. Raises no tasks: the first triage
+   * already did, and re-raising for messages a human has since handled would be noise.
+   */
+  async retriage(options: { limit?: number } = {}): Promise<RetriageReport> {
+    const startedAt = Date.now();
+    const report: RetriageReport = { ...emptyReport(), considered: 0 };
+    const all = await this.deps.inbound.findRecent(options.limit ?? 5000);
+    for (const m of all) {
+      report.considered++;
+      const pending = await this.deps.inbound.update(m._id, { triageState: 'pending' });
+      await this.triagePending(report, [pending ?? m], { tasks: false });
+      if (report.triagePending > 0) break; // a provider outage: the rest stay as they were
+    }
+    report.elapsedMs = Date.now() - startedAt;
+    return report;
+  }
+
+  /**
+   * Reads List-Unsubscribe and the calendar part for STORED messages that were stored before those were
+   * recorded. Headers and BODYSTRUCTURE only: no part is downloaded, nothing is stored that was not already
+   * in scope, and a message outside both label folders (or in an excluded thread) is left alone.
+   */
+  async backfillStructure(): Promise<BackfillReport> {
+    const { gmail, config } = this.deps;
+    const labelId = await gmail.resolveLabelId(config.label);
+    if (labelId === null) throw new InboxLabelMissingError(config.label);
+    const candidateId = await gmail.resolveLabelId(config.candidateLabel);
+    if (candidateId === null) throw new InboxLabelMissingError(config.candidateLabel);
+    const stored = await this.deps.inbound.findRecent(10_000);
+    const wanted = new Map(
+      stored.filter((m) => m.structureCheckedAt === undefined).map((m) => [m.gmailId, m]),
+    );
+    const report: BackfillReport = {
+      needed: wanted.size,
+      checked: 0,
+      withListUnsubscribe: 0,
+      withCalendarPart: 0,
+      notFound: 0,
+    };
+    const scratch = emptyReport();
+    for (const folder of [labelId, candidateId]) {
+      if (wanted.size === 0) break;
+      const { refs } = await this.sweep(folder, undefined, null, scratch);
+      for (const ref of refs) {
+        const m = wanted.get(ref.id);
+        if (!m) continue; // not stored: never read
+        if ((await this.deps.excluded.findByThreadId(m.threadId))?.status === 'excluded') continue;
+        const st = await gmail.getStructure(ref);
+        await this.deps.inbound.update(m._id, {
+          ...(st.listUnsubscribe ? { listUnsubscribe: st.listUnsubscribe } : {}),
+          hasCalendarPart: st.hasCalendarPart,
+          structureCheckedAt: new Date().toISOString(),
+        });
+        wanted.delete(ref.id);
+        report.checked++;
+        if (st.listUnsubscribe) report.withListUnsubscribe++;
+        if (st.hasCalendarPart) report.withCalendarPart++;
+      }
+    }
+    report.notFound = wanted.size;
+    return report;
+  }
+
+  /** A human says what a sender IS to us. A contact is created (source `added_by_human`) if there is none. */
+  async setContactRole(
+    address: string,
+    role: ContactRole,
+    by: string,
+  ): Promise<'created' | 'updated' | 'unchanged'> {
+    const existing = await this.deps.contacts.findByAddress(address);
+    if (existing) {
+      if (existing.role === role) return 'unchanged';
+      await this.deps.contacts.updateWithRetry(existing._id, () => ({ role }));
+      return 'updated';
+    }
+    await this.deps.contacts.insert({
+      address: address.trim().toLowerCase(),
+      role,
+      addedBy: by,
+      addedAt: new Date().toISOString(),
+      source: 'added_by_human',
+    });
+    return 'created';
+  }
+
+  /** Everything the rule validation needs from the database, and nothing it should not (no bodies). */
+  async validationInputs(): Promise<{
+    messages: InboundMessage[];
+    speakerEmails: Set<string>;
+    contactRoles: Map<string, ContactRole>;
+    documentShareSenders: string[];
+  }> {
+    const messages = await this.deps.inbound.findRecent(10_000);
+    const speakerEmails = new Set<string>();
+    for (const m of messages) {
+      if ((await this.deps.speakers.findByEmail(m.from.address)) !== null) {
+        speakerEmails.add(m.from.address);
+      }
+    }
+    const contactRoles = new Map<string, ContactRole>();
+    for (const m of messages) {
+      const c = await this.deps.contacts.findByAddress(m.from.address);
+      if (c?.role) contactRoles.set(c.address, c.role);
+    }
+    return {
+      messages,
+      speakerEmails,
+      contactRoles,
+      documentShareSenders: this.deps.config.documentShareSenders,
+    };
   }
 
   // =============================================================================================
@@ -655,7 +861,12 @@ export class InboxService {
   }
 
   /** A human links a message: `inbox link <id> --speaker <id> --event <id>`. */
-  async link(messageId: string, speakerId: string, eventId: string): Promise<InboundMessage> {
+  async link(
+    messageId: string,
+    speakerId: string,
+    eventId: string,
+    options: { adoptAddress?: boolean } = {},
+  ): Promise<InboundMessage & { adoptedAddress?: string }> {
     const message = await this.deps.inbound.findById(messageId);
     if (!message) throw new InboxInputError(`No inbound message ${messageId}`);
     const speaker = await this.deps.speakers.findById(speakerId);
@@ -663,6 +874,10 @@ export class InboxService {
     if (!speaker.perEvent.some((p) => p.eventId.toLowerCase() === eventId.toLowerCase())) {
       throw new InboxInputError(`Speaker ${speakerId} has no pipeline entry for event ${eventId}`);
     }
+    // Human-initiated only: without the flag nothing about the speaker's identity changes.
+    const adoptedAddress = options.adoptAddress
+      ? await this.adoptAddress(speaker, message.from.address)
+      : undefined;
     const updated = await this.deps.inbound.update(messageId, {
       linkedSpeakerId: speakerId,
       linkedEventId: eventId,
@@ -670,7 +885,32 @@ export class InboxService {
     });
     await recordInbound(this.deps.speakers, speakerId, [eventId], message.receivedAt);
     await this.noteContact(message.from, { speakerId });
-    return updated ?? message;
+    return { ...(updated ?? message), ...(adoptedAddress ? { adoptedAddress } : {}) };
+  }
+
+  /**
+   * Records the sender's address on the speaker (`inbox link --adopt-address`). Refused when the address is
+   * unknown or already belongs to another speaker. Returns the address when it was added, nothing when the
+   * speaker already had it.
+   */
+  private async adoptAddress(
+    speaker: { _id: string; emails: string[] },
+    address: string,
+  ): Promise<string | undefined> {
+    if (address === UNKNOWN_SENDER.address) {
+      throw new InboxInputError('This message has no usable sender address to adopt.');
+    }
+    if (speaker.emails.includes(address)) return undefined;
+    const owner = await this.deps.speakers.findByEmail(address);
+    if (owner && owner._id !== speaker._id) {
+      throw new InboxInputError(
+        `That address already belongs to another speaker (${owner._id}): not adopted.`,
+      );
+    }
+    await this.deps.speakers.updateWithRetry(speaker._id, (s) => ({
+      emails: s.emails.includes(address) ? s.emails : [...s.emails, address],
+    }));
+    return address;
   }
 
   /** Re-runs triage for a message whose triage failed (and nothing else). */

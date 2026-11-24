@@ -1,4 +1,5 @@
 import { isForbiddenFolder } from './folders.js';
+import { parseSenderList } from './rules.js';
 import {
   ConfigError,
   type AppConfig,
@@ -16,6 +17,8 @@ export interface InboxConfig {
   /** Pages of GMAIL_SWEEP_PAGE_SIZE UIDs one poll may read per folder: bounds a backfill or a re-sweep. */
   sweepMaxPages: number;
   sweepPageSize: number;
+  /** Senders (addresses, or `@domain`) whose mail is `document_share` with no model call. Lower-cased. */
+  documentShareSenders: string[];
 }
 
 /**
@@ -74,6 +77,7 @@ export function resolveInboxConfig(config: AppConfig): InboxConfig {
     triageMaxChars: config.TRIAGE_MAX_CHARS,
     sweepMaxPages: config.GMAIL_SWEEP_MAX_PAGES,
     sweepPageSize: config.GMAIL_SWEEP_PAGE_SIZE,
+    documentShareSenders: parseSenderList(config.INBOX_DOCUMENT_SHARE_SENDERS),
   };
 }
 

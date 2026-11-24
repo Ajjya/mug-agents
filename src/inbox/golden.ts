@@ -231,7 +231,7 @@ export async function exportGolden(
   )) {
     pseud.learn('person', s.name);
     if (s.preferredName) pseud.learn('person', s.preferredName);
-    if (s.email) pseud.address(s.email);
+    for (const e of s.emails) pseud.address(e);
   }
   for (const o of await allPages((after) =>
     deps.organisations.findMany({ limit: 200, ...(after ? { after } : {}) }),

@@ -73,9 +73,12 @@ describe('startup indexes', () => {
     expect(await actual()).toEqual(expected.sort());
 
     const speakerEmail = (await mongo.db.collection('speakers').indexes()).find(
-      (i) => i.name === 'speakers_email_unique',
+      (i) => i.name === 'speakers_emails_unique',
     );
-    expect(speakerEmail).toMatchObject({ unique: true, sparse: true });
+    expect(speakerEmail).toMatchObject({
+      unique: true,
+      partialFilterExpression: { emails: { $type: 'string' } },
+    });
 
     const second = await createApp(config(mongo.uri, mongo.dbName));
     await second.close();

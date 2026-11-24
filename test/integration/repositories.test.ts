@@ -141,14 +141,14 @@ describe('Mongo-specific behaviour', () => {
     });
   });
 
-  describe('speakers.email unique index', () => {
-    it('surfaces MongoDB error 11000 as DuplicateKeyError on the email key', async () => {
+  describe('speakers.emails unique index', () => {
+    it('surfaces MongoDB error 11000 as DuplicateKeyError on the emails key', async () => {
       await fresh(mongo.db, 'speakers');
       const repo = new MongoSpeakersRepository(mongo.db);
-      await repo.insert(speakerInput({ email: 'dup@example.com' }));
-      await expect(repo.insert(speakerInput({ email: 'dup@example.com' }))).rejects.toSatisfy(
+      await repo.insert(speakerInput({ emails: ['dup@example.com'] }));
+      await expect(repo.insert(speakerInput({ emails: ['dup@example.com'] }))).rejects.toSatisfy(
         (e: unknown) =>
-          e instanceof DuplicateKeyError && e.collection === 'speakers' && 'email' in e.keyPattern,
+          e instanceof DuplicateKeyError && e.collection === 'speakers' && 'emails' in e.keyPattern,
       );
     });
   });
