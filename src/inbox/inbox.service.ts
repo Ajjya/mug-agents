@@ -114,6 +114,21 @@ export interface PollReport {
   wouldStore: { gmailId: string; threadId: string; receivedAt: string; subject: string }[];
 }
 
+export interface RelinkReport {
+  /** `unlinked` messages examined. */
+  considered: number;
+  /** unlinked -> auto. */
+  moved: number;
+  stillUnlinked: number;
+  byAddress: number;
+  byThread: number;
+  /** Platform senders are never linked. */
+  skippedPlatform: number;
+  /** In an excluded thread: left alone. */
+  skippedExcluded: number;
+  dryRun: boolean;
+}
+
 export class InboxLabelMissingError extends Error {
   constructor(public readonly label: string) {
     super(
@@ -682,6 +697,65 @@ export class InboxService {
       if (report.triagePending > 0) break; // a provider outage: the rest stay as they were
     }
     report.elapsedMs = Date.now() - startedAt;
+    return report;
+  }
+
+  /**
+   * Re-runs the DETERMINISTIC linking rules over stored messages that are still `unlinked`: sender address
+   * against speakers and contacts, then thread inheritance (the very rules a poll uses). No Gmail, no model, no
+   * body: nothing is refetched. A name match never links. `confirmed_by_human` and `auto` are left alone.
+   * A message that links also moves its speaker's `lastInboundAt` (it is a reply, however late we learned who
+   * wrote it: chasing someone who has written back is the worst failure this system can produce).
+   * Oldest first, so a later message of a thread inherits what an earlier one has just been linked to.
+   */
+  async relink(options: { dryRun?: boolean; limit?: number } = {}): Promise<RelinkReport> {
+    const report: RelinkReport = {
+      considered: 0,
+      moved: 0,
+      stillUnlinked: 0,
+      byAddress: 0,
+      byThread: 0,
+      skippedPlatform: 0,
+      skippedExcluded: 0,
+      dryRun: options.dryRun === true,
+    };
+    const unlinked = (await this.deps.inbound.findRecent(options.limit ?? 10_000))
+      .filter((m) => m.linkState === 'unlinked')
+      .sort((a, b) => a.receivedAt.localeCompare(b.receivedAt));
+    // A dry run cannot see its own earlier "links", so thread inheritance is checked against what is stored:
+    // a thread-only match that depends on another unlinked message is reported on the real run.
+    for (const m of unlinked) {
+      report.considered++;
+      if (await this.isPlatformSender(m.from.address)) {
+        report.skippedPlatform++;
+        continue;
+      }
+      if ((await this.deps.excluded.findByThreadId(m.threadId))?.status === 'excluded') {
+        report.skippedExcluded++;
+        continue;
+      }
+      const link = await resolveLink(
+        { fromAddress: m.from.address, threadId: m.threadId },
+        this.deps,
+      );
+      if (link.linkState !== 'auto') {
+        report.stillUnlinked++;
+        continue;
+      }
+      report.moved++;
+      if (link.via === 'thread') report.byThread++;
+      else report.byAddress++;
+      if (options.dryRun) continue;
+      if (link.speakerId && link.eventIds.length > 0) {
+        await recordInbound(this.deps.speakers, link.speakerId, link.eventIds, m.receivedAt);
+      }
+      await this.deps.inbound.update(m._id, {
+        linkState: 'auto',
+        ...(link.speakerId ? { linkedSpeakerId: link.speakerId } : {}),
+        ...(link.organisationId ? { linkedOrganisationId: link.organisationId } : {}),
+        ...(link.eventId ? { linkedEventId: link.eventId } : {}),
+      });
+    }
     return report;
   }
 

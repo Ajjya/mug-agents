@@ -650,6 +650,7 @@ npm run inbox -- dismiss <threadId> [--reason ..] # refuse the loose label for g
 npm run inbox -- exclude-thread <threadId> --reason "..."   # stop reading a thread (include-thread undoes it)
 npm run inbox -- list | show <messageId> [--raw]
 npm run inbox -- link <messageId> --speaker <id> --event <id>
+npm run inbox -- relink [--dry-run] [--limit n]   # re-run the deterministic linking over stored 'unlinked' messages (no Gmail, no model)
 ```
 
 ### Triage, linking, and what a reply changes

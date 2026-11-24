@@ -64,6 +64,9 @@ with EXAMINE, and INBOX and [Gmail]/All Mail are never opened.
                                           link a message to a speaker and event (pauses chasing).
                                           --adopt-address also records the sender's address on the speaker
                                           (the only way an address is added; without it nothing about the speaker changes)
+  relink [--dry-run] [--limit n]          re-run the deterministic linking rules (sender address against speakers and
+                                          contacts, then thread inheritance) over stored messages still 'unlinked'.
+                                          No Gmail, no model, no name matching. 'confirmed_by_human' is never touched
   retry-triage <messageId>                run triage again for a message whose triage failed
   retriage                                run EVERY stored message through the current triage (lookup, rules,
                                           then the model for what is left). Raises no tasks
@@ -311,6 +314,16 @@ runCli(
         if (!target) return usage();
         const m = await inbox.retryTriage(target);
         console.log(`Triage is now: ${m.triageState}`);
+        return 0;
+      }
+      case 'relink': {
+        const r = await inbox.relink({
+          dryRun: values['dry-run'] === true,
+          ...(values.limit ? { limit: Number(values.limit) } : {}),
+        });
+        console.log(
+          `${r.dryRun ? 'DRY RUN: nothing written. ' : ''}Considered ${String(r.considered)} unlinked message(s): ${r.dryRun ? 'would move' : 'moved'} ${String(r.moved)} to auto (${String(r.byAddress)} by sender address, ${String(r.byThread)} by thread); still unlinked ${String(r.stillUnlinked)}; platform senders skipped ${String(r.skippedPlatform)}; excluded threads skipped ${String(r.skippedExcluded)}.`,
+        );
         return 0;
       }
       case 'retriage': {
