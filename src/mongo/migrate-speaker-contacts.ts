@@ -1,4 +1,4 @@
-import type { Collection, Document } from 'mongodb';
+import type { Collection } from 'mongodb';
 
 export interface SpeakerContactsMigration {
   /** `email` moved into `emails`. */
@@ -22,9 +22,7 @@ export interface SpeakerContactsMigration {
  *
  * Nothing else is touched, and nothing is deleted except the old email index and the moved field.
  */
-export async function migrateSpeakerContacts(
-  col: Collection<Document>,
-): Promise<SpeakerContactsMigration> {
+export async function migrateSpeakerContacts(col: Collection): Promise<SpeakerContactsMigration> {
   const moved = await col.updateMany({ email: { $exists: true } }, [
     {
       $set: {

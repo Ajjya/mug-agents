@@ -65,11 +65,11 @@ describe('speaker contact migration: a LinkedIn URL has one home, handles.linked
     expect((await by('Clean'))?.['links']).toEqual({ website: 'https://c.invalid' });
 
     // After migration the speaker is reachable: the old document parses, and chooseDelivery sees the handle.
-    const { _id, createdAt, version, ...stored } = ((await by('Has Whatsapp')) ?? {}) as Record<
-      string,
-      unknown
-    >;
-    void [_id, createdAt, version];
+    const stored = Object.fromEntries(
+      Object.entries(((await by('Has Whatsapp')) ?? {}) as Record<string, unknown>).filter(
+        ([k]) => !['_id', 'createdAt', 'version'].includes(k),
+      ),
+    );
     const migrated = SpeakerInputSchema.parse(stored);
     expect(chooseDelivery(migrated)).toBe('manual:linkedin');
   });
