@@ -80,6 +80,56 @@ const ORGS = [
 const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const EMAIL = /[\w.+-]+@[\w-]+(?:\.[\w-]+)+/g;
 
+/** A URL, up to whitespace or a closing bracket or quote. */
+const URL_RE = /https?:\/\/[^\s<>"')\]]+/gi;
+/** An address with its `@` percent-encoded (`name%40host.com`), which the plain pattern does not see. */
+const PERCENT_EMAIL = /[\w.+-]+%40[\w-]+(?:\.[\w-]+)+/gi;
+/** A long run of base64 or base64url characters: a candidate encoded blob. */
+const TOKEN = /[A-Za-z0-9+/_-]{16,}={0,2}/g;
+/** A long run of hex digits: an address spelled out byte by byte. */
+const HEX = /\b(?:[0-9a-f]{2}){12,}\b/gi;
+const EMAIL_ONCE = new RegExp(EMAIL.source);
+
+/**
+ * Query strings carry tokens, tracking ids and addresses (Google Calendar links put the recipient, encoded, in
+ * `tok=` and `mark_sender_as_known=`). Nothing in a query is needed to see what a message is about, so it is
+ * removed: scheme, host and path stay.
+ */
+export function stripUrlQueries(text: string): string {
+  return text.replace(URL_RE, (url) => {
+    const q = url.indexOf('?');
+    return q === -1 ? url : url.slice(0, q);
+  });
+}
+
+/**
+ * A candidate blob, as the pattern found it. `/` is part of standard base64 but also the separator in a URL path,
+ * so it is tried whole first, then piece by piece (only the offending piece is replaced, the path stays).
+ */
+function scrubToken(token: string, replacement: () => string): string {
+  if (tokenHidesAddress(token)) return replacement();
+  if (!token.includes('/')) return token;
+  return token
+    .split('/')
+    .map((piece) => (piece.length >= 16 && tokenHidesAddress(piece) ? replacement() : piece))
+    .join('/');
+}
+
+/** Does this token, base64 or base64url decoded (up to three layers deep), contain an address? */
+export function tokenHidesAddress(token: string, depth = 0): boolean {
+  if (depth > 2) return false;
+  const standard = token.replace(/-/g, '+').replace(/_/g, '/').replace(/=+$/, '');
+  let decoded: string;
+  try {
+    decoded = Buffer.from(standard, 'base64').toString('latin1');
+  } catch {
+    return false;
+  }
+  if (EMAIL_ONCE.test(decoded)) return true;
+  // base64 of base64: look for a further blob inside what came out
+  return (decoded.match(TOKEN) ?? []).some((inner) => tokenHidesAddress(inner, depth + 1));
+}
+
 export class Pseudonymiser {
   readonly map: PseudonymMap;
 
@@ -139,7 +189,18 @@ export class Pseudonymiser {
       slots.push(fake);
       return `\uE000${String(slots.length - 1)}\uE001`;
     };
-    let out = input.replace(EMAIL, (m) => hold(this.address(m)));
+    // Before anything else: the places an address hides that the plain pattern cannot see.
+    let out = stripUrlQueries(input)
+      .replace(PERCENT_EMAIL, (m) =>
+        hold(this.address(decodeURIComponent(m.replace(/%40/gi, '@')))),
+      )
+      .replace(HEX, (h) =>
+        EMAIL_ONCE.test(Buffer.from(h, 'hex').toString('latin1'))
+          ? hold('[encoded-address-removed]')
+          : h,
+      )
+      .replace(TOKEN, (t) => scrubToken(t, () => hold('[encoded-address-removed]')));
+    out = out.replace(EMAIL, (m) => hold(this.address(m)));
     const pairs: [string, string][] = [
       ...Object.entries(this.map.people),
       ...Object.entries(this.map.organisations),

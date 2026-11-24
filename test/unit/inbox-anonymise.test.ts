@@ -94,3 +94,75 @@ describe('Pseudonymiser: stable, fictional, consistent (spec 8)', () => {
     expect(() => PseudonymMapSchema.parse({ ...m, extra: 1 })).toThrow();
   });
 });
+
+describe('addresses hidden where the plain pattern cannot see them (URLs and encoded blobs)', () => {
+  const ADDRESS = 'yashraj.nayak@mongodb.com';
+  const b64 = Buffer.from(ADDRESS).toString('base64');
+  const b64url = Buffer.from(ADDRESS).toString('base64url');
+  const double = Buffer.from(b64).toString('base64');
+  const pct = ADDRESS.replace('@', '%40');
+  /** Every encoding the address could come back in. */
+  const FORMS = [
+    ADDRESS,
+    ADDRESS.toUpperCase(),
+    pct,
+    b64,
+    b64.replace(/=+$/, ''),
+    b64url,
+    double,
+    Buffer.from(ADDRESS).toString('hex'),
+  ];
+
+  const body = [
+    'You have been invited to MUG Lisbon.',
+    `View in calendar: https://www.google.com/calendar/event?action=VIEW&eid=abc&tok=${b64url}&ctz=Europe%2FLisbon&hl=en&es=1&mark_sender_as_known=${b64}`,
+    `Unsubscribe: https://example.invalid/u/${b64url}/confirm`,
+    `Reply to ${pct} or use this code: ${double}`,
+    `Reference blob on its own line:\n${b64}`,
+    `Spelled out: ${Buffer.from(ADDRESS).toString('hex')}`,
+    'Plain: write to someone@example.com for help.',
+  ].join('\n');
+
+  it('a known address base64-encoded in a URL parameter is gone after anonymising, in every encoding', () => {
+    const out = new Pseudonymiser().text(body);
+    for (const form of FORMS) {
+      expect(out, form).not.toContain(form);
+      expect(out.toLowerCase(), form).not.toContain(form.toLowerCase());
+    }
+    expect(out).not.toMatch(/yashraj|nayak|mongodb/i);
+  });
+
+  it('strips query strings but keeps scheme, host and path (the message still reads as a calendar link)', () => {
+    const out = new Pseudonymiser().text(body);
+    expect(out).toContain('https://www.google.com/calendar/event');
+    expect(out).not.toMatch(/tok=|mark_sender_as_known=|eid=abc|ctz=/);
+  });
+
+  it('a base64 blob in the PATH (no query string to strip) is still caught by decoding it', () => {
+    const out = new Pseudonymiser().text(
+      `Unsubscribe: https://example.invalid/u/${b64url}/confirm`,
+    );
+    expect(out).not.toContain(b64url);
+    expect(out).toContain('https://example.invalid/u/');
+    expect(out).toContain('/confirm');
+  });
+
+  it('leaves ordinary long words and plain base64 that is not an address alone, and still pseudonymises plain addresses', () => {
+    const harmless = Buffer.from('a perfectly ordinary sentence with no address in it').toString(
+      'base64',
+    );
+    const p = new Pseudonymiser();
+    const out = p.text(`Internationalisationconsiderations ${harmless} and someone@example.com`);
+    expect(out).toContain('Internationalisationconsiderations');
+    expect(out).toContain(harmless);
+    expect(out).not.toContain('someone@example.com');
+    expect(out).toMatch(/person1@example\.invalid/);
+  });
+
+  it('the same address, found plain and found percent-encoded, is the same pseudonym', () => {
+    const p = new Pseudonymiser();
+    const out = p.text(`${ADDRESS} then ${pct}`);
+    const pseudonym = p.address(ADDRESS);
+    expect(out.split(pseudonym)).toHaveLength(3);
+  });
+});
