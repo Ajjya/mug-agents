@@ -23,6 +23,15 @@ import type { BlockedItem } from './decide.js';
 import { channelOf, chooseDelivery } from './delivery.js';
 import { assertTransition } from './transitions.js';
 
+export class SpeakerNotFoundError extends Error {
+  constructor(public readonly ref: string) {
+    super(
+      `No speaker "${ref}": give a speaker id (24 hex characters) or a seeded handle such as "ana-ferreira".`,
+    );
+    this.name = 'SpeakerNotFoundError';
+  }
+}
+
 export class SpeakerNotInEventError extends Error {
   constructor(
     public readonly speakerId: string,
@@ -510,12 +519,95 @@ export class SpeakerPipelineStore {
     return (await this.entry(speakerId, eventId)).status;
   }
 
+  /** A speaker by id (24 hex characters) or by seeded handle. Null when there is none. */
+  async resolveSpeaker(ref: string): Promise<Speaker | null> {
+    const r = ref.trim();
+    if (/^[0-9a-f]{24}$/i.test(r)) return await this.speakers.findById(r);
+    return await this.speakers.findByHandle(r.toLowerCase());
+  }
+
+  /** An event by id; an id that cannot exist is "not found", not a validation error. */
+  private async findEvent(ref: string): Promise<Event> {
+    if (!/^[0-9a-f]{24}$/i.test(ref.trim())) throw new EventNotFoundError(ref);
+    return await this.mustFindEvent(ref.trim());
+  }
+
+  /**
+   * Starts speakers in an event's pipeline: creates each one's `perEvent` entry (default `idea`). A human act
+   * (`speakers add`), the entry point of the whole agent. Idempotent: a speaker who already has an entry is
+   * reported as existing and left exactly as they are. All-or-nothing on references: an unknown event or
+   * speaker refuses the whole call before anything is written.
+   */
+  async addToEvent(
+    refs: readonly string[],
+    eventId: string,
+    status: SpeakerStatus,
+    now: Date,
+  ): Promise<{ added: Speaker[]; existed: { speaker: Speaker; status: SpeakerStatus }[] }> {
+    const event = await this.findEvent(eventId);
+    const resolved: Speaker[] = [];
+    const unknown: string[] = [];
+    for (const ref of refs) {
+      const sp = await this.resolveSpeaker(ref);
+      if (sp) resolved.push(sp);
+      else unknown.push(ref);
+    }
+    if (unknown.length > 0) throw new SpeakerNotFoundError(unknown.join('", "'));
+    const added: Speaker[] = [];
+    const existed: { speaker: Speaker; status: SpeakerStatus }[] = [];
+    const seen = new Set<string>();
+    for (const sp of resolved) {
+      if (seen.has(sp._id)) continue;
+      seen.add(sp._id);
+      let already: SpeakerStatus | undefined;
+      const updated = await this.speakers.updateWithRetry(sp._id, (s) => {
+        // Re-checked inside the retry: a concurrent add is the same add.
+        const current = s.perEvent.find((p) => p.eventId.toLowerCase() === event._id.toLowerCase());
+        if (current) {
+          already = current.status;
+          return { perEvent: s.perEvent };
+        }
+        already = undefined;
+        return {
+          perEvent: [...s.perEvent, { eventId: event._id, status, updatedAt: now.toISOString() }],
+        };
+      });
+      if (already !== undefined) existed.push({ speaker: updated ?? sp, status: already });
+      else added.push(updated ?? sp);
+    }
+    return { added, existed };
+  }
+
+  /**
+   * Takes a speaker out of an event's pipeline WITHOUT deleting anything (the no-delete policy): the entry's
+   * status becomes `declined`, with the reason. Goes through the same transition guard as any status change,
+   * so a speaker already past the point of declining (slides received, thanked) is refused, not erased.
+   */
+  async removeFromEvent(
+    ref: string,
+    eventId: string,
+    reason: string,
+    now: Date,
+  ): Promise<{ speaker: Speaker; from: SpeakerStatus; alreadyDeclined: boolean }> {
+    const event = await this.findEvent(eventId);
+    const sp = await this.resolveSpeaker(ref);
+    if (!sp) throw new SpeakerNotFoundError(ref);
+    const entry = sp.perEvent.find((p) => p.eventId.toLowerCase() === event._id.toLowerCase());
+    if (!entry) throw new SpeakerNotInEventError(sp._id, event._id);
+    if (entry.status === 'declined')
+      return { speaker: sp, from: 'declined', alreadyDeclined: true };
+    const { from } = await this.setStatus(sp._id, event._id, 'declined', now, reason);
+    return { speaker: sp, from, alreadyDeclined: false };
+  }
+
   /** The only status write. Patches `perEvent` and nothing else on the speaker. */
   async setStatus(
     speakerId: string,
     eventId: string,
     to: SpeakerStatus,
     now: Date,
+    /** Why, when a human gave a reason. A status change without one clears an older reason. */
+    reason?: string,
   ): Promise<{ from: SpeakerStatus; to: SpeakerStatus }> {
     let from: SpeakerStatus | undefined;
     const updated = await this.speakers.updateWithRetry(speakerId, (s) => {
@@ -524,9 +616,13 @@ export class SpeakerPipelineStore {
       assertTransition(entry.status, to);
       from = entry.status;
       return {
-        perEvent: s.perEvent.map((p) =>
-          p === entry ? { ...p, status: to, updatedAt: now.toISOString() } : p,
-        ),
+        perEvent: s.perEvent.map((p) => {
+          if (p !== entry) return p;
+          const next: typeof p = { ...p, status: to, updatedAt: now.toISOString() };
+          if (reason) next.statusReason = reason;
+          else delete next.statusReason;
+          return next;
+        }),
       };
     });
     if (!updated || from === undefined) throw new SpeakerNotInEventError(speakerId, eventId);

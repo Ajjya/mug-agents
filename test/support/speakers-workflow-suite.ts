@@ -906,6 +906,40 @@ export function speakersWorkflowSuite(
       ).toHaveLength(1);
     });
 
+    it('add starts a seeded speaker (no entries at all) in the pipeline: one entry, twice is still one, and list shows it', async () => {
+      const h = await fresh();
+      const event = await h.repos.events.insert({
+        title: 'MUG Winter Meetup',
+        phase: 'planning',
+        date: EVENT_DATE,
+        coHostOrganisationIds: [],
+        agenda: [],
+      });
+      const sp = await h.repos.speakers.insert({
+        handle: 'ana-pires',
+        name: 'Ana Pires',
+        emails: [],
+        handles: { linkedin: 'https://linkedin.com/in/ana-pires' },
+        topics: [],
+        links: {},
+        perEvent: [],
+      });
+      expect((await h.service.addToEvent(['ana-pires'], event._id)).added).toHaveLength(1);
+      expect((await h.service.addToEvent([sp._id], event._id)).existed).toHaveLength(1);
+      expect((await h.repos.speakers.findById(sp._id))?.perEvent).toHaveLength(1);
+      expect(
+        (await h.service.list(event._id, day('2026-11-01'))).rows.map((r) => r.status),
+      ).toEqual(['idea']);
+      expect(await h.service.setStatus(sp._id, event._id, 'invited')).toMatchObject({
+        to: 'invited',
+      });
+      await h.service.removeFromEvent(sp._id, event._id, 'not this time');
+      expect((await h.repos.speakers.findById(sp._id))?.perEvent[0]).toMatchObject({
+        status: 'declined',
+        statusReason: 'not this time',
+      });
+    });
+
     it('MAX_DRAFTS_PER_RUN caps a backlog; the rest come on the next run', async () => {
       const h = buildSpeakersHarness(await makeRepos(), {
         ...options(),

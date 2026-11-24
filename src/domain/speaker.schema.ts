@@ -48,6 +48,8 @@ export const SpeakerEventStatusSchema = z
      * human acts. Independent of `updatedAt`, which dates the STATUS.
      */
     lastInboundAt: isoDate.optional(),
+    /** Why the status was set, when a human gave a reason (`speakers remove`). Cleared by the next status change. */
+    statusReason: z.string().trim().min(1).optional(),
   })
   .strict();
 

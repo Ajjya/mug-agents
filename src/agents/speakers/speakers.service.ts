@@ -293,6 +293,21 @@ export class SpeakersService {
     return await this.store.setStatus(speakerId, eventId, to, now);
   }
 
+  /** Starts speakers in an event's pipeline (default status `idea`). Idempotent; see the store. */
+  async addToEvent(
+    refs: readonly string[],
+    eventId: string,
+    status: SpeakerStatus = 'idea',
+    now: Date = new Date(),
+  ) {
+    return await this.store.addToEvent(refs, eventId, status, now);
+  }
+
+  /** NOT a delete: the entry becomes `declined`, with the reason. */
+  async removeFromEvent(ref: string, eventId: string, reason: string, now: Date = new Date()) {
+    return await this.store.removeFromEvent(ref, eventId, reason, now);
+  }
+
   private async guard(
     threadId: string,
     run: () => Promise<SpeakersThreadView>,

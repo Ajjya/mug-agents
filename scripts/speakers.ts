@@ -10,6 +10,7 @@ import {
 import {
   MessageNotFoundError,
   MessageNotSendableError,
+  SpeakerNotFoundError,
   SpeakerNotInEventError,
 } from '../src/agents/speakers/speakers.store.js';
 import { IllegalTransitionError } from '../src/agents/speakers/transitions.js';
@@ -35,6 +36,16 @@ const USAGE = `Usage: npm run speakers -- <command> [options]
                                        record a send done OUTSIDE this system (no draft exists): a
                                        message already sent, no text, dated --on; chases measure from
                                        that date. Recording the same send again changes nothing
+  add <speakerId> --event <id> [--status idea]
+  add --speakers <id,id,id> --event <id> [--status idea]
+                                       START speakers in the event's pipeline: creates each one's entry
+                                       (default status idea). Running it twice leaves one entry and says
+                                       so. An id, or a seeded handle such as "ana-ferreira"; an unknown
+                                       speaker or event refuses the whole command, nothing is written
+  remove <speakerId> --event <id> [--reason "..."]
+                                       NOT a delete: sets the entry to declined, with a reason, and keeps
+                                       everything (messages, history). Refused if declining is no longer
+                                       possible (slides received, thanked)
   status <speakerId> --event <id> --set <status>
                                        record what happened (checked against the transition table)
   candidates [--event <id>] [--topic "..."]
@@ -50,6 +61,9 @@ const { values, positionals } = parseArgs({
   options: {
     event: { type: 'string' },
     set: { type: 'string' },
+    status: { type: 'string' },
+    speakers: { type: 'string' },
+    reason: { type: 'string' },
     by: { type: 'string' },
     topic: { type: 'string' },
     redraft: { type: 'string' },
@@ -159,7 +173,7 @@ runCli(
         }
         console.log(`\nMESSAGES (${String(messages.length)})`);
         for (const m of messages) {
-          const flags = [m.needsApproval ? 'first contact' : '', m.recorded ? 'recorded' : '']
+          const flags = [m.needsApproval ? 'needs approval' : '', m.recorded ? 'recorded' : '']
             .filter(Boolean)
             .join(', ');
           console.log(
@@ -226,6 +240,37 @@ runCli(
         );
         return 0;
       }
+      case 'add': {
+        const refs = [...(target ? [target] : []), ...(values.speakers?.split(',') ?? [])]
+          .map((r) => r.trim())
+          .filter(Boolean);
+        if (refs.length === 0 || !values.event) return usage();
+        const status = z.enum(SPEAKER_STATUSES).parse(values.status ?? 'idea');
+        const r = await service.addToEvent(refs, values.event, status, now);
+        for (const sp of r.added)
+          console.log(`Added ${sp.name} (${sp._id}) to the pipeline as ${status}.`);
+        for (const e of r.existed) {
+          console.log(
+            `${e.speaker.name} (${e.speaker._id}) already has an entry for this event (${e.status}): nothing changed.`,
+          );
+        }
+        console.log(
+          `${String(r.added.length)} added, ${String(r.existed.length)} already there. See them: npm run speakers -- list --event ${values.event}`,
+        );
+        return 0;
+      }
+      case 'remove': {
+        if (!target || !values.event) return usage();
+        const by = values.by ?? config.APPROVER_NAME ?? userInfo().username;
+        const reason = values.reason?.trim() || `removed from the pipeline by ${by}`;
+        const r = await service.removeFromEvent(target, values.event, reason, now);
+        console.log(
+          r.alreadyDeclined
+            ? `${r.speaker.name} is already declined for this event: nothing changed.`
+            : `${r.speaker.name}: ${r.from} -> declined (reason: ${reason}). This is NOT a delete: the entry, its messages and its history are all still there; "status --set idea" brings them back.`,
+        );
+        return 0;
+      }
       case 'status': {
         if (!target || !values.event || !values.set) return usage();
         const to = z.enum(SPEAKER_STATUSES).parse(values.set);
@@ -261,6 +306,7 @@ runCli(
       err instanceof MessageNotFoundError ||
       err instanceof MessageNotSendableError ||
       err instanceof SpeakerNotInEventError ||
+      err instanceof SpeakerNotFoundError ||
       err instanceof IllegalTransitionError ||
       err instanceof PendingDecisionUndeliveredError ||
       err instanceof EmbeddingUnavailableError ||
